@@ -1,6 +1,6 @@
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-03-11T06:05:00Z
+**Last Updated:** 2026-03-11T07:15:39Z
 
 ---
 
@@ -17,9 +17,9 @@
 | Attribute | Value |
 |-----------|-------|
 | **Phase** | 1 - Configuration System |
-| **Plan** | 2/4 complete |
+| **Plan** | 3/4 complete |
 | **Status** | In progress |
-| **Progress** | `[████████          ]` 50% |
+| **Progress** | `[███████████        ]` 75% |
 
 ---
 
@@ -28,7 +28,7 @@
 | Metric | Value |
 |--------|-------|
 | Requirements Total | 13 |
-| Requirements Complete | 2 |
+| Requirements Complete | 4 |
 | Phases Complete | 0/3 |
 | Days Active | 0 |
 
@@ -49,6 +49,8 @@
 | 2026-03-11 | Remove nested .git from code/webapp | Allow parent repo to track all files |
 | 2026-03-11 | Reuse types from types/config.ts | Avoid duplication, types already existed from plan 01-00 |
 | 2026-03-11 | getAllowedInputs returns null for "show all" | Consistent with config design where missing inputs means no filtering |
+| 2026-03-11 | Non-blocking config load in Draw page | UI renders immediately, filters apply when config arrives |
+| 2026-03-11 | Display-only filtering for workflow inputs | sortedWorkflowInputs unchanged, submission uses full data with defaults |
 
 ### Active TODOs
 
@@ -65,6 +67,7 @@
 | 2026-03-11 | 01 | 00 | Test scaffolds created for config service and store |
 | 2026-03-11 | 01 | 01 | Bridge handler and config template created |
 | 2026-03-11 | 01 | 02 | Config service and Zustand store implemented |
+| 2026-03-11 | 01 | 03 | Config filtering integrated into Draw page UI |
 
 ---
 
@@ -73,12 +76,12 @@
 ### Last Session
 
 - **Date:** 2026-03-11
-- **Action:** Completed plan 01-02 (Config service and store)
-- **Outcome:** Config service with validation, configStore with shouldDisplayNode/getAllowedInputs helpers, 27 passing tests
+- **Action:** Completed plan 01-03 (Config UI integration)
+- **Outcome:** Draw page filters inputs using configStore helpers, only configured nodes/params displayed
 
 ### Next Action
 
-Run `/gsd:execute-phase` to continue with plan 01-03.
+Run `/gsd:execute-phase` to continue with plan 01-04.
 
 ---
 

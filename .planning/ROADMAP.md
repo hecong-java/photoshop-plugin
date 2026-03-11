@@ -37,7 +37,7 @@ Plans:
 - [x] 01-00-PLAN.md — Test scaffolds for TDD workflow
 - [x] 01-01-PLAN.md — Bridge handler and config file template
 - [x] 01-02-PLAN.md — Config service and Zustand store
-- [ ] 01-03-PLAN.md — UI integration in Draw.tsx
+- [x] 01-03-PLAN.md — UI integration in Draw.tsx
 - [ ] 01-04-PLAN.md — Human verification checkpoint
 
 ---
@@ -84,7 +84,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Configuration System | 3/5 | In progress | 01-00, 01-01, 01-02 |
+| 1. Configuration System | 4/5 | In progress | 01-00, 01-01, 01-02, 01-03 |
 | 2. Local Caching | 0/1 | Not started | - |
 | 3. Integration & Testing | 0/1 | Not started | - |
 
@@ -97,8 +97,8 @@ Plans:
 | CONF-01 | Phase 1 | Complete |
 | CONF-02 | Phase 1 | Complete |
 | CONF-03 | Phase 1 | Complete |
-| CONF-04 | Phase 1 | Pending |
-| CONF-05 | Phase 1 | Pending |
+| CONF-04 | Phase 1 | Complete |
+| CONF-05 | Phase 1 | Complete |
 | CACH-01 | Phase 2 | Pending |
 | CACH-02 | Phase 2 | Pending |
 | CACH-03 | Phase 2 | Pending |
@@ -113,4 +113,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-03-11 - Plans 01-00, 01-01, 01-02 complete*
+*Last updated: 2026-03-11 - Plans 01-00, 01-01, 01-02, 01-03 complete*
