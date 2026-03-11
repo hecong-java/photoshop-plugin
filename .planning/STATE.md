@@ -1,6 +1,6 @@
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-03-11T08:30:00Z
+**Last Updated:** 2026-03-11T09:40:11Z
 
 ---
 
@@ -65,6 +65,7 @@
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 1 | 修复参数设置显示问题 | 2026-03-11 | 919a844 | [001-fix-param-display](./quick/001-fix-param-display/) |
+| 2 | Add refresh workflow button | 2026-03-11 | 1cea25a | [002-add-refresh-workflow-button](./quick/002-add-refresh-workflow-button/) |
 
 ### Recent Completions
 
@@ -82,8 +83,8 @@
 ### Last Session
 
 - **Date:** 2026-03-11
-- **Action:** Completed plan 01-03 (Config UI integration)
-- **Outcome:** Draw page filters inputs using configStore helpers, only configured nodes/params displayed
+- **Action:** Completed quick task 002 (Add refresh workflow button)
+- **Outcome:** Refresh button added to workflow selector, users can re-fetch workflow list without page reload
 
 ### Next Action
 
