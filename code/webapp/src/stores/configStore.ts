@@ -33,11 +33,14 @@ export const useConfigStore = create<ConfigState>()(
 
         // If config is null or nodes array is empty, show all nodes
         if (!config || !config.nodes || config.nodes.length === 0) {
+          console.log(`[ConfigStore] shouldDisplayNode("${classType}"): true (no config or empty nodes)`);
           return true;
         }
 
         // Return true if any node.class_type matches classType
-        return config.nodes.some((node) => node.class_type === classType);
+        const result = config.nodes.some((node) => node.class_type === classType);
+        console.log(`[ConfigStore] shouldDisplayNode("${classType}"): ${result}`);
+        return result;
       },
 
       getAllowedInputs: (classType: string): string[] | null => {
@@ -62,10 +65,12 @@ export const useConfigStore = create<ConfigState>()(
       },
 
       loadConfig: async (): Promise<void> => {
+        console.log('[ConfigStore] loadConfig called');
         set({ isLoading: true, error: null });
 
         try {
           const config = await loadPluginConfig();
+          console.log('[ConfigStore] Config loaded:', JSON.stringify(config, null, 2));
           set({
             config,
             isLoading: false,

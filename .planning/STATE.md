@@ -1,6 +1,6 @@
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-03-11T07:15:39Z
+**Last Updated:** 2026-03-11T08:30:00Z
 
 ---
 
@@ -59,6 +59,12 @@
 ### Blockers
 
 (No blockers currently)
+
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 1 | 修复参数设置显示问题 | 2026-03-11 | pending | [001-fix-param-display](./quick/001-fix-param-display/) |
 
 ### Recent Completions
 
