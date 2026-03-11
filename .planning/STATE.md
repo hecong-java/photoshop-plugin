@@ -64,7 +64,7 @@
 
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
-| 1 | 修复参数设置显示问题 | 2026-03-11 | 5510f56 | [001-fix-param-display](./quick/001-fix-param-display/) |
+| 1 | 修复参数设置显示问题 | 2026-03-11 | 919a844 | [001-fix-param-display](./quick/001-fix-param-display/) |
 
 ### Recent Completions
 
