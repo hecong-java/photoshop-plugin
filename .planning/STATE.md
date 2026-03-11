@@ -45,6 +45,8 @@
 | 2026-03-11 | Cache to local file via Bridge | Cross-session persistence, immune to browser data clearing |
 | 2026-03-11 | Use plugin:/ URL scheme for config access | UXP standard for plugin folder files |
 | 2026-03-11 | Return exists boolean for missing config | Graceful handling vs throwing errors |
+| 2026-03-11 | Create stub modules alongside test scaffolds | Enable TDD workflow - tests need modules to import |
+| 2026-03-11 | Remove nested .git from code/webapp | Allow parent repo to track all files |
 
 ### Active TODOs
 
@@ -58,6 +60,7 @@
 
 | Date | Phase | Plan | Description |
 |------|-------|------|-------------|
+| 2026-03-11 | 01 | 00 | Test scaffolds created for config service and store |
 | 2026-03-11 | 01 | 01 | Bridge handler and config template created |
 
 ---
@@ -67,8 +70,8 @@
 ### Last Session
 
 - **Date:** 2026-03-11
-- **Action:** Completed plan 01-01 (Bridge handler and config template)
-- **Outcome:** fs.readPluginConfig handler added, node-config.json created
+- **Action:** Completed plan 01-00 (Test scaffolds)
+- **Outcome:** config.test.ts and configStore.test.ts scaffolds created with 12 placeholder tests
 
 ### Next Action
 

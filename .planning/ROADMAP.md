@@ -31,9 +31,10 @@
 4. Parameters are dynamically rendered based on node structure from ComfyUI API
 5. Nodes not in config use default values from the workflow without showing UI
 
-**Plans:** 4 plans
+**Plans:** 5 plans
 
 Plans:
+- [x] 01-00-PLAN.md — Test scaffolds for TDD workflow
 - [x] 01-01-PLAN.md — Bridge handler and config file template
 - [ ] 01-02-PLAN.md — Config service and Zustand store
 - [ ] 01-03-PLAN.md — UI integration in Draw.tsx
@@ -83,7 +84,7 @@ Plans:
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Configuration System | 1/4 | In progress | 01-01 |
+| 1. Configuration System | 2/5 | In progress | 01-00, 01-01 |
 | 2. Local Caching | 0/1 | Not started | - |
 | 3. Integration & Testing | 0/1 | Not started | - |
 
@@ -112,4 +113,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-03-11 - Plan 01-01 complete*
+*Last updated: 2026-03-11 - Plans 01-00, 01-01 complete*
