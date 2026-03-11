@@ -84,24 +84,16 @@ export async function loadPluginConfig(): Promise<PluginConfig> {
   try {
     const result = await sendBridgeMessage('fs.readPluginConfig', {
       filename: 'node-config.json',
-    }) as { exists: boolean; data?: string };
+    }) as { exists: boolean; data?: unknown };
 
     if (!result.exists || !result.data) {
       console.log('[Config] Config file not found or empty, using DEFAULT_CONFIG');
       return DEFAULT_CONFIG;
     }
 
-    // Parse JSON
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(result.data);
-    } catch (parseError) {
-      console.error('[Config] Failed to parse config JSON:', parseError);
-      return DEFAULT_CONFIG;
-    }
-
+    // Bridge already returns parsed JSON object
     // Validate and return
-    const validated = validateConfig(parsed);
+    const validated = validateConfig(result.data);
     console.log(`[Config] Config loaded successfully with ${validated.nodes.length} nodes`);
     return validated;
   } catch (error) {
