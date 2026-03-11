@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { useConfigStore } from './configStore';
 import * as configService from '../services/config';
+import type { PluginConfig } from '../types/config';
 
 vi.mock('../services/config', () => ({
   loadPluginConfig: vi.fn(),
@@ -150,10 +151,10 @@ describe('useConfigStore', () => {
     });
 
     it('should set isLoading to true during load', async () => {
-      let resolveFn: (value: unknown) => void;
+      let resolveFn: (value: PluginConfig) => void;
       vi.mocked(configService.loadPluginConfig).mockImplementation(
         () =>
-          new Promise((resolve) => {
+          new Promise<PluginConfig>((resolve) => {
             resolveFn = resolve;
           })
       );
