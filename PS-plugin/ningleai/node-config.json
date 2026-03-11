@@ -1,0 +1,28 @@
+{
+  "$comment": "ComfyUI Node Display Configuration - Controls which parameters appear in Photoshop plugin UI. Leave 'inputs' array empty or omit to show all inputs for that node. Nodes not listed here use workflow defaults without showing UI. class_type must match exactly (case-sensitive).",
+  "version": "1.0",
+  "nodes": [
+    {
+      "class_type": "KSampler",
+      "inputs": ["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"]
+    },
+    {
+      "class_type": "CLIPTextEncode",
+      "inputs": ["text"]
+    },
+    {
+      "class_type": "LoadImage",
+      "inputs": ["image"]
+    },
+    {
+      "class_type": "EmptyLatentImage",
+      "inputs": ["width", "height", "batch_size"]
+    },
+    {
+      "class_type": "VAEDecode"
+    },
+    {
+      "class_type": "SaveImage"
+    }
+  ]
+}
