@@ -725,17 +725,23 @@ export const Draw = () => {
     objectInfoOverride?: Record<string, unknown> | null,
     modelCatalogOverride?: ExperimentModelCatalog
   ): Promise<WorkflowInput[]> => {
+    console.log('[Draw] handleWorkflowSelect called for:', workflow.name);
     setSelectedWorkflow(workflow);
     setWorkflowInputs([]);
     setInputValues({});
     latestInputValuesRef.current = {};
 
-    if (!comfyUISettings.isConnected) return [];
+    if (!comfyUISettings.isConnected) {
+      console.log('[Draw] Not connected to ComfyUI, returning empty inputs');
+      return [];
+    }
 
     try {
       const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
       const prefixMode = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
       const workflowData = await client.readWorkflow(workflow.path || workflow.name, prefixMode);
+      
+      console.log('[Draw] Workflow data loaded, parsing inputs...');
       
       // Parse workflow inputs
       const inputs = parseWorkflowInputs(
@@ -743,6 +749,12 @@ export const Draw = () => {
         objectInfoOverride ?? objectInfo,
         modelCatalogOverride ?? experimentModels
       );
+      
+      console.log('[Draw] Parsed inputs:', inputs.length);
+      inputs.forEach(input => {
+        console.log(`[Draw]   - Input: ${input.name}, type: ${input.type}, classType: ${input.classType}`);
+      });
+      
       setWorkflowInputs(inputs);
       
       // Set default values
@@ -756,7 +768,7 @@ export const Draw = () => {
       latestInputValuesRef.current = defaults;
       return inputs;
     } catch (error) {
-      console.error('Failed to load workflow details:', error);
+      console.error('[Draw] Failed to load workflow details:', error);
       return [];
     }
   };
@@ -2282,19 +2294,40 @@ export const Draw = () => {
 
   // Filter input groups based on config
   const filteredInputGroups = useMemo(() => {
-    return inputGroups.filter(group => {
+    console.log('[Draw] Filtering input groups, total:', inputGroups.length);
+    inputGroups.forEach(g => {
+      console.log(`[Draw]   - Group: ${g.label}, classType: ${g.classType}, items: ${g.items.length}`);
+    });
+    
+    const filtered = inputGroups.filter(group => {
       if (!group.classType) return true;
-      return shouldDisplayNode(group.classType);
+      const shouldShow = shouldDisplayNode(group.classType);
+      console.log(`[Draw]   - shouldDisplayNode("${group.classType}"): ${shouldShow}`);
+      return shouldShow;
     }).map(group => {
       const allowedInputs = getAllowedInputs(group.classType);
+      console.log(`[Draw]   - getAllowedInputs("${group.classType}"):`, allowedInputs);
       if (allowedInputs === null) {
         return group; // Show all inputs
       }
       return {
         ...group,
-        items: group.items.filter(item => allowedInputs.includes(item.name))
+        items: group.items.filter(item => {
+          // Input names are formatted as `${inputName}_${nodeId}`, so we need to
+          // extract the base input name for comparison with allowedInputs
+          const lastUnderscore = item.name.lastIndexOf('_');
+          const baseInputName = lastUnderscore > 0 ? item.name.slice(0, lastUnderscore) : item.name;
+          return allowedInputs.includes(baseInputName);
+        })
       };
     }).filter(group => group.items.length > 0); // Remove empty groups
+    
+    console.log('[Draw] Filtered groups:', filtered.length);
+    filtered.forEach(g => {
+      console.log(`[Draw]   - Filtered: ${g.label}, items: ${g.items.length}`);
+    });
+    
+    return filtered;
   }, [inputGroups, shouldDisplayNode, getAllowedInputs]);
 
   const workflowGroups = useMemo<WorkflowDirectoryGroup[]>(() => {
