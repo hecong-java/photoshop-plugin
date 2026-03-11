@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { ComfyUIClient, type ComfyUIWorkflowInfo, type ComfyUIHistoryEntry, type ExperimentModelCatalog } from '../services/comfyui';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useConfigStore } from '../stores/configStore';
+import { useWorkflowCacheStore, blobToBase64, base64ToBlobUrl } from '../stores/workflowCacheStore';
 import { PsExportButton } from '../components/upload/PsExportButton';
 import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer } from '../services/upload';
 import './Draw.css';
@@ -213,6 +214,11 @@ export const Draw = () => {
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [uploadedImagePreviews, setUploadedImagePreviews] = useState<Record<string, string>>({});
   const latestInputValuesRef = useRef<Record<string, string | number | boolean>>({});
+  // Refs for workflow cache - store blob and base64 data for image inputs
+  const uploadedImageBlobsRef = useRef<Record<string, Blob>>({});
+  const uploadedImageBase64Ref = useRef<Record<string, string>>({});
+  const currentWorkflowKeyRef = useRef<string | null>(null);
+  const uploadedImagePreviewsRef = useRef<Record<string, string>>({});
 
   // Generation
   const [progress, setProgress] = useState<GenerationProgress>({
@@ -285,12 +291,58 @@ export const Draw = () => {
     latestInputValuesRef.current = inputValues;
   }, [inputValues]);
 
+  // Keep refs in sync for unmount cleanup
+  useEffect(() => {
+    if (selectedWorkflow) {
+      currentWorkflowKeyRef.current = selectedWorkflow.path || selectedWorkflow.name;
+    } else {
+      currentWorkflowKeyRef.current = null;
+    }
+  }, [selectedWorkflow]);
+
+  useEffect(() => {
+    uploadedImagePreviewsRef.current = uploadedImagePreviews;
+  }, [uploadedImagePreviews]);
+
   // Cleanup WebSocket on unmount
   useEffect(() => {
     return () => {
       if (wsRef.current) {
         wsRef.current.close();
       }
+    };
+  }, []);
+
+  // Save workflow cache and cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      // Save current workflow cache
+      if (currentWorkflowKeyRef.current) {
+        const { saveCache } = useWorkflowCacheStore.getState();
+        console.log('[Draw] Saving cache on unmount for:', currentWorkflowKeyRef.current);
+
+        // Extract image filenames from inputValues (only for image inputs that have base64 data)
+        const imageFilenames: Record<string, string> = {};
+        for (const inputName of Object.keys(uploadedImageBase64Ref.current)) {
+          const value = latestInputValuesRef.current[inputName];
+          if (typeof value === 'string') {
+            imageFilenames[inputName] = value;
+          }
+        }
+
+        saveCache(currentWorkflowKeyRef.current, {
+          inputValues: latestInputValuesRef.current,
+          imageData: uploadedImageBase64Ref.current,
+          imageFilenames,
+        });
+      }
+
+      // Cleanup all blob URLs
+      Object.values(uploadedImagePreviewsRef.current).forEach(url => {
+        if (url.startsWith('blob:')) {
+          URL.revokeObjectURL(url);
+        }
+      });
     };
   }, []);
 
@@ -726,6 +778,44 @@ export const Draw = () => {
     modelCatalogOverride?: ExperimentModelCatalog
   ): Promise<WorkflowInput[]> => {
     console.log('[Draw] handleWorkflowSelect called for:', workflow.name);
+
+    // Save current workflow cache before switching
+    const { saveCache, loadCache } = useWorkflowCacheStore.getState();
+    if (selectedWorkflow) {
+      const currentWorkflowKey = selectedWorkflow.path || selectedWorkflow.name;
+      console.log('[Draw] Saving cache for current workflow:', currentWorkflowKey);
+
+      // Extract image filenames from inputValues (only for image inputs that have base64 data)
+      const imageFilenames: Record<string, string> = {};
+      for (const inputName of Object.keys(uploadedImageBase64Ref.current)) {
+        const value = latestInputValuesRef.current[inputName];
+        if (typeof value === 'string') {
+          imageFilenames[inputName] = value;
+        }
+      }
+
+      const imageDataToSave = { ...uploadedImageBase64Ref.current };
+      console.log('[Draw] Saving cache with', Object.keys(imageDataToSave).length, 'images, keys:', Object.keys(imageDataToSave));
+      console.log('[Draw] inputValues:', JSON.stringify(latestInputValuesRef.current).substring(0, 200));
+      saveCache(currentWorkflowKey, {
+        inputValues: { ...latestInputValuesRef.current },
+        imageData: imageDataToSave,
+        imageFilenames,
+      });
+    }
+
+    // Clean up old blob URLs
+    Object.values(uploadedImagePreviews).forEach(url => {
+      if (url.startsWith('blob:')) {
+        URL.revokeObjectURL(url);
+      }
+    });
+    setUploadedImagePreviews({});
+
+    // Clear image refs
+    uploadedImageBlobsRef.current = {};
+    uploadedImageBase64Ref.current = {};
+
     setSelectedWorkflow(workflow);
     setWorkflowInputs([]);
     setInputValues({});
@@ -740,32 +830,70 @@ export const Draw = () => {
       const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
       const prefixMode = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
       const workflowData = await client.readWorkflow(workflow.path || workflow.name, prefixMode);
-      
+
       console.log('[Draw] Workflow data loaded, parsing inputs...');
-      
+
       // Parse workflow inputs
       const inputs = parseWorkflowInputs(
         workflowData,
         objectInfoOverride ?? objectInfo,
         modelCatalogOverride ?? experimentModels
       );
-      
+
       console.log('[Draw] Parsed inputs:', inputs.length);
       inputs.forEach(input => {
         console.log(`[Draw]   - Input: ${input.name}, type: ${input.type}, classType: ${input.classType}`);
       });
-      
+
       setWorkflowInputs(inputs);
-      
-      // Set default values
-      const defaults: Record<string, string | number | boolean> = {};
-      inputs.forEach(input => {
-        if (input.default !== undefined) {
-          defaults[input.name] = input.default;
+
+      // Try to load from cache first
+      const workflowKey = workflow.path || workflow.name;
+      const cached = loadCache(workflowKey);
+
+      if (cached) {
+        console.log('[Draw] Restoring from cache for:', workflowKey);
+        console.log('[Draw] Cached imageData keys:', Object.keys(cached.imageData));
+
+        // Restore input values
+        const restoredValues: Record<string, string | number | boolean> = {};
+        inputs.forEach(input => {
+          if (cached.inputValues[input.name] !== undefined) {
+            restoredValues[input.name] = cached.inputValues[input.name];
+          } else if (input.default !== undefined) {
+            restoredValues[input.name] = input.default;
+          }
+        });
+        setInputValues(restoredValues);
+        latestInputValuesRef.current = restoredValues;
+
+        // Restore image previews from base64 data
+        const restoredPreviews: Record<string, string> = {};
+        for (const [inputName, base64] of Object.entries(cached.imageData)) {
+          console.log('[Draw] Restoring image for input:', inputName, 'base64 length:', base64.length);
+          const blobUrl = base64ToBlobUrl(base64);
+          if (blobUrl) {
+            restoredPreviews[inputName] = blobUrl;
+            uploadedImageBase64Ref.current[inputName] = base64;
+            console.log('[Draw] Created blob URL:', blobUrl);
+          } else {
+            console.warn('[Draw] Failed to create blob URL for:', inputName);
+          }
         }
-      });
-      setInputValues(defaults);
-      latestInputValuesRef.current = defaults;
+        console.log('[Draw] Restored previews:', Object.keys(restoredPreviews));
+        setUploadedImagePreviews(restoredPreviews);
+      } else {
+        // Set default values if no cache
+        const defaults: Record<string, string | number | boolean> = {};
+        inputs.forEach(input => {
+          if (input.default !== undefined) {
+            defaults[input.name] = input.default;
+          }
+        });
+        setInputValues(defaults);
+        latestInputValuesRef.current = defaults;
+      }
+
       return inputs;
     } catch (error) {
       console.error('[Draw] Failed to load workflow details:', error);
@@ -1907,11 +2035,22 @@ export const Draw = () => {
       throw new Error('请先在设置页面连接 ComfyUI');
     }
 
-    const previewUrl = URL.createObjectURL(previewSource ?? file);
+    const previewBlob = previewSource ?? file;
+    const previewUrl = URL.createObjectURL(previewBlob);
     setUploadedImagePreviews((prev) => ({
       ...prev,
       [inputName]: previewUrl
     }));
+
+    // Store blob and convert to base64 for caching
+    uploadedImageBlobsRef.current[inputName] = previewBlob;
+    try {
+      const base64 = await blobToBase64(previewBlob);
+      uploadedImageBase64Ref.current[inputName] = base64;
+      console.log('[Draw] Saved base64 for input:', inputName, 'size:', base64.length);
+    } catch (error) {
+      console.warn('[Draw] Failed to convert image to base64:', error);
+    }
 
     try {
       const uploadPrefixMode = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
@@ -1932,6 +2071,9 @@ export const Draw = () => {
         delete next[inputName];
         return next;
       });
+      // Clean up refs on error
+      delete uploadedImageBlobsRef.current[inputName];
+      delete uploadedImageBase64Ref.current[inputName];
       throw error;
     }
   };
@@ -2713,6 +2855,15 @@ export const Draw = () => {
                       ? `${selectedWorkflowMeta.directory}`
                       : '点击打开工具集面板'}
                   </span>
+                </button>
+                <button
+                  type="button"
+                  className="workflow-refresh-btn"
+                  onClick={fetchWorkflows}
+                  disabled={isLoadingWorkflows}
+                  title="刷新工作流列表"
+                >
+                  {isLoadingWorkflows ? '...' : '\u21BB'}
                 </button>
               </div>
 
