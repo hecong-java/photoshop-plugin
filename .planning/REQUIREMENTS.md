@@ -7,7 +7,7 @@
 
 ### Configuration
 
-- [ ] **CONF-01**: 用户可以通过 JSON 配置文件指定要显示的节点
+- [x] **CONF-01**: 用户可以通过 JSON 配置文件指定要显示的节点
 - [x] **CONF-02**: 配置文件与插件安装文件放在一起
 - [x] **CONF-03**: 用户在配置文件中指定节点名称（class_type）
 - [ ] **CONF-04**: 插件根据配置动态渲染节点的参数输入组件
@@ -23,7 +23,7 @@
 
 ### Integration
 
-- [ ] **INTG-01**: 配置解析与现有 ComfyUI 客户端集成
+- [x] **INTG-01**: 配置解析与现有 ComfyUI 客户端集成
 - [ ] **INTG-02**: 缓存机制与现有 Zustand store 集成
 - [ ] **INTG-03**: Bridge 层扩展支持文件读写操作
 
@@ -49,7 +49,7 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| CONF-01 | Phase 1 | Pending |
+| CONF-01 | Phase 1 | Complete |
 | CONF-02 | Phase 1 | Complete |
 | CONF-03 | Phase 1 | Complete |
 | CONF-04 | Phase 1 | Pending |
@@ -59,7 +59,7 @@
 | CACH-03 | Phase 2 | Pending |
 | CACH-04 | Phase 2 | Pending |
 | CACH-05 | Phase 2 | Pending |
-| INTG-01 | Phase 1 | Pending |
+| INTG-01 | Phase 1 | Complete |
 | INTG-02 | Phase 2 | Pending |
 | INTG-03 | Phase 2 | Pending |
 
@@ -67,8 +67,8 @@
 - v1 requirements: 13 total
 - Mapped to phases: 13
 - Unmapped: 0
-- Complete: 2 (CONF-02, CONF-03)
+- Complete: 4 (CONF-01, CONF-02, CONF-03, INTG-01)
 
 ---
 *Requirements defined: 2026-03-11*
-*Last updated: 2026-03-11 after plan 01-01 completion*
+*Last updated: 2026-03-11 after plan 01-02 completion*
