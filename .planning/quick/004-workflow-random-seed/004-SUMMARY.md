@@ -96,6 +96,7 @@ Added Task 3 to fix rerun/edit functionality - this was discovered as part of th
 | 7c9eeef | fix(quick-4): add debug logging and save workflow name for rerun/edit |
 | 48b4a12 | fix(quick-4): use ref for selectedWorkflow to avoid stale closure |
 | 77bf177 | fix(quick-4): restore image previews for rerun/edit history actions |
+| 19e8379 | fix(quick-4): improve workflow name matching score for rerun/edit |
 
 ## Files Modified
 
