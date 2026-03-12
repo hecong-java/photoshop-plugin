@@ -59,6 +59,10 @@ export interface ComfyUIHistoryEntry {
   status?: string | Record<string, unknown>;
   start_time?: number;
   end_time?: number;
+  extra_data?: {
+    workflow_name?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface ComfyUIQueueItem {

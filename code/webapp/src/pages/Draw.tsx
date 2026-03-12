@@ -390,35 +390,46 @@ export const Draw = () => {
     const promptData = params as Record<string, unknown>;
     const restoredValues: Record<string, string | number | boolean> = {};
 
+    console.log('[Draw] extractInputValuesFromHistoryParams - promptData keys:', Object.keys(promptData));
+    console.log('[Draw] extractInputValuesFromHistoryParams - targetInputs:', targetInputs.map(i => i.name));
+
     targetInputs.forEach((input) => {
       const splitIndex = input.name.lastIndexOf('_');
       if (splitIndex <= 0 || splitIndex >= input.name.length - 1) {
+        console.log('[Draw] Skipping input (no underscore):', input.name);
         return;
       }
 
       const inputName = input.name.slice(0, splitIndex);
       const nodeId = input.name.slice(splitIndex + 1);
+      console.log('[Draw] Trying to match input:', input.name, '-> inputName:', inputName, 'nodeId:', nodeId);
+
       const nodeValue = promptData[nodeId];
       if (!nodeValue || typeof nodeValue !== 'object' || Array.isArray(nodeValue)) {
+        console.log('[Draw] No nodeValue for nodeId:', nodeId, 'available keys:', Object.keys(promptData));
         return;
       }
 
       const nodeRecord = nodeValue as Record<string, unknown>;
       const historyClassType = nodeRecord.class_type ?? nodeRecord.type;
+      console.log('[Draw] Node', nodeId, 'class_type:', historyClassType, 'input.classType:', input.classType);
       if (
         typeof historyClassType === 'string' &&
         typeof input.classType === 'string' &&
         input.classType !== historyClassType
       ) {
+        console.log('[Draw] Class type mismatch, skipping');
         return;
       }
 
       const nodeInputs = nodeRecord.inputs;
       if (!nodeInputs || typeof nodeInputs !== 'object' || Array.isArray(nodeInputs)) {
+        console.log('[Draw] No nodeInputs for node:', nodeId);
         return;
       }
 
       const candidate = (nodeInputs as Record<string, unknown>)[inputName];
+      console.log('[Draw] Looking for inputName:', inputName, 'in nodeInputs:', Object.keys(nodeInputs as Record<string, unknown>), 'found:', candidate);
       if (candidate === undefined || candidate === null) {
         return;
       }
@@ -575,14 +586,21 @@ export const Draw = () => {
     params: Record<string, unknown> | undefined,
     workflowName?: string
   ): Promise<ComfyUIWorkflowInfo | null> => {
+    console.log('[Draw] findBestMatchingWorkflow - params:', params ? Object.keys(params) : 'undefined');
+    console.log('[Draw] findBestMatchingWorkflow - workflowName:', workflowName);
+    console.log('[Draw] findBestMatchingWorkflow - available workflows:', workflows.map(w => w.name));
     if (workflows.length === 0) return null;
 
     if (!params || Object.keys(params).length === 0) {
+      console.log('[Draw] No params, returning first workflow');
       return workflows[0] ?? null;
     }
 
     const expected = getPromptNodeInfo(params);
+    console.log('[Draw] Expected node types from params:', Array.from(expected.nodeTypes));
+    console.log('[Draw] Expected node IDs from params:', Array.from(expected.nodeIds));
     if (expected.nodeTypes.size === 0) {
+      console.log('[Draw] No node types found, returning first workflow');
       return workflows[0] ?? null;
     }
 
@@ -679,11 +697,13 @@ export const Draw = () => {
           bestScore = score;
           bestWorkflow = workflow;
         }
+        console.log('[Draw] Workflow', workflow.name, 'score:', score);
       } catch (error) {
         console.warn('[Draw] Failed to inspect workflow for history matching:', workflow.name, error);
       }
     }
 
+    console.log('[Draw] Best workflow:', bestWorkflow?.name, 'score:', bestScore);
     return bestWorkflow ?? workflows[0] ?? null;
   };
 
@@ -719,17 +739,25 @@ export const Draw = () => {
 
     const applyHistoryAction = async () => {
       try {
+        console.log('[Draw] History action triggered:', {
+          workflowName: historyItem.workflowName,
+          params: historyItem.params,
+          shouldAutoGenerate
+        });
         const targetWorkflow = await findBestMatchingWorkflow(historyItem.params, historyItem.workflowName);
+        console.log('[Draw] Found target workflow:', targetWorkflow?.name);
         if (!targetWorkflow) {
           console.warn('[Draw] No workflow available for history action');
           return;
         }
 
         const loadedInputs = await handleWorkflowSelect(targetWorkflow);
+        console.log('[Draw] Loaded inputs:', loadedInputs.map(i => ({ name: i.name, type: i.type, classType: i.classType })));
 
         if (historyItem.params) {
           pendingRerunPromptRef.current = historyItem.params;
           const restored = extractInputValuesFromHistoryParams(historyItem.params, loadedInputs);
+          console.log('[Draw] Restored values from history:', restored);
           if (Object.keys(restored).length > 0) {
             setInputValues((prev) => {
               const next = { ...prev, ...restored };
@@ -2340,6 +2368,9 @@ export const Draw = () => {
         body: JSON.stringify({
           prompt: finalPrompt,
           client_id: clientId,
+          extra_data: {
+            workflow_name: selectedWorkflow?.name || '',
+          },
         }),
       });
 
