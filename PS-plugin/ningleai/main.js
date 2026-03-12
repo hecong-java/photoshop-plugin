@@ -556,20 +556,28 @@ const handlers = {
 
   'fs.openDirectory': async () => {
     const downloadsFolder = await ensureDownloadsFolder();
-    const nativePath = downloadsFolder.nativePath || '';
-    const folderUrl = downloadsFolder.url || '';
+
+    // Ensure we get string values
+    const nativePath = typeof downloadsFolder.nativePath === 'string'
+      ? downloadsFolder.nativePath
+      : String(downloadsFolder.nativePath || '');
+    const folderUrl = typeof downloadsFolder.url === 'string'
+      ? downloadsFolder.url
+      : String(downloadsFolder.url || '');
 
     let opened = false;
     let error = '';
 
-    console.log('[fs.openDirectory] Trying to open folder:', {
+    console.log('[fs.openDirectory] Folder info:', {
       nativePath,
       folderUrl,
-      folderName: downloadsFolder.name
+      folderName: downloadsFolder.name,
+      nativePathType: typeof downloadsFolder.nativePath,
+      urlType: typeof downloadsFolder.url
     });
 
     // Approach 1: Try shell.openPath with the folder's URL property
-    if (shell && typeof shell.openPath === 'function' && folderUrl) {
+    if (shell && typeof shell.openPath === 'function' && folderUrl && typeof folderUrl === 'string') {
       try {
         console.log('[fs.openDirectory] Trying shell.openPath with URL:', folderUrl);
         await shell.openPath(folderUrl);
@@ -582,7 +590,7 @@ const handlers = {
     }
 
     // Approach 2: Try with native path
-    if (!opened && shell && typeof shell.openPath === 'function' && nativePath) {
+    if (!opened && shell && typeof shell.openPath === 'function' && nativePath && typeof nativePath === 'string') {
       try {
         console.log('[fs.openDirectory] Trying shell.openPath with nativePath:', nativePath);
         await shell.openPath(nativePath);
@@ -595,16 +603,16 @@ const handlers = {
     }
 
     // Approach 3: Try creating a temp file and opening it to reveal folder
-    if (!opened) {
+    if (!opened && shell && typeof shell.openPath === 'function') {
       try {
         console.log('[fs.openDirectory] Trying temp file approach');
         const tempFile = await downloadsFolder.createFile(`.reveal_${Date.now()}.txt`, { overwrite: true });
         await tempFile.write('This file can be deleted');
 
-        const tempUrl = tempFile.url;
+        const tempUrl = typeof tempFile.url === 'string' ? tempFile.url : String(tempFile.url || '');
         console.log('[fs.openDirectory] Created temp file:', tempUrl);
 
-        if (shell && typeof shell.openPath === 'function') {
+        if (tempUrl && typeof tempUrl === 'string') {
           await shell.openPath(tempUrl);
           opened = true;
           console.log('[fs.openDirectory] Opening temp file succeeded (should reveal folder)');
