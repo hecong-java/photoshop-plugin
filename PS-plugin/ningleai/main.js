@@ -562,23 +562,28 @@ const handlers = {
     let error = '';
 
     if (shell) {
+      // Convert native path to file:// URL for better UXP compatibility
+      const fileUrl = path.startsWith('file://') ? path : `file:///${path.replace(/\\/g, '/')}`;
+
+      // Try openExternal with file:// URL first (more reliable for folders in UXP)
       try {
-        if (typeof shell.openPath === 'function') {
-          await shell.openPath(path);
+        if (typeof shell.openExternal === 'function') {
+          await shell.openExternal(fileUrl);
           opened = true;
         }
-      } catch (openPathError) {
-        error = getErrorMsg(openPathError);
+      } catch (openExternalError) {
+        error = getErrorMsg(openExternalError);
       }
 
+      // Fallback to openPath with native path
       if (!opened) {
         try {
-          if (typeof shell.openExternal === 'function') {
-            await shell.openExternal(path);
+          if (typeof shell.openPath === 'function') {
+            await shell.openPath(path);
             opened = true;
           }
-        } catch (openExternalError) {
-          error = error || getErrorMsg(openExternalError);
+        } catch (openPathError) {
+          error = error || getErrorMsg(openPathError);
         }
       }
     }
