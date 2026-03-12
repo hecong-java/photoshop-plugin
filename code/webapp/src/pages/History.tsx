@@ -1,33 +1,49 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { HistoryItem } from '../stores/historyStore';
 import { ComfyUIClient } from '../services/comfyui';
 import { useHistoryStore } from '../stores/historyStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { HistoryList } from '../components/history/HistoryList';
-import { downloadAndSaveZip, generateDownloadFilename, openDownloadsFolder } from '../services/download';
+import { downloadAndSaveZip, generateDownloadFilename } from '../services/download';
 import './History.css';
+
+interface DownloadSuccess {
+  path: string;
+  timestamp: number;
+}
 
 export const History = () => {
   const navigate = useNavigate();
   const { items, deleteItem, isLoading, error, setClient, fetchFromComfyUI, loadLocalDownloads, addLocalDownload } = useHistoryStore();
   const { comfyUI } = useSettingsStore();
+  const [downloadSuccess, setDownloadSuccess] = useState<DownloadSuccess | null>(null);
 
   // Load from ComfyUI on mount
   useEffect(() => {
     const loadHistory = async () => {
       // First load local downloads
       loadLocalDownloads();
-      
+
       // Then fetch from ComfyUI if configured
       if (comfyUI.baseUrl && comfyUI.isConnected) {
         setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
         await fetchFromComfyUI();
       }
     };
-    
+
     loadHistory();
   }, [comfyUI.baseUrl, comfyUI.isConnected, setClient, fetchFromComfyUI, loadLocalDownloads]);
+
+  // Auto-hide success message after 10 seconds
+  useEffect(() => {
+    if (downloadSuccess) {
+      const timer = setTimeout(() => {
+        setDownloadSuccess(null);
+      }, 10000);
+      return () => clearTimeout(timer);
+    }
+  }, [downloadSuccess]);
 
   const handleDownload = async (item: HistoryItem) => {
     if (!item.images || item.images.length === 0) {
@@ -50,11 +66,29 @@ export const History = () => {
 
     const result = await downloadAndSaveZip(urls, filename);
     addLocalDownload(item.promptId, result.savedPath);
-    await openDownloadsFolder();
+    setDownloadSuccess({ path: result.savedPath, timestamp: Date.now() });
   };
 
-  const handleOpenFolder = async () => {
-    await openDownloadsFolder();
+  const handleCopyPath = async () => {
+    if (downloadSuccess?.path) {
+      try {
+        await navigator.clipboard.writeText(downloadSuccess.path);
+        alert('路径已复制到剪贴板！');
+      } catch {
+        // Fallback for older browsers
+        const textArea = document.createElement('textarea');
+        textArea.value = downloadSuccess.path;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+        alert('路径已复制到剪贴板！');
+      }
+    }
+  };
+
+  const handleDismissSuccess = () => {
+    setDownloadSuccess(null);
   };
 
   const handleView = async (item: HistoryItem) => {
@@ -116,14 +150,34 @@ export const History = () => {
           {isLoading ? '加载中...' : '刷新'}
         </button>
       </div>
-      
+
+      {downloadSuccess && (
+        <div className="download-success-toast">
+          <div className="toast-content">
+            <span className="toast-icon">✓</span>
+            <div className="toast-message">
+              <strong>下载成功！</strong>
+              <p className="toast-path" title={downloadSuccess.path}>{downloadSuccess.path}</p>
+            </div>
+          </div>
+          <div className="toast-actions">
+            <button onClick={handleCopyPath} className="btn-copy">
+              复制路径
+            </button>
+            <button onClick={handleDismissSuccess} className="btn-dismiss">
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
       {error && (
         <div className="history-error">
           <p>错误: {error}</p>
           <button onClick={handleRefresh}>重试</button>
         </div>
       )}
-      
+
       <HistoryList
         items={items}
         onView={handleView}
@@ -131,7 +185,6 @@ export const History = () => {
         onReEdit={handleReEdit}
         onDelete={handleDelete}
         isLoading={isLoading}
-        onOpenFolder={handleOpenFolder}
       />
     </div>
   );
