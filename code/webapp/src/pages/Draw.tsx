@@ -471,6 +471,16 @@ export const Draw = () => {
         return;
       }
 
+      if (input.type === 'image') {
+        // For image inputs, store the filename
+        const imageFilename = typeof candidate === 'string' ? candidate : String(candidate);
+        if (imageFilename && imageFilename.trim() !== '') {
+          restoredValues[input.name] = imageFilename;
+          console.log('[Draw] Restored image filename for', input.name, ':', imageFilename);
+        }
+        return;
+      }
+
       const stringCandidate = typeof candidate === 'string' ? candidate : String(candidate);
       if (input.type === 'select' && input.options && !input.options.includes(stringCandidate)) {
         return;
@@ -765,6 +775,28 @@ export const Draw = () => {
               latestInputValuesRef.current = next;
               return next;
             });
+
+            // Restore image previews for image inputs
+            const imageInputs = loadedInputs.filter(i => i.type === 'image');
+            const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
+            const newPreviews: Record<string, string> = {};
+            for (const imgInput of imageInputs) {
+              const filename = restored[imgInput.name];
+              if (typeof filename === 'string' && filename.trim() !== '') {
+                // Generate preview URL from ComfyUI
+                const previewUrl = client.getViewUrl({
+                  filename,
+                  type: 'input',
+                  subfolder: '',
+                  preview: true,
+                });
+                newPreviews[imgInput.name] = previewUrl;
+                console.log('[Draw] Restored image preview for', imgInput.name, ':', previewUrl);
+              }
+            }
+            if (Object.keys(newPreviews).length > 0) {
+              setUploadedImagePreviews(prev => ({ ...prev, ...newPreviews }));
+            }
           }
         }
 
