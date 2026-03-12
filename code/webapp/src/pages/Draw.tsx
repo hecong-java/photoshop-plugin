@@ -2717,14 +2717,34 @@ export const Draw = () => {
           {/* Queue Status Display - always show when connected */}
           {comfyUISettings.isConnected && (
             <div className="queue-status">
-              <span className="queue-badge queue-running">
-                <span className="queue-icon">&#9881;</span>
-                {queueRunning.length}
-              </span>
-              <span className="queue-badge queue-pending">
-                <span className="queue-icon">&#8987;</span>
-                {queuePending.length}
-              </span>
+              {(() => {
+                // Find current task position in queue
+                const runningIndex = queueRunning.findIndex(item => item.promptId === progress.promptId);
+                const pendingIndex = queuePending.findIndex(item => item.promptId === progress.promptId);
+                const isInRunning = runningIndex !== -1;
+                const isInPending = pendingIndex !== -1;
+
+                return (
+                  <>
+                    <span className="queue-badge queue-running">
+                      <span className="queue-icon">&#9881;</span>
+                      {queueRunning.length}
+                      {isInRunning && <span className="queue-position"> (#{runningIndex + 1})</span>}
+                    </span>
+                    <span className="queue-badge queue-pending">
+                      <span className="queue-icon">&#8987;</span>
+                      {queuePending.length}
+                      {isInPending && <span className="queue-position"> (#{pendingIndex + 1})</span>}
+                    </span>
+                    {isGenerating && progress.promptId && !isInRunning && !isInPending && (
+                      <span className="queue-badge queue-current">
+                        <span className="queue-icon">&#9889;</span>
+                        执行中
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
           {isGenerating && (
