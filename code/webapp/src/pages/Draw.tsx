@@ -209,6 +209,7 @@ export const Draw = () => {
   // Workflows
   const [workflows, setWorkflows] = useState<ComfyUIWorkflowInfo[]>([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState<ComfyUIWorkflowInfo | null>(null);
+  const selectedWorkflowRef = useRef<ComfyUIWorkflowInfo | null>(null);
   const [workflowInputs, setWorkflowInputs] = useState<WorkflowInput[]>([]);
   const [inputValues, setInputValues] = useState<Record<string, string | number | boolean>>({});
   const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(false);
@@ -768,7 +769,9 @@ export const Draw = () => {
         }
 
         if (shouldAutoGenerate) {
+          console.log('[Draw] Scheduling handleGenerate in 300ms...');
           setTimeout(() => {
+            console.log('[Draw] Triggering handleGenerate, selectedWorkflow:', selectedWorkflow?.name);
             handleGenerate();
           }, 300);
         }
@@ -876,6 +879,7 @@ export const Draw = () => {
     uploadedImageBase64Ref.current = {};
 
     setSelectedWorkflow(workflow);
+    selectedWorkflowRef.current = workflow;
     setWorkflowInputs([]);
     setInputValues({});
     latestInputValuesRef.current = {};
@@ -2179,7 +2183,13 @@ export const Draw = () => {
   };
 
   const handleGenerate = async () => {
-    if (!selectedWorkflow || !comfyUISettings.isConnected) return;
+    // Use ref to get the latest workflow (avoids stale closure issues)
+    const currentWorkflow = selectedWorkflowRef.current || selectedWorkflow;
+    console.log('[Draw] handleGenerate called, workflow:', currentWorkflow?.name);
+    if (!currentWorkflow || !comfyUISettings.isConnected) {
+      console.log('[Draw] handleGenerate early return - no workflow or not connected');
+      return;
+    }
 
     const clientId = `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -2232,7 +2242,7 @@ export const Draw = () => {
         wsRef.current = null;
       }
 
-      const workflowData = await client.readWorkflow(selectedWorkflow.path || selectedWorkflow.name, prefixMode);
+      const workflowData = await client.readWorkflow(currentWorkflow.path || currentWorkflow.name, prefixMode);
       const historyPrompt = pendingRerunPromptRef.current;
       const currentInputValues = latestInputValuesRef.current;
       const compiledPrompt = historyPrompt
@@ -2369,7 +2379,7 @@ export const Draw = () => {
           prompt: finalPrompt,
           client_id: clientId,
           extra_data: {
-            workflow_name: selectedWorkflow?.name || '',
+            workflow_name: currentWorkflow?.name || '',
           },
         }),
       });
