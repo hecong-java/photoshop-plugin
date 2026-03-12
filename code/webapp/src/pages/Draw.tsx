@@ -2726,18 +2726,27 @@ export const Draw = () => {
 
                 return (
                   <>
-                    <span className="queue-badge queue-running">
+                    <span
+                      className="queue-badge queue-running"
+                      title={`正在运行: ${queueRunning.length} 个任务${isInRunning ? ` (当前任务 #${runningIndex + 1})` : ''}`}
+                    >
                       <span className="queue-icon">&#9881;</span>
                       {queueRunning.length}
                       {isInRunning && <span className="queue-position"> (#{runningIndex + 1})</span>}
                     </span>
-                    <span className="queue-badge queue-pending">
+                    <span
+                      className="queue-badge queue-pending"
+                      title={`等待中: ${queuePending.length} 个任务${isInPending ? ` (当前任务 #${pendingIndex + 1})` : ''}`}
+                    >
                       <span className="queue-icon">&#8987;</span>
                       {queuePending.length}
                       {isInPending && <span className="queue-position"> (#{pendingIndex + 1})</span>}
                     </span>
                     {isGenerating && progress.promptId && !isInRunning && !isInPending && (
-                      <span className="queue-badge queue-current">
+                      <span
+                        className="queue-badge queue-current"
+                        title="当前任务正在执行中"
+                      >
                         <span className="queue-icon">&#9889;</span>
                         执行中
                       </span>

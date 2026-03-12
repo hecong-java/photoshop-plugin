@@ -75,6 +75,10 @@
   font-size: 14px;
 }
 
+.queue-badge[title] {
+  cursor: help;
+}
+
 .queue-running {
   background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
   color: white;
