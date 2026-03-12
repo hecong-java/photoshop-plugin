@@ -94,6 +94,7 @@ Added Task 3 to fix rerun/edit functionality - this was discovered as part of th
 | 1959390 | feat(quick-4): add debug logging for workflow JSON and final prompt |
 | 1aa8047 | feat(quick-4): implement random seed generation for RandomNoise nodes |
 | 7c9eeef | fix(quick-4): add debug logging and save workflow name for rerun/edit |
+| 48b4a12 | fix(quick-4): use ref for selectedWorkflow to avoid stale closure |
 
 ## Files Modified
 
