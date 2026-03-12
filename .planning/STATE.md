@@ -81,7 +81,7 @@ progress:
 |---|-------------|------|--------|-----------|
 | 1 | 修复参数设置显示问题 | 2026-03-11 | 919a844 | [001-fix-param-display](./quick/001-fix-param-display/) |
 | 2 | Add refresh workflow button | 2026-03-11 | 1cea25a | [002-add-refresh-workflow-button](./quick/002-add-refresh-workflow-button/) |
-| 3 | Add ComfyUI queue display | 2026-03-12 | 0f07e4b | [003-comfyui-queue](./quick/3-comfyui/) |
+| 3 | 增加comfyui任务队列显示功能 | 2026-03-12 | 58efacc | [003-comfyui-queue](./quick/3-comfyui/) |
 
 ### Recent Completions
 
