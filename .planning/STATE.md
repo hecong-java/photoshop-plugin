@@ -1,3 +1,16 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: milestone
+status: unknown
+last_updated: "2026-03-12T01:21:54.390Z"
+progress:
+  total_phases: 3
+  completed_phases: 0
+  total_plans: 5
+  completed_plans: 4
+---
+
 # STATE: Photoshop ComfyUI Plugin
 
 **Last Updated:** 2026-03-11T09:40:11Z
@@ -33,6 +46,7 @@
 | Days Active | 0 |
 
 ---
+| Phase quick-3 P01 | 5m | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -51,6 +65,7 @@
 | 2026-03-11 | getAllowedInputs returns null for "show all" | Consistent with config design where missing inputs means no filtering |
 | 2026-03-11 | Non-blocking config load in Draw page | UI renders immediately, filters apply when config arrives |
 | 2026-03-11 | Display-only filtering for workflow inputs | sortedWorkflowInputs unchanged, submission uses full data with defaults |
+- [Phase quick-3]: Poll queue every 2 seconds during generation for real-time updates
 
 ### Active TODOs
 
@@ -66,6 +81,7 @@
 |---|-------------|------|--------|-----------|
 | 1 | 修复参数设置显示问题 | 2026-03-11 | 919a844 | [001-fix-param-display](./quick/001-fix-param-display/) |
 | 2 | Add refresh workflow button | 2026-03-11 | 1cea25a | [002-add-refresh-workflow-button](./quick/002-add-refresh-workflow-button/) |
+| 3 | Add ComfyUI queue display | 2026-03-12 | 0f07e4b | [003-comfyui-queue](./quick/3-comfyui/) |
 
 ### Recent Completions
 
@@ -82,9 +98,9 @@
 
 ### Last Session
 
-- **Date:** 2026-03-11
-- **Action:** Completed quick task 002 (Add refresh workflow button)
-- **Outcome:** Refresh button added to workflow selector, users can re-fetch workflow list without page reload
+- **Date:** 2026-03-12
+- **Action:** Completed quick task 003 (Add ComfyUI queue display)
+- **Outcome:** Queue status display showing running/pending jobs with auto-refresh during generation
 
 ### Next Action
 
