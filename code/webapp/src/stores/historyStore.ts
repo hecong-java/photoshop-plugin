@@ -213,9 +213,33 @@ const convertEntryToItem = (
 ): HistoryItem => {
   const outputs = entry.outputs || {};
   const imageInfo = extractHistoryImage(outputs, client);
-  const promptData = extractPromptNodes(entry.prompt);
+
+  // ComfyUI history structure: prompt is a tuple [number, prompt_id, workflow_dict, extra_data, outputs_to_execute, sensitive]
+  // - index 2: actual workflow dict (the API format JSON)
+  // - index 3: extra_data (contains workflow_name, client_id, etc.)
+  const promptTuple = entry.prompt;
+  const workflowDict = Array.isArray(promptTuple) && promptTuple.length > 2
+    ? promptTuple[2]
+    : promptTuple; // fallback for old format
+  const extraData = Array.isArray(promptTuple) && promptTuple.length > 3
+    ? promptTuple[3]
+    : undefined;
+
+  const promptData = extractPromptNodes(workflowDict);
   // Use workflow name from extra_data if available, otherwise fall back to image name
-  const workflowName = entry.extra_data?.workflow_name || imageInfo.imageName;
+  const workflowName = (extraData && typeof extraData === 'object' && 'workflow_name' in extraData)
+    ? String((extraData as Record<string, unknown>).workflow_name)
+    : imageInfo.imageName;
+
+  // Debug: log workflow name extraction
+  console.log('[historyStore] Converting entry to item:', {
+    promptId,
+    isArray: Array.isArray(promptTuple),
+    tupleLength: Array.isArray(promptTuple) ? promptTuple.length : 0,
+    extraData,
+    extractedWorkflowName: workflowName,
+    fallbackImageName: imageInfo.imageName,
+  });
 
   return {
     id: promptId,

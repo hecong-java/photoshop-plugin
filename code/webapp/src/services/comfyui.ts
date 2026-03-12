@@ -53,16 +53,15 @@ export interface ComfyUIWorkflowInfo {
 
 export type ExperimentModelCatalog = Record<string, string[]>;
 
+// ComfyUI history entry structure:
+// - prompt: [number, prompt_id, workflow_dict, extra_data, outputs_to_execute, sensitive]
+// - The actual workflow is at index 2, extra_data at index 3
 export interface ComfyUIHistoryEntry {
-  prompt: Record<string, unknown>;
+  prompt: [number, string, Record<string, unknown>, Record<string, unknown>?, string[]?, Record<string, unknown>?];
   outputs: Record<string, { images?: Array<{ filename: string; subfolder?: string; type?: string }> }>;
   status?: string | Record<string, unknown>;
   start_time?: number;
   end_time?: number;
-  extra_data?: {
-    workflow_name?: string;
-    [key: string]: unknown;
-  };
 }
 
 export interface ComfyUIQueueItem {
