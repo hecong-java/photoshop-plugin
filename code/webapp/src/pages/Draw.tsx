@@ -4,6 +4,7 @@ import { ComfyUIClient, type ComfyUIWorkflowInfo, type ComfyUIHistoryEntry, type
 import { useSettingsStore } from '../stores/settingsStore';
 import { useConfigStore } from '../stores/configStore';
 import { useWorkflowCacheStore, blobToBase64, base64ToBlobUrl } from '../stores/workflowCacheStore';
+import { useComfyUIStore } from '../stores/comfyui';
 import { PsExportButton } from '../components/upload/PsExportButton';
 import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer } from '../services/upload';
 import './Draw.css';
@@ -202,6 +203,9 @@ export const Draw = () => {
   // Config store for filtering displayed nodes
   const { shouldDisplayNode, getAllowedInputs, loadConfig } = useConfigStore();
 
+  // ComfyUI queue store
+  const { queueRunning, queuePending, fetchQueue, isLoadingQueue } = useComfyUIStore();
+
   // Workflows
   const [workflows, setWorkflows] = useState<ComfyUIWorkflowInfo[]>([]);
   const [selectedWorkflow, setSelectedWorkflow] = useState<ComfyUIWorkflowInfo | null>(null);
@@ -350,6 +354,22 @@ export const Draw = () => {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  // Fetch queue on mount and when connection status changes
+  useEffect(() => {
+    if (comfyUISettings.isConnected) {
+      fetchQueue().catch(console.error);
+    }
+  }, [comfyUISettings.isConnected, fetchQueue]);
+
+  // Refresh queue periodically during generation
+  useEffect(() => {
+    if (!isGenerating) return;
+    const interval = setInterval(() => {
+      fetchQueue().catch(console.error);
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [isGenerating, fetchQueue]);
 
 
   const extractInputValuesFromHistoryParams = (
@@ -2687,6 +2707,23 @@ export const Draw = () => {
       <div className="preview-section">
         <div className="preview-header">
           <h2>预览</h2>
+          {/* Queue Status Display */}
+          {(queueRunning.length > 0 || queuePending.length > 0) && (
+            <div className="queue-status">
+              {queueRunning.length > 0 && (
+                <span className="queue-badge queue-running">
+                  <span className="queue-icon">&#9881;</span>
+                  {queueRunning.length}
+                </span>
+              )}
+              {queuePending.length > 0 && (
+                <span className="queue-badge queue-pending">
+                  <span className="queue-icon">&#8987;</span>
+                  {queuePending.length}
+                </span>
+              )}
+            </div>
+          )}
           {isGenerating && (
             <span className="generating-badge">生成中...</span>
           )}

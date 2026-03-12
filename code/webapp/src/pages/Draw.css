@@ -52,6 +52,38 @@
   50% { box-shadow: 0 0 20px 4px rgba(66, 153, 225, 0.2); }
 }
 
+/* Queue Status */
+.queue-status {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.queue-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.queue-badge .queue-icon {
+  font-size: 11px;
+}
+
+.queue-running {
+  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+  color: white;
+}
+
+.queue-pending {
+  background: rgba(148, 163, 184, 0.3);
+  color: #cbd5e1;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
 .preview-content {
   flex: 1;
   display: flex;
