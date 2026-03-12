@@ -204,7 +204,7 @@ export const Draw = () => {
   const { shouldDisplayNode, getAllowedInputs, loadConfig } = useConfigStore();
 
   // ComfyUI queue store
-  const { queueRunning, queuePending, fetchQueue, isLoadingQueue } = useComfyUIStore();
+  const { queueRunning, queuePending, fetchQueue, isLoadingQueue, setBaseUrl: setComfyUIBaseUrl } = useComfyUIStore();
 
   // Workflows
   const [workflows, setWorkflows] = useState<ComfyUIWorkflowInfo[]>([]);
@@ -354,6 +354,13 @@ export const Draw = () => {
   useEffect(() => {
     loadConfig();
   }, [loadConfig]);
+
+  // Sync baseUrl from settings to ComfyUI store
+  useEffect(() => {
+    if (comfyUISettings.baseUrl) {
+      setComfyUIBaseUrl(comfyUISettings.baseUrl);
+    }
+  }, [comfyUISettings.baseUrl, setComfyUIBaseUrl]);
 
   // Fetch queue on mount and when connection status changes
   useEffect(() => {
