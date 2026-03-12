@@ -204,7 +204,7 @@ export const Draw = () => {
   const { shouldDisplayNode, getAllowedInputs, loadConfig } = useConfigStore();
 
   // ComfyUI queue store
-  const { queueRunning, queuePending, fetchQueue, isLoadingQueue, setBaseUrl: setComfyUIBaseUrl } = useComfyUIStore();
+  const { queueRunning, queuePending, fetchQueue, setBaseUrl: setComfyUIBaseUrl } = useComfyUIStore();
 
   // Workflows
   const [workflows, setWorkflows] = useState<ComfyUIWorkflowInfo[]>([]);
@@ -2197,6 +2197,10 @@ export const Draw = () => {
         : compileWorkflowToPrompt(workflowData, currentInputValues);
       const finalPrompt = enforceLatestImageInputs(compiledPrompt, currentInputValues, workflowInputs);
       pendingRerunPromptRef.current = null;
+
+      // Debug logging to show workflow JSON and final prompt
+      console.log('[Draw] Workflow data loaded:', JSON.stringify(workflowData, null, 2));
+      console.log('[Draw] Final prompt sent to ComfyUI:', JSON.stringify(finalPrompt, null, 2));
 
       let promptId = '';
 
