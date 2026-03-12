@@ -2707,21 +2707,17 @@ export const Draw = () => {
       <div className="preview-section">
         <div className="preview-header">
           <h2>预览</h2>
-          {/* Queue Status Display */}
-          {(queueRunning.length > 0 || queuePending.length > 0) && (
+          {/* Queue Status Display - always show when connected */}
+          {comfyUISettings.isConnected && (
             <div className="queue-status">
-              {queueRunning.length > 0 && (
-                <span className="queue-badge queue-running">
-                  <span className="queue-icon">&#9881;</span>
-                  {queueRunning.length}
-                </span>
-              )}
-              {queuePending.length > 0 && (
-                <span className="queue-badge queue-pending">
-                  <span className="queue-icon">&#8987;</span>
-                  {queuePending.length}
-                </span>
-              )}
+              <span className="queue-badge queue-running">
+                <span className="queue-icon">&#9881;</span>
+                {queueRunning.length}
+              </span>
+              <span className="queue-badge queue-pending">
+                <span className="queue-icon">&#8987;</span>
+                {queuePending.length}
+              </span>
             </div>
           )}
           {isGenerating && (
