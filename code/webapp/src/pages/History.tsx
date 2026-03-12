@@ -35,14 +35,15 @@ export const History = () => {
     loadHistory();
   }, [comfyUI.baseUrl, comfyUI.isConnected, setClient, fetchFromComfyUI, loadLocalDownloads]);
 
-  // Auto-hide success message after 10 seconds
+  // Auto-hide success message after 3 seconds
   useEffect(() => {
     if (downloadSuccess) {
       const timer = setTimeout(() => {
         setDownloadSuccess(null);
-      }, 10000);
+      }, 3000);
       return () => clearTimeout(timer);
     }
+    return undefined;
   }, [downloadSuccess]);
 
   const handleDownload = async (item: HistoryItem) => {
