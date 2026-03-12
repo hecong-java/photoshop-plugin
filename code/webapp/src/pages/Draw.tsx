@@ -697,10 +697,20 @@ export const Draw = () => {
         if (workflowName) {
           const normalized = workflowName.trim().toLowerCase().replace(/\.json$/, '');
           const workflowLabel = workflow.name.toLowerCase().replace(/\.json$/, '');
+          // Check if workflowName looks like a workflow name (not an image filename)
+          const isWorkflowName = normalized.endsWith('.json') ||
+            !/\.(png|jpg|jpeg|webp|gif)$/i.test(workflowName);
+
           if (workflowLabel === normalized) {
-            score += 1;
-          } else if (workflowLabel.includes(normalized)) {
-            score += 0;
+            // Exact match - give a significant boost
+            score += 50;
+            console.log('[Draw] Exact workflow name match for', workflow.name);
+          } else if (workflowLabel.includes(normalized) && normalized.length > 3) {
+            // Partial match - smaller boost
+            score += 10;
+          } else if (isWorkflowName) {
+            // workflowName looks like a workflow name but doesn't match - small penalty
+            score -= 2;
           }
         }
 
