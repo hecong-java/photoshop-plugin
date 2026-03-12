@@ -2727,34 +2727,26 @@ export const Draw = () => {
                 const pendingIndex = queuePending.findIndex(item => item.promptId === progress.promptId);
                 const isInRunning = runningIndex !== -1;
                 const isInPending = pendingIndex !== -1;
+                const isExecuting = isInRunning && runningIndex === 0; // First in running queue = executing
 
                 return (
                   <>
                     <span
-                      className="queue-badge queue-running"
+                      className={`queue-badge ${isExecuting ? 'queue-current' : 'queue-running'}`}
                       title={`正在运行: ${queueRunning.length} 个任务${isInRunning ? ` (当前任务 #${runningIndex + 1})` : ''}`}
                     >
-                      <span className="queue-icon">&#9881;</span>
-                      {queueRunning.length}
-                      {isInRunning && <span className="queue-position"> (#{runningIndex + 1})</span>}
+                      <span className="queue-icon">{isExecuting ? '⚡' : '⚙'}</span>
+                      {isExecuting ? '执行中' : queueRunning.length}
+                      {isInRunning && !isExecuting && <span className="queue-position"> (#{runningIndex + 1})</span>}
                     </span>
                     <span
                       className="queue-badge queue-pending"
                       title={`等待中: ${queuePending.length} 个任务${isInPending ? ` (当前任务 #${pendingIndex + 1})` : ''}`}
                     >
-                      <span className="queue-icon">&#8987;</span>
+                      <span className="queue-icon">⏳</span>
                       {queuePending.length}
                       {isInPending && <span className="queue-position"> (#{pendingIndex + 1})</span>}
                     </span>
-                    {isGenerating && progress.promptId && !isInRunning && !isInPending && (
-                      <span
-                        className="queue-badge queue-current"
-                        title="当前任务正在执行中"
-                      >
-                        <span className="queue-icon">&#9889;</span>
-                        执行中
-                      </span>
-                    )}
                   </>
                 );
               })()}
