@@ -374,7 +374,7 @@ export const Draw = () => {
     if (!isGenerating) return;
     const interval = setInterval(() => {
       fetchQueue().catch(console.error);
-    }, 2000);
+    }, 1000);
     return () => clearInterval(interval);
   }, [isGenerating, fetchQueue]);
 
