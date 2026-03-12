@@ -146,12 +146,14 @@ export const useComfyUIStore = create<ComfyUIStoreState>((set, get) => ({
     set({ isLoadingQueue: true, error: null });
     try {
       const { baseUrl, capabilities } = get();
+      console.log('[fetchQueue] baseUrl:', baseUrl, 'capabilities:', capabilities);
       const client = getClient(baseUrl);
       const queue = await client.getQueue(
         capabilities?.prefixMode === 'api' || capabilities?.prefixMode === 'oss'
           ? capabilities.prefixMode
           : undefined
       );
+      console.log('[fetchQueue] queue result:', queue);
       set({
         queueRunning: queue.queueRunning,
         queuePending: queue.queuePending,
@@ -159,6 +161,7 @@ export const useComfyUIStore = create<ComfyUIStoreState>((set, get) => ({
       });
       return queue;
     } catch (error) {
+      console.error('[fetchQueue] error:', error);
       const storeError = withCorsGuidance(toStoreError(error));
       set({ isLoadingQueue: false, error: storeError });
       throw storeError;

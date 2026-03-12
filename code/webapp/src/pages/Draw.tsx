@@ -364,8 +364,12 @@ export const Draw = () => {
 
   // Fetch queue on mount and when connection status changes
   useEffect(() => {
+    console.log('[Queue] Connection status:', comfyUISettings.isConnected, 'baseUrl:', comfyUISettings.baseUrl);
     if (comfyUISettings.isConnected) {
-      fetchQueue().catch(console.error);
+      console.log('[Queue] Fetching queue...');
+      fetchQueue()
+        .then((queue) => console.log('[Queue] Result:', queue))
+        .catch((err) => console.error('[Queue] Error:', err));
     }
   }, [comfyUISettings.isConnected, fetchQueue]);
 
