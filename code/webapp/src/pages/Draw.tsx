@@ -1808,6 +1808,21 @@ export const Draw = () => {
         }
       });
 
+      // Handle random seed generation for nodes with "randomize" mode
+      // Check if any seed widget has the next widget value set to "randomize"
+      widgets.forEach((widget: any, idx: number) => {
+        const widgetName = typeof widget.name === 'string' ? widget.name : '';
+        if (!widgetName) return;
+
+        const widgetNameLower = widgetName.toLowerCase();
+        const isSeedInput = widgetNameLower.includes('seed');
+        if (isSeedInput && widgetValues[idx + 1] === 'randomize') {
+          const randomSeed = Math.floor(Math.random() * 1000000000000000);
+          inputs[widgetName] = randomSeed;
+          console.log(`[Draw] Generated random seed for node ${nodeId}.${widgetName}: ${randomSeed}`);
+        }
+      });
+
       // Handle connections first
       const linkedInputNames = new Set<string>();
       if (Array.isArray(node.inputs)) {
