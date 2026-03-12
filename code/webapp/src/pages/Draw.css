@@ -55,33 +55,45 @@
 /* Queue Status */
 .queue-status {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
+  margin-left: 12px;
 }
 
 .queue-badge {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 12px;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 16px;
+  font-size: 13px;
   font-weight: 600;
+  transition: all 0.3s ease;
 }
 
 .queue-badge .queue-icon {
-  font-size: 11px;
+  font-size: 14px;
 }
 
 .queue-running {
-  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+  background: linear-gradient(135deg, #22c55e 0%, #16a34a 100%);
   color: white;
+  box-shadow: 0 2px 8px rgba(34, 197, 94, 0.4);
+}
+
+.queue-running:not(:empty) {
+  animation: queue-pulse 2s ease-in-out infinite;
 }
 
 .queue-pending {
-  background: rgba(148, 163, 184, 0.3);
-  color: #cbd5e1;
-  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
+}
+
+@keyframes queue-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
 }
 
 .preview-content {
