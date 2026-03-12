@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-12T03:20:27.565Z"
+last_updated: "2026-03-12T06:12:10.041Z"
 progress:
   total_phases: 3
   completed_phases: 0
@@ -48,6 +48,7 @@ progress:
 ---
 | Phase quick-3 P01 | 5m | 3 tasks | 4 files |
 | Phase quick-004 P01 | 5m | 2 tasks | 1 files |
+| Phase quick-005 P01 | 1m | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,7 @@ progress:
 | 2 | Add refresh workflow button | 2026-03-11 | 1cea25a | [002-add-refresh-workflow-button](./quick/002-add-refresh-workflow-button/) |
 | 3 | 增加comfyui任务队列显示功能 | 2026-03-12 | 58efacc | [003-comfyui-queue](./quick/3-comfyui/) |
 | 4 | Add workflow debug logging, random seed generation, and fix rerun/edit | 2026-03-12 | 7c9eeef | [004-workflow-random-seed](./quick/004-workflow-random-seed/) |
+| 5 | Auto-open file manager after download completes | 2026-03-12 | 498640e | [005-file-manager-download](./quick/005-file-manager-download/) |
 
 ### Recent Completions
 
@@ -101,8 +103,8 @@ progress:
 ### Last Session
 
 - **Date:** 2026-03-12
-- **Action:** Completed quick task 004 (Workflow random seed)
-- **Outcome:** Added debug logging for workflow JSON visibility and random seed generation for RandomNoise nodes
+- **Action:** Completed quick task 005 (File manager auto-open)
+- **Outcome:** Added automatic file manager opening after download completes in History page
 
 ### Next Action
 
