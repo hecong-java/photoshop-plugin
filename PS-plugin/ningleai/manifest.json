@@ -1,0 +1,113 @@
+{
+  "id": "ningleai",
+  "name": "柠乐AI",
+  "version": "1.0.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "host": {
+    "app": "PS",
+    "minVersion": "24.1.0"
+  },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "index",
+      "label": {
+        "default": "柠乐AI"
+      },
+      "minimumSize": {
+        "width": 430,
+        "height": 700
+      },
+      "maximumSize": {
+        "width": 2500,
+        "height": 1500
+      },
+      "preferredDockedSize": {
+        "width": 220,
+        "height": 300
+      },
+      "preferredFloatingSize": {
+        "width": 220,
+        "height": 300
+      },
+      "icons": [
+        {
+          "width": 24,
+          "height": 24,
+          "path": "icons/logo.png",
+          "scale": [
+            1,
+            2
+          ],
+          "theme": [
+            "darkest",
+            "dark",
+            "medium"
+          ],
+          "species": [
+            "chrome"
+          ]
+        },
+        {
+          "width": 24,
+          "height": 24,
+          "path": "icons/logo.png",
+          "scale": [
+            1,
+            2
+          ],
+          "theme": [
+            "lightest",
+            "light"
+          ],
+          "species": [
+            "chrome"
+          ]
+        }
+      ]
+    }
+  ],
+  "icons": [
+    {
+      "width": 48,
+      "height": 48,
+      "path": "icons/logo.png",
+      "scale": [
+        1,
+        2
+      ],
+      "theme": [
+        "darkest",
+        "dark",
+        "medium",
+        "lightest",
+        "light",
+        "all"
+      ],
+      "species": [
+        "pluginList"
+      ]
+    }
+  ],
+  "requiredPermissions": {
+    "network": {
+      "domains": "all"
+    },
+    "launchProcess": {
+      "schemes": [
+        "https",
+        "http",
+        "file"
+      ]
+    },
+    "webview": {
+      "allow": "yes",
+      "allowLocalRendering": "yes",
+      "domains": "all",
+      "enableMessageBridge": "localAndRemote"
+    },
+    "localFileSystem": "fullAccess",
+    "clipboard": "readAndWrite"
+  }
+}

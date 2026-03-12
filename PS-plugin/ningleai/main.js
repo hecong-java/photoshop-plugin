@@ -556,41 +556,69 @@ const handlers = {
 
   'fs.openDirectory': async () => {
     const downloadsFolder = await ensureDownloadsFolder();
-    const path = downloadsFolder.nativePath || 'downloads';
+    const nativePath = downloadsFolder.nativePath || '';
+    const folderUrl = downloadsFolder.url || '';
 
     let opened = false;
     let error = '';
 
-    if (shell) {
-      // Convert native path to file:// URL for better UXP compatibility
-      const fileUrl = path.startsWith('file://') ? path : `file:///${path.replace(/\\/g, '/')}`;
+    console.log('[fs.openDirectory] Trying to open folder:', {
+      nativePath,
+      folderUrl,
+      folderName: downloadsFolder.name
+    });
 
-      // Try openExternal with file:// URL first (more reliable for folders in UXP)
+    // Approach 1: Try shell.openPath with the folder's URL property
+    if (shell && typeof shell.openPath === 'function' && folderUrl) {
       try {
-        if (typeof shell.openExternal === 'function') {
-          await shell.openExternal(fileUrl);
-          opened = true;
-        }
-      } catch (openExternalError) {
-        error = getErrorMsg(openExternalError);
+        console.log('[fs.openDirectory] Trying shell.openPath with URL:', folderUrl);
+        await shell.openPath(folderUrl);
+        opened = true;
+        console.log('[fs.openDirectory] shell.openPath with URL succeeded');
+      } catch (shellError) {
+        error = getErrorMsg(shellError);
+        console.log('[fs.openDirectory] shell.openPath with URL failed:', error);
       }
+    }
 
-      // Fallback to openPath with native path
-      if (!opened) {
-        try {
-          if (typeof shell.openPath === 'function') {
-            await shell.openPath(path);
-            opened = true;
-          }
-        } catch (openPathError) {
-          error = error || getErrorMsg(openPathError);
+    // Approach 2: Try with native path
+    if (!opened && shell && typeof shell.openPath === 'function' && nativePath) {
+      try {
+        console.log('[fs.openDirectory] Trying shell.openPath with nativePath:', nativePath);
+        await shell.openPath(nativePath);
+        opened = true;
+        console.log('[fs.openDirectory] shell.openPath with nativePath succeeded');
+      } catch (shellError) {
+        error = error || getErrorMsg(shellError);
+        console.log('[fs.openDirectory] shell.openPath with nativePath failed:', shellError);
+      }
+    }
+
+    // Approach 3: Try creating a temp file and opening it to reveal folder
+    if (!opened) {
+      try {
+        console.log('[fs.openDirectory] Trying temp file approach');
+        const tempFile = await downloadsFolder.createFile(`.reveal_${Date.now()}.txt`, { overwrite: true });
+        await tempFile.write('This file can be deleted');
+
+        const tempUrl = tempFile.url;
+        console.log('[fs.openDirectory] Created temp file:', tempUrl);
+
+        if (shell && typeof shell.openPath === 'function') {
+          await shell.openPath(tempUrl);
+          opened = true;
+          console.log('[fs.openDirectory] Opening temp file succeeded (should reveal folder)');
         }
+      } catch (tempError) {
+        error = error || getErrorMsg(tempError);
+        console.log('[fs.openDirectory] Temp file approach failed:', tempError);
       }
     }
 
     return {
       success: true,
-      path,
+      path: nativePath,
+      url: folderUrl,
       opened,
       error
     };
