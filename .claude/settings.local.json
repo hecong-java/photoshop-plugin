@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "Bash(test:*)",
+      "Bash(npx vitest:*)",
+      "Bash(node:*)",
+      "Bash(npm run:*)",
+      "Bash(npx tsc:*)",
+      "Skill(gsd:execute-phase)",
+      "Bash(grep:*)",
+      "Bash(python:*)"
+    ]
+  }
+}

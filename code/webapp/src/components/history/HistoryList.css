@@ -1,0 +1,117 @@
+.history-list {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.history-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.history-list-header h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.history-count {
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  font-size: 12px;
+  color: #cbd5e1;
+}
+
+.history-list-items {
+  margin-bottom: 10px;
+}
+
+.history-list-empty {
+  text-align: center;
+  padding: 28px 14px;
+  background: rgba(20, 20, 35, 0.5);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.history-list-empty p {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.history-list-loading {
+  text-align: center;
+  padding: 28px 14px;
+  background: rgba(20, 20, 35, 0.5);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.history-list-loading p {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0;
+}
+
+.history-list-pagination {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  background: rgba(20, 20, 35, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.pagination-btn {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, #343a43 0%, #2b3038 100%);
+  border-radius: 8px;
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.pagination-btn:hover:not(:disabled) {
+  border-color: rgba(99, 102, 241, 0.56);
+  background: linear-gradient(180deg, #3d4450 0%, #323844 100%);
+}
+
+.pagination-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pagination-info {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .history-list-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
+  }
+
+  .history-item-actions {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .btn {
+    width: 100%;
+  }
+}

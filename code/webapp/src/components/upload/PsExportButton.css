@@ -1,0 +1,119 @@
+.ps-export-button-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ps-export-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  border: 1px solid #28a745;
+  border-radius: 4px;
+  background-color: #28a745;
+  color: white;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-height: 44px;
+}
+
+.ps-export-button.compact {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+
+.ps-export-button.icon-only {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  gap: 0;
+}
+
+.ps-export-button:hover:not(:disabled) {
+  background-color: #218838;
+  border-color: #218838;
+  box-shadow: 0 2px 4px rgba(40, 167, 69, 0.2);
+}
+
+.ps-export-button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.ps-export-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ps-icon {
+  width: 18px;
+  height: 18px;
+  stroke-width: 2;
+}
+
+.ps-export-button.compact .ps-icon,
+.ps-export-button.icon-only .ps-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.spinner-small {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin-small 0.8s linear infinite;
+}
+
+@keyframes spin-small {
+  0% {
+    transform: rotate(0deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+/* Status messages */
+.ps-export-error,
+.ps-export-success {
+  padding: 10px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.ps-export-error {
+  background-color: #f8d7da;
+  border: 1px solid #f5c6cb;
+  color: #721c24;
+}
+
+.ps-export-error strong {
+  display: inline;
+  margin-right: 4px;
+}
+
+.ps-export-success {
+  background-color: #d4edda;
+  border: 1px solid #c3e6cb;
+  color: #155724;
+}

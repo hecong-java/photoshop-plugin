@@ -1,0 +1,402 @@
+/* Settings Page Styles */
+.settings-page {
+  padding: 8px;
+  max-width: 100%;
+  margin: 0;
+  min-height: 100%;
+}
+
+.settings-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 10px 0;
+  color: var(--text-primary, #e0e0e0);
+}
+
+/* Three Column Grid */
+.settings-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: start;
+}
+
+@media (min-width: 1120px) {
+  .settings-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* Settings Cards */
+.settings-card {
+  background: var(--card-bg, rgba(30, 30, 40, 0.6));
+  border: 1px solid var(--card-border, rgba(255, 255, 255, 0.1));
+  border-radius: 12px;
+  padding: 10px;
+  backdrop-filter: blur(10px);
+}
+
+.settings-card h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 10px 0;
+  color: var(--text-primary, #e0e0e0);
+}
+
+/* Connection Card */
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.connection-status {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 20px;
+  transition: all 0.3s ease;
+}
+
+.connection-status.connected {
+  background: rgba(72, 187, 120, 0.2);
+  color: #48bb78;
+  box-shadow: 0 0 8px rgba(72, 187, 120, 0.3);
+}
+
+.connection-status.disconnected {
+  background: rgba(245, 101, 101, 0.2);
+  color: #f56565;
+}
+
+.connection-status.connecting {
+  background: rgba(236, 201, 75, 0.2);
+  color: #ecc94b;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Form Elements */
+.form-group {
+  margin-bottom: 10px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--text-secondary, #a0a0a0);
+}
+
+.text-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid var(--input-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  background: var(--input-bg, rgba(20, 20, 30, 0.5));
+  color: var(--text-primary, #e0e0e0);
+  transition: all 0.2s ease;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: #4299e1;
+  box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.2);
+}
+
+.text-input::placeholder {
+  color: var(--text-muted, #666);
+}
+
+/* Test Connection Button */
+.test-connection-btn {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: white;
+  background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.test-connection-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(66, 153, 225, 0.4);
+}
+
+.test-connection-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.test-connection-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Error Message */
+.error-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: rgba(245, 101, 101, 0.15);
+  border: 1px solid rgba(245, 101, 101, 0.3);
+  border-radius: 8px;
+  color: #f56565;
+  font-size: 13px;
+}
+
+.error-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+/* Capabilities Matrix */
+.capabilities-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.capability-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.capability-item.available {
+  background: rgba(72, 187, 120, 0.15);
+  border: 1px solid rgba(72, 187, 120, 0.3);
+}
+
+.capability-item.unavailable {
+  background: rgba(160, 174, 192, 0.1);
+  border: 1px solid rgba(160, 174, 192, 0.2);
+  opacity: 0.7;
+}
+
+.capability-icon {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+.capability-item.available .capability-icon {
+  color: #48bb78;
+}
+
+.capability-item.unavailable .capability-icon {
+  color: #a0aec0;
+}
+
+.capability-name {
+  font-size: 13px;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.capabilities-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-secondary, #a0a0a0);
+}
+
+.placeholder-icon {
+  font-size: 48px;
+  margin-bottom: 16px;
+  opacity: 0.5;
+}
+
+.capabilities-placeholder p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* Photoshop Settings */
+.ps-import-section,
+.theme-section {
+  margin-bottom: 10px;
+}
+
+.section-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 12px;
+  color: var(--text-secondary, #a0a0a0);
+}
+
+.theme-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-btn {
+  flex: 1;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid var(--input-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+  background: var(--input-bg, rgba(20, 20, 30, 0.5));
+  color: var(--text-secondary, #a0a0a0);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.theme-btn:hover {
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.theme-btn.active {
+  background: rgba(66, 153, 225, 0.2);
+  border-color: #4299e1;
+  color: #4299e1;
+}
+
+/* Responsive adjustments */
+@media (max-width: 1200px) {
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .theme-toggle {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 900px) {
+  .settings-page {
+    padding: 8px;
+  }
+
+  .settings-title {
+    font-size: 16px;
+    margin-bottom: 8px;
+  }
+
+  .settings-card {
+    padding: 8px;
+    border-radius: 10px;
+  }
+
+  .card-header {
+    margin-bottom: 10px;
+  }
+
+  .connection-status {
+    font-size: 11px;
+    padding: 3px 8px;
+  }
+
+  .cors-accordion-header {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .cors-accordion-content {
+    padding: 10px;
+    font-size: 12px;
+  }
+}
+
+@media (max-height: 760px) {
+  .settings-page {
+    padding: 6px;
+  }
+
+  .settings-title {
+    font-size: 15px;
+    margin-bottom: 6px;
+  }
+
+  .settings-grid {
+    gap: 8px;
+  }
+
+  .settings-card {
+    padding: 8px;
+    border-radius: 8px;
+  }
+
+  .settings-card h2 {
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+
+  .text-input,
+  .theme-btn,
+  .test-connection-btn {
+    padding: 7px 8px;
+    font-size: 12px;
+  }
+
+  .capability-name {
+    font-size: 12px;
+  }
+}
+
+/* CSS Variables for theming */
+:root {
+  --text-primary: #e0e0e0;
+  --text-secondary: #a0a0a0;
+  --text-muted: #666;
+  --card-bg: rgba(30, 30, 40, 0.6);
+  --card-border: rgba(255, 255, 255, 0.1);
+  --input-bg: rgba(20, 20, 30, 0.5);
+  --input-border: rgba(255, 255, 255, 0.1);
+}
+
+/* Light theme overrides */
+[data-theme="light"] {
+  --text-primary: #1a1a1a;
+  --text-secondary: #666;
+  --text-muted: #999;
+  --card-bg: rgba(255, 255, 255, 0.8);
+  --card-border: rgba(0, 0, 0, 0.1);
+  --input-bg: rgba(255, 255, 255, 0.9);
+  --input-border: rgba(0, 0, 0, 0.15);
+}
+
+
+/* CORS Help Section */
+.cors-help-section { margin-top: 16px; }
+.cors-accordion {
+  background: var(--input-bg, rgba(20, 20, 30, 0.5));
+  border: 1px solid var(--input-border, rgba(255, 255, 255, 0.1));
+  border-radius: 8px;
+}
+.cors-accordion-header {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 16px; cursor: pointer;
+  font-size: 14px; font-weight: 500;
+  color: var(--text-secondary, #a0a0a0);
+}
+.cors-accordion-header:hover { background: rgba(255, 255, 255, 0.05); }
+.cors-icon { font-size: 16px; }
+.cors-accordion-content {
+  padding: 16px;
+  border-top: 1px solid var(--input-border, rgba(255, 255, 255, 0.1));
+  font-size: 13px; color: var(--text-secondary, #a0a0a0); line-height: 1.6;
+}
+.cors-accordion-content p { margin: 8px 0; }
+.cors-accordion-content h4 { margin: 12px 0 8px; color: var(--text-primary, #e0e0e0); font-size: 13px; }
+.cors-accordion-content code { background: rgba(66, 153, 225, 0.1); color: #4299e1; padding: 2px 6px; border-radius: 4px; font-family: monospace; }
+.cors-command { display: block; background: rgba(0, 0, 0, 0.3) !important; padding: 10px 12px !important; border-radius: 6px; margin: 8px 0; overflow-x: auto; white-space: nowrap; }
+.cors-note { font-size: 12px; opacity: 0.8; }

@@ -1,0 +1,14 @@
+{
+  "servers": [
+    {
+      "name": "MyServer",
+      "host": "123.207.74.28",
+      "port": 22,
+      "username": "ubuntu",
+      "auth": {
+        "type": "password",
+        "password": "Long112200!!"
+      }
+    }
+  ]
+}

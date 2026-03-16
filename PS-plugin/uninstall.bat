@@ -1,35 +1,69 @@
 @echo off
-chcp 65001 >nul
+setlocal enabledelayedexpansion
+
 echo ====================================
-echo   柠乐AI Photoshop 插件卸载脚本
+echo   Uninstall NingleAI Photoshop Plugin
 echo ====================================
 echo.
 
 set "PLUGIN_NAME=ningleai"
-set "PLUGIN_DIR=%APPDATA%\Adobe\UXP\PluginsStorage\PHSP\Internal\%PLUGIN_NAME%"
+set "DELETED=0"
 
-echo 正在查找插件...
-if exist "%PLUGIN_DIR%" (
-    echo 找到插件目录: %PLUGIN_DIR%
-    echo.
-    echo 正在删除插件文件...
-    rd /s /q "%PLUGIN_DIR%"
-    if %ERRORLEVEL% EQU 0 (
-        echo.
-        echo ✓ 插件已成功卸载！
-        echo.
-        echo 请重启 Photoshop 以完成卸载。
-    ) else (
-        echo.
-        echo ✗ 卸载失败，请尝试手动删除以下目录：
-        echo   %PLUGIN_DIR%
+REM Get Photoshop plugin path from registry
+set "plugin_folder="
+for /f "delims=" %%v in ('reg query "HKLM\SOFTWARE\Adobe\Photoshop" 2^>nul') do (
+    echo %%v | findstr /i "^HKEY_" >nul
+    if not errorlevel 1 (
+        for /f "tokens=2,*" %%H in ('reg query "%%v" /v PluginPath 2^>nul') do (
+            set "plugin_folder=%%I"
+            goto :got_path
+        )
     )
-) else (
-    echo 未找到已安装的插件。
-    echo.
-    echo 如果插件安装在其他位置，请手动删除。
+)
+:got_path
+
+echo Searching for plugin...
+echo.
+
+REM Location 1: UXP External plugins
+set "dest1=%APPDATA%\Adobe\UXP\Plugins\External\%PLUGIN_NAME%"
+if exist "%dest1%" (
+    echo Found: %dest1%
+    echo Deleting...
+    rd /s /q "%dest1%" 2>nul
+    if exist "%dest1%" (
+        echo   Failed to delete.
+    ) else (
+        echo   Deleted successfully.
+        set "DELETED=1"
+    )
+)
+
+REM Location 2: Photoshop Plugins folder
+if defined plugin_folder (
+    set "dest2=!plugin_folder!%PLUGIN_NAME%"
+    if exist "!dest2!" (
+        echo Found: !dest2!
+        echo Deleting...
+        rd /s /q "!dest2!" 2>nul
+        if exist "!dest2!" (
+            echo   Failed to delete.
+        ) else (
+            echo   Deleted successfully.
+            set "DELETED=1"
+        )
+    )
 )
 
 echo.
-echo ====================================
+if "%DELETED%"=="1" (
+    echo ====================================
+    echo   Plugin uninstalled successfully!
+    echo   Please restart Photoshop.
+    echo ====================================
+) else (
+    echo Plugin not found in any location.
+)
+
+echo.
 pause

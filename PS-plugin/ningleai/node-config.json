@@ -3,26 +3,26 @@
   "version": "1.0",
   "nodes": [
     {
-      "class_type": "KSampler",
-      "inputs": ["seed", "steps", "cfg", "sampler_name", "scheduler", "denoise"]
-    },
-    {
-      "class_type": "CLIPTextEncode",
-      "inputs": ["text"]
-    },
-    {
       "class_type": "LoadImage",
       "inputs": ["image"]
     },
     {
-      "class_type": "EmptyLatentImage",
-      "inputs": ["width", "height", "batch_size"]
+      "class_type": "CLIPTextEncode"
     },
     {
-      "class_type": "VAEDecode"
+      "class_type": "KIE_NanoBanana2_Image"
     },
     {
-      "class_type": "SaveImage"
+      "class_type": "KIE_NanoBananaPro_Image"
+    },
+    {
+      "class_type": "KIE_Seedream45_Edit"
+    },
+    {
+      "class_type": "ImagePadForOutpaint"
+    },
+    {
+      "class_type": "RandomNoise"
     }
   ]
 }

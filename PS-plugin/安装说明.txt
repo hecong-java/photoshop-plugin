@@ -1,0 +1,30 @@
+注意事项
+需要安装photoshop2024 或者 [Adobe Photoshop 24.3]版本及以上版本
+
+安装方式
+本插件有3种安装方式.由于每个人系统权限或者是其他未知问题.
+
+第一种安装方式:
+本机安装了Adobe的 Creative Cloud Desktop 软件的,双击 "ningleai_PS.ccx" 即可安装.
+[部分小伙伴即便是有安装这个软件,双击之后闪一下黑屏],这种就尝试其他安装方式
+
+第二种安装方式:
+双击 "install.bat" 批处理文件,在administrator的权限下,该操作会自动将解压后的文件复制到ps对应的插件目录下.
+部分用户由于文件夹权限问题,可能导致复制文件失败的, 打开资源管理器(随便一个文件夹),把以下地址复制到地址栏中,然后回车
+以下是要复制的内容:
+"C:\Users\%USERNAME%\AppData\Roaming\Adobe\UXP\Plugins\External\"
+提示:这个是打开当前登录用户的ps插件扩展目录.
+把插件安装包内的 "ningleai" 整个目录复制到 "C:\Users\%USERNAME%\AppData\Roaming\Adobe\UXP\Plugins\External\"的文件夹中
+第二种安装方式,需要重启ps.
+
+第三种方式:
+前面2种安装方式都不行的情况下,在桌面上找到ps的快捷方式 ,鼠标点右键->选择属性->选择"打开文件所在的位置",然后会打开一个资源管理器(ps安装的文件夹)
+在文件夹里面找到 "Plug-ins" 文件夹,将插件安装包中的 "ningleai"整个目录复制到 该目录中,然后重启ps.
+
+第三种安装方式扩展
+有部分用户不是超级管理员,或者是无法在 "Plug-ins"文件夹识别出已经安装的插件,可以尝试将 "ningleai"插件复制到 "安装目录\Adobe Photoshop 2023\Plug-ins\Generator"
+中,然后重启ps
+
+如果以上三种方式都无法安装成功,请钉钉联系贺聪
+
+comfyui地址：https://u727603-7727fb105ed0.bjb2.seetacloud.com:8443

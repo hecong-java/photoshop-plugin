@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "ssh-server": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mixelpixx/ssh-mcp@latest"
+      ],
+      "env": {},
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}

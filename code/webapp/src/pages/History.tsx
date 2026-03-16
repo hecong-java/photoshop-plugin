@@ -74,7 +74,6 @@ export const History = () => {
     if (downloadSuccess?.path) {
       try {
         await navigator.clipboard.writeText(downloadSuccess.path);
-        alert('路径已复制到剪贴板！');
       } catch {
         // Fallback for older browsers
         const textArea = document.createElement('textarea');
@@ -83,7 +82,6 @@ export const History = () => {
         textArea.select();
         document.execCommand('copy');
         document.body.removeChild(textArea);
-        alert('路径已复制到剪贴板！');
       }
     }
   };
