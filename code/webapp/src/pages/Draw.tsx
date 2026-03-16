@@ -1884,18 +1884,34 @@ export const Draw = () => {
 
       // Handle random seed generation for nodes with "randomize" mode
       // Check if any seed widget has the next widget value set to "randomize"
+      // Only generate new random seed if not already resolved from inputValues
       widgets.forEach((widget: any, idx: number) => {
         const widgetName = typeof widget.name === 'string' ? widget.name : '';
         if (!widgetName) return;
 
         const widgetNameLower = widgetName.toLowerCase();
         const isSeedInput = widgetNameLower.includes('seed');
-        if (isSeedInput && widgetValues[idx + 1] === 'randomize') {
+        if (isSeedInput && widgetValues[idx + 1] === 'randomize' && inputs[widgetName] === undefined) {
           const randomSeed = Math.floor(Math.random() * 1000000000000000);
           inputs[widgetName] = randomSeed;
           console.log(`[Draw] Generated random seed for node ${nodeId}.${widgetName}: ${randomSeed}`);
         }
       });
+
+      // Also handle nodes that have inputs array but no widgets array (like RandomNoise)
+      // Only generate new random seed if not already resolved from inputValues
+      if (widgets.length === 0 && Array.isArray(node.inputs) && widgetValues.length >= 2 && widgetValues[1] === 'randomize') {
+        node.inputs.forEach((input: any) => {
+          const inputName = input?.name;
+          if (!inputName) return;
+          const inputNameLower = inputName.toLowerCase();
+          if (inputNameLower.includes('seed') && inputs[inputName] === undefined) {
+            const randomSeed = Math.floor(Math.random() * 1000000000000000);
+            inputs[inputName] = randomSeed;
+            console.log(`[Draw] Generated random seed for node ${nodeId}.${inputName} (from inputs array): ${randomSeed}`);
+          }
+        });
+      }
 
       // Handle connections first
       const linkedInputNames = new Set<string>();
@@ -2285,6 +2301,52 @@ export const Draw = () => {
       }
 
       const workflowData = await client.readWorkflow(currentWorkflow.path || currentWorkflow.name, prefixMode);
+
+      // Generate random seeds for nodes with "randomize" mode BEFORE compiling
+      const workflowDataTyped = workflowData as { nodes?: any[] } | null | undefined;
+      if (workflowDataTyped?.nodes && Array.isArray(workflowDataTyped.nodes)) {
+        const randomSeedUpdates: Record<string, number> = {};
+        workflowDataTyped.nodes.forEach((node: any) => {
+          if (!node || node.id === undefined) return;
+          const widgetValues = node.widgets_values || [];
+          // Check if node has "randomize" mode (second element of widgets_values)
+          if (Array.isArray(widgetValues) && widgetValues.length >= 2 && widgetValues[1] === 'randomize') {
+            const nodeId = String(node.id);
+            // Process inputs array (for nodes like RandomNoise)
+            if (Array.isArray(node.inputs)) {
+              node.inputs.forEach((input: any) => {
+                const inputName = input?.name;
+                if (inputName && inputName.toLowerCase().includes('seed')) {
+                  const newSeed = Math.floor(Math.random() * 1000000000000000);
+                  randomSeedUpdates[`${inputName}_${nodeId}`] = newSeed;
+                  console.log(`[Draw] Generated random seed for ${inputName}_${nodeId}: ${newSeed}`);
+                }
+              });
+            }
+            // Also process widgets array if present
+            if (Array.isArray(node.widgets)) {
+              node.widgets.forEach((widget: any) => {
+                const widgetName = widget?.name;
+                if (widgetName && widgetName.toLowerCase().includes('seed')) {
+                  const newSeed = Math.floor(Math.random() * 1000000000000000);
+                  randomSeedUpdates[`${widgetName}_${nodeId}`] = newSeed;
+                  console.log(`[Draw] Generated random seed for ${widgetName}_${nodeId}: ${newSeed}`);
+                }
+              });
+            }
+          }
+        });
+        // Update inputValues with generated random seeds
+        if (Object.keys(randomSeedUpdates).length > 0) {
+          console.log('[Draw] Updating inputValues with random seeds:', randomSeedUpdates);
+          setInputValues(prev => {
+            const next = { ...prev, ...randomSeedUpdates };
+            latestInputValuesRef.current = next;
+            return next;
+          });
+        }
+      }
+
       const historyPrompt = pendingRerunPromptRef.current;
       const currentInputValues = latestInputValuesRef.current;
       const compiledPrompt = historyPrompt
