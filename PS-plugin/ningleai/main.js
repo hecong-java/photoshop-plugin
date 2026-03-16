@@ -24,6 +24,16 @@ const { shell } = require('uxp');
 const webviewEl = document.getElementById(WEBVIEW_ID);
 console.log('[Plugin] webviewEl:', webviewEl ? 'found' : 'NOT FOUND');
 
+// Auto cache-bust: append timestamp to webview URL
+if (webviewEl) {
+  const baseUrl = 'http://123.207.74.28:8080';
+  const currentSrc = webviewEl.getAttribute('src') || '';
+  if (currentSrc.startsWith(baseUrl)) {
+    const timestamp = Date.now();
+    webviewEl.setAttribute('src', `${baseUrl}?t=${timestamp}`);
+  }
+}
+
 const getErrorMsg = (err) => {
   if (!err) return '';
   if (typeof err === 'string') return err;
