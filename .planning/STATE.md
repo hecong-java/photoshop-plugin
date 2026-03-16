@@ -87,6 +87,7 @@ progress:
 | 3 | 增加comfyui任务队列显示功能 | 2026-03-12 | 58efacc | [003-comfyui-queue](./quick/3-comfyui/) |
 | 4 | Add workflow debug logging, random seed generation, and fix rerun/edit | 2026-03-12 | 7c9eeef | [004-workflow-random-seed](./quick/004-workflow-random-seed/) |
 | 5 | Auto-open file manager after download completes | 2026-03-12 | 498640e | [005-file-manager-download](./quick/005-file-manager-download/) |
+| 6 | Fix random seed display in PS plugin webview | 2026-03-16 | 606fff5 | [6-web-ps](./quick/6-web-ps/) |
 
 ### Recent Completions
 
@@ -103,13 +104,13 @@ progress:
 
 ### Last Session
 
-- **Date:** 2026-03-12
-- **Action:** Completed quick task 005 (File manager auto-open)
-- **Outcome:** Added automatic file manager opening after download completes in History page
+- **Date:** 2026-03-16
+- **Action:** Completed quick task 6 (Random seed display fix)
+- **Outcome:** Fixed random seed display inconsistency between web browser and PS plugin webview
 
 ### Next Action
 
-Run `/gsd:execute-phase` to continue with plan 01-04.
+Deploy updated webapp to server and test in PS plugin.
 
 ---
 
