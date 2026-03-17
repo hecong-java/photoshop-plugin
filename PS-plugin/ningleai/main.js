@@ -231,7 +231,29 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
   }
 
   try {
-    await activeDoc.saveAs.png(exportedFile, {}, true);
+    // Duplicate document for safe trimming - avoids modifying original
+    const duplicatedDoc = await activeDoc.duplicate();
+
+    try {
+      // Trim transparent pixels to get layer bounds
+      await action.batchPlay([
+        {
+          _obj: 'trim',
+          _target: [{ _ref: 'document', _enum: 'ordinal', _value: 'targetEnum' }],
+          trimTop: true,
+          trimBottom: true,
+          trimLeft: true,
+          trimRight: true,
+          trimBasedOn: { _enum: 'trimBasedOn', _value: 'transparency' }
+        }
+      ], { synchronousExecution: true, modalBehavior: 'execute' });
+
+      // Export from the trimmed duplicate
+      await duplicatedDoc.saveAs.png(exportedFile, {}, true);
+    } finally {
+      // Close duplicate without saving
+      await duplicatedDoc.closeWithoutSaving();
+    }
   } finally {
     for (const layer of allLayers) {
       const originalVisible = visibilityById.get(layer.id);
