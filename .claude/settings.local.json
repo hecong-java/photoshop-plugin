@@ -9,7 +9,9 @@
       "Bash(npx tsc:*)",
       "Skill(gsd:execute-phase)",
       "Bash(grep:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Skill(gsd:debug)",
+      "Bash(ssh:*)"
     ]
   }
 }
