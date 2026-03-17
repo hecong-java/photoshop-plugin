@@ -308,7 +308,10 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
         .filter(([promptId]) => !deletedPrompts.has(promptId))
         .filter(([, entry]) => {
           // Filter out error entries - only show successful ones
-          return entry.status_str !== 'error';
+          // Check both status_str directly and nested in status object
+          const statusStr = entry.status_str ||
+            (typeof entry.status === 'object' && entry.status?.status_str);
+          return statusStr !== 'error';
         })
         .map(([promptId, entry]) =>
           convertEntryToItem(promptId, entry, client, localDownloadsMap.get(promptId) || [])
