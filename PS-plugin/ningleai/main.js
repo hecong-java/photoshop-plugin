@@ -231,25 +231,94 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
   }
 
   try {
-    // Duplicate document for safe trimming - avoids modifying original
+    // Duplicate document for safe cropping - avoids modifying original
     const duplicatedDoc = await activeDoc.duplicate();
 
-    try {
-      // Trim transparent pixels to get layer bounds
-      await action.batchPlay([
-        {
-          _obj: 'trim',
-          _target: [{ _ref: 'document', _enum: 'ordinal', _value: 'targetEnum' }],
-          trimTop: true,
-          trimBottom: true,
-          trimLeft: true,
-          trimRight: true,
-          trimBasedOn: { _enum: 'trimBasedOn', _value: 'transparency' }
-        }
-      ], { synchronousExecution: true, modalBehavior: 'execute' });
+    console.log('[Export] Duplicated doc ID:', duplicatedDoc.id);
+    console.log('[Export] Original doc dimensions:', activeDoc.width, 'x', activeDoc.height);
 
-      // Export from the trimmed duplicate
+    try {
+      // Step 1: Get the actual layer bounds using batchPlay
+      console.log('[Export] Getting layer bounds...');
+      const boundsResult = await action.batchPlay([
+        {
+          _obj: 'get',
+          _target: [{ _ref: 'layer', _id: activeLayer.id }],
+          _property: 'bounds'
+        }
+      ], { synchronousExecution: true });
+
+      console.log('[Export] Bounds result:', JSON.stringify(boundsResult));
+
+      // Extract bounds values
+      // batchPlay returns bounds as object with nested _value properties:
+      // { top: { _unit: "pixelsUnit", _value: 375 }, left: { ... }, ... }
+      const bounds = boundsResult[0]?.bounds;
+      if (!bounds) {
+        throw new Error('Could not get layer bounds');
+      }
+
+      // Extract values from nested objects
+      const left = bounds.left?._value;
+      const top = bounds.top?._value;
+      const right = bounds.right?._value;
+      const bottom = bounds.bottom?._value;
+
+      // Calculate width and height
+      const layerWidth = right - left;
+      const layerHeight = bottom - top;
+
+      console.log('[Export] Layer bounds:', { left, top, right, bottom });
+      console.log('[Export] Layer dimensions:', layerWidth, 'x', layerHeight);
+
+      // Step 2: Crop to the layer bounds using DOM API
+      // The DOM API crop() method takes a simple bounds array [left, top, right, bottom]
+      // Skip crop if layer bounds equal document dimensions - Photoshop throws error when crop area equals entire document
+      const docWidth = duplicatedDoc.width;
+      const docHeight = duplicatedDoc.height;
+      const needsCrop = !(left === 0 && top === 0 && right === docWidth && bottom === docHeight);
+
+      if (needsCrop) {
+        console.log('[Export] Cropping to layer bounds using DOM API...');
+        // DOM API crop expects an object with left, top, right, bottom properties
+        await duplicatedDoc.crop({ left, top, right, bottom });
+      } else {
+        console.log('[Export] Layer fills entire canvas - skipping crop');
+      }
+
+      console.log('[Export] Document dimensions AFTER crop:', duplicatedDoc.width, 'x', duplicatedDoc.height);
+
+      // Step 3: Apply size limit if needed (max 2048 pixels on either side)
+      const MAX_SIZE = 2048;
+      let finalWidth = duplicatedDoc.width;
+      let finalHeight = duplicatedDoc.height;
+
+      if (finalWidth > MAX_SIZE || finalHeight > MAX_SIZE) {
+        // Calculate scale factor to fit within max size
+        const scaleFactor = Math.min(MAX_SIZE / finalWidth, MAX_SIZE / finalHeight);
+        finalWidth = Math.floor(finalWidth * scaleFactor);
+        finalHeight = Math.floor(finalHeight * scaleFactor);
+
+        console.log('[Export] Scaling down to fit max size:', finalWidth, 'x', finalHeight, 'scale:', scaleFactor);
+
+        // Resize the document
+        await action.batchPlay([
+          {
+            _obj: 'imageSize',
+            _target: [{ _ref: 'document', _id: duplicatedDoc.id }],
+            width: { _unit: 'pixelsUnit', _value: finalWidth },
+            height: { _unit: 'pixelsUnit', _value: finalHeight },
+            constrainProportions: true,
+            interfaceIconFrameDimmed: false
+          }
+        ], { synchronousExecution: true, modalBehavior: 'execute' });
+
+        console.log('[Export] Final document dimensions:', duplicatedDoc.width, 'x', duplicatedDoc.height);
+      }
+
+      // Export from the cropped (and possibly scaled) duplicate
       await duplicatedDoc.saveAs.png(exportedFile, {}, true);
+      console.log('[Export] PNG saved successfully');
     } finally {
       // Close duplicate without saving
       await duplicatedDoc.closeWithoutSaving();
