@@ -1,127 +1,207 @@
 # Architecture
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-03-17
 
 ## Pattern Overview
 
-**Overall:** Hybrid Plugin Architecture with Bridge Communication Pattern
+**Overall:** Hybrid Plugin-WebApp Architecture with Bridge Communication
+
+The system consists of a Photoshop UXP Plugin that embeds a remote React web application via webview. The plugin provides a JavaScript bridge (main.js) that exposes Photoshop APIs and network proxy capabilities to the webapp. This allows the webapp to interact with Photoshop documents while running in a sandboxed webview environment.
 
 **Key Characteristics:**
-- React SPA (webapp) embedded in Photoshop UXP WebView
-- Bridge-based IPC between WebView UI and Photoshop native code
-- Zustand for state management with localStorage persistence
-- ComfyUI REST API integration with automatic endpoint probing
+- **UXP Plugin Layer**: Native Photoshop extension using UXP (Unified Extensibility Platform) with webview-based UI
+- **Bridge Communication**: PostMessage-based RPC between plugin and webapp for PS operations and network proxy
+- **State Management**: Zustand stores with localStorage persistence for client-side state
+- **ComfyUI Integration**: REST API client for AI image generation workflows
 
 ## Layers
 
-**WebView UI Layer:**
-- Purpose: User interface rendered in Photoshop's embedded WebView
-- Location: `code/webapp/src/`
-- Contains: React components, pages, hooks, services, stores
-- Depends on: Bridge services, ComfyUI API
-- Used by: End users via Photoshop plugin panel
-
-**Bridge Layer (UXP main.js):**
-- Purpose: Native Photoshop operations and network proxy
+### Plugin Layer (UXP)
+- Purpose: Photoshop integration, file system access, network proxy
 - Location: `PS-plugin/ningleai/main.js`
-- Contains: Action handlers, Photoshop DOM manipulation, file system operations
-- Depends on: Photoshop UXP APIs (core, action, app, storage, shell)
-- Used by: WebView UI via postMessage bridge
+- Contains: UXP bridge handlers, Photoshop DOM operations, ComfyUI network proxy
+- Depends on: Photoshop UXP APIs (photoshop module, uxp.storage, uxp.shell)
+- Used by: WebApp via postMessage bridge
 
-**ComfyUI Integration Layer:**
-- Purpose: Communication with ComfyUI server for AI image generation
-- Location: `code/webapp/src/services/comfyui.ts`
-- Contains: API client, endpoint probing, workflow management
-- Depends on: Fetch API or Bridge proxy (in UXP environment)
-- Used by: WebView UI components and stores
+### WebApp Layer (React SPA)
+- Purpose: User interface, workflow management, ComfyUI interaction
+- Location: `code/webapp/src/`
+- Contains: React components, Zustand stores, service modules
+- Depends on: Plugin bridge (when in UXP), ComfyUI REST API
+- Used by: Embedded in Photoshop plugin webview
+
+### ComfyUI Layer (External)
+- Purpose: AI image generation backend
+- Location: External server (configurable URL)
+- Contains: Workflow execution, image processing, model management
+- Depends on: None (external service)
+- Used by: WebApp via REST/WebSocket
+
+### Workflow Assets
+- Purpose: Predefined AI generation workflows
+- Location: `code/workflows/`
+- Contains: JSON workflow definitions organized by category
+- Depends on: ComfyUI node types
+- Used by: WebApp (loaded via ComfyUI API)
 
 ## Data Flow
 
-**Image Generation Flow:**
+### Image Generation Flow
 
-1. User selects workflow and inputs in Draw page
-2. Image uploaded to ComfyUI (via Bridge if in UXP environment)
-3. WebSocket connection receives progress updates
-4. Generated images displayed and can be imported to Photoshop
-5. Bridge imports image as new layer (pixel or smart object)
+1. User selects workflow in Draw page
+2. WebApp loads workflow JSON from ComfyUI
+3. User configures workflow inputs (text, images, parameters)
+4. User clicks "Generate" button
+5. WebApp exports current PS layer/selection via Bridge
+6. Bridge handler exports image as base64 PNG
+7. WebApp uploads image to ComfyUI via Bridge proxy
+8. WebApp sends prompt request to ComfyUI via Bridge proxy
+9. WebSocket monitors generation progress
+10. On completion, WebApp fetches output images
+11. User imports result back to PS via Bridge
+12. Bridge handler creates new layer with generated image
 
-**State Management Flow:**
+### Bridge Communication Flow
 
-1. Zustand stores manage application state
-2. Settings persisted to localStorage via zustand/middleware
-3. Stores expose actions that services consume
-4. Components subscribe to store slices via selectors
+```
+WebApp (iframe)                Plugin (main.js)
+     |                              |
+     | postMessage({uuid,action})   |
+     |----------------------------->|
+     |                              | Execute handler
+     |                              | Access PS APIs
+     |                              | Network requests
+     | postMessage({uuid,response}) |
+     |<-----------------------------|
+     |                              |
+```
 
-**Bridge Communication Flow:**
-
-1. WebView sends `{uuid, action, payload}` via postMessage
-2. main.js handler processes action with Photoshop/UXP APIs
-3. Response sent back as `{uuid, state, data}` or `{uuid, state, msg, code}`
-4. Pending promise resolved/rejected in WebView
+**State Management:**
+- Zustand stores with localStorage persistence
+- Separate stores for: settings, config, history, workflow cache, ComfyUI state
+- React hooks for bridge communication (usePSBridge)
 
 ## Key Abstractions
 
-**ComfyUIClient:**
-- Purpose: Encapsulates all ComfyUI server communication
+### ComfyUIClient
+- Purpose: REST API client for ComfyUI server communication
 - Examples: `code/webapp/src/services/comfyui.ts`
-- Pattern: Class-based client with configurable fetcher (native or bridge-proxied)
-- Capabilities: Endpoint probing, workflow listing, history, image viewing
+- Pattern: Class-based client with endpoint probing, automatic CORS/Bridge fallback
 
-**Bridge Transport:**
-- Purpose: Abstract UXP-native operations from WebView code
+```typescript
+// Client auto-detects Bridge transport in UXP environment
+const client = new ComfyUIClient({ baseUrl: 'http://192.168.0.50:8188' });
+await client.probeEndpoints(); // Discovers API prefix mode
+await client.listWorkflows();  // Lists ps-workflows directory
+await client.getHistory();     // Fetches generation history
+```
+
+### Bridge Message Protocol
+- Purpose: RPC-style communication between webapp and plugin
 - Examples: `code/webapp/src/services/upload.ts`, `PS-plugin/ningleai/main.js`
-- Pattern: Request/response with UUID correlation, timeout handling
-- Actions: `ps.exportActiveLayerPng`, `ps.importBase64AsLayer`, `comfyui.fetch`, `fs.saveDownload`
+- Pattern: Request-response with UUID correlation
 
-**Zustand Stores:**
-- Purpose: Centralized state management with persistence
-- Examples: `code/webapp/src/stores/settingsStore.ts`, `code/webapp/src/stores/historyStore.ts`
-- Pattern: Create function with state and actions, optional persist middleware
-- Stores: `settingsStore` (user preferences, ComfyUI connection), `historyStore` (generation history), `comfyui` store (workflow state)
+```typescript
+// Request format (webapp -> plugin)
+{ uuid: string, action: string, payload?: unknown }
+
+// Response format (plugin -> webapp)
+{ uuid: string, state: 'fulfilled' | 'rejected', data?: unknown, msg?: string, code?: string }
+```
+
+### Workflow Input System
+- Purpose: Dynamic form generation from ComfyUI workflow JSON
+- Examples: `code/webapp/src/pages/Draw.tsx`
+- Pattern: Workflow nodes are parsed, filtered, and rendered as form inputs
+
+```typescript
+// Workflow input types
+interface WorkflowInput {
+  name: string;
+  type: 'text' | 'number' | 'image' | 'select' | 'boolean';
+  label: string;
+  classType?: string;
+  nodeId?: string;
+  default?: string | number | boolean;
+  options?: string[];
+}
+```
+
+### Zustand Store Pattern
+- Purpose: Centralized state with persistence
+- Examples: `code/webapp/src/stores/*.ts`
+- Pattern: Create store with persist middleware, partial state serialization
+
+```typescript
+export const useSettingsStore = create<SettingsState>()(
+  persist(
+    (set) => ({
+      // State and actions
+    }),
+    { name: 'Ningleai-settings', partialize: (state) => ({ ... }) }
+  )
+);
+```
 
 ## Entry Points
 
-**Webapp Entry:**
-- Location: `code/webapp/src/main.tsx`
-- Triggers: Vite dev server or built static files
-- Responsibilities: React root creation, mounts App component
-
-**Plugin Entry:**
+### Plugin Entry
 - Location: `PS-plugin/ningleai/index.html`
 - Triggers: Photoshop loads plugin panel
-- Responsibilities: Creates WebView, loads main.js bridge, sets up message listener
+- Responsibilities: Load webview, include main.js bridge script
 
-**App Router:**
+### WebApp Entry
+- Location: `code/webapp/src/main.tsx`
+- Triggers: Browser/webview loads compiled React app
+- Responsibilities: Mount React root, render App with router
+
+### App Router
 - Location: `code/webapp/src/App.tsx`
-- Triggers: Application mount
-- Responsibilities: Route definitions, navigation, page layout
+- Triggers: URL navigation
+- Responsibilities: Route to Draw/History/Settings pages
 
 ## Error Handling
 
-**Strategy:** Layered error handling with typed errors
+**Strategy:** Typed error objects with bridge propagation
 
 **Patterns:**
-- `ComfyUIError` type with classified error types (cors, timeout, network, http, invalid_url)
-- Bridge errors return `{code, message}` objects
-- Stores convert errors to display-friendly messages
-- UI shows error states with user guidance (e.g., CORS configuration help)
+- ComfyUI errors typed as `ComfyUIError` with type discrimination (`cors`, `timeout`, `network`, `http`, `invalid_url`)
+- Bridge errors propagated with `{ code, message }` structure
+- React component error states with user-friendly messages
+- CORS guidance automatically appended to error messages
+
+```typescript
+// Error type discrimination
+export type ComfyUIErrorType = 'cors' | 'timeout' | 'network' | 'invalid_url' | 'http' | 'unknown';
+
+export interface ComfyUIError {
+  type: ComfyUIErrorType;
+  message: string;
+  status?: number;
+  endpoint?: string;
+}
+```
 
 ## Cross-Cutting Concerns
 
-**Logging:** Console-based with `[Bridge]`, `[ComfyUI]`, `[Upload]` prefixes
+**Logging:** Console logging with prefixes (`[Bridge]`, `[Config]`, `[ComfyUI]`) for traceability
 
 **Validation:**
-- Input validation in services (file types, sizes)
-- Payload validation in bridge handlers
-- URL normalization for ComfyUI endpoints
+- Config validation with `validateConfig()` sanitizes plugin config
+- Workflow input validation in Draw page
+- File type/size validation for uploads
 
-**Authentication:** None - relies on network-level access to ComfyUI server
+**Authentication:** None (ComfyUI assumed to be on trusted network)
 
 **CORS Handling:**
-- Browser environment: Requires ComfyUI CORS headers
-- UXP environment: Bridge proxy bypasses CORS restrictions
-- Automatic fallback to bridge when CORS errors detected
+- In browser: Requires ComfyUI to enable CORS headers
+- In UXP: Bridge proxy bypasses CORS by making requests from plugin context
+
+**Caching:**
+- Workflow input values cached per-workflow in localStorage
+- Image data cached with 500KB limit per image
+- LRU eviction for cached workflows (max 20)
 
 ---
 
-*Architecture analysis: 2026-03-11*
+*Architecture analysis: 2026-03-17*

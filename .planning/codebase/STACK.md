@@ -1,86 +1,89 @@
 # Technology Stack
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-03-17
 
 ## Languages
 
 **Primary:**
-- TypeScript 5.9.3 - Frontend webapp and MCP server development
+- TypeScript 5.9.x - Main application code in `code/webapp/src/`
+- JavaScript (ES2022) - Photoshop UXP plugin code in `PS-plugin/ningleai/main.js`
 
 **Secondary:**
-- JavaScript (ES2022) - Photoshop UXP plugin runtime (main.js)
+- JSON - Configuration files, workflow definitions, manifest
 
 ## Runtime
 
 **Environment:**
-- Node.js (for MCP server) - Version not specified in project
-- Browser/WebView (for React app) - Runs in Vite dev server or embedded in Photoshop UXP
+- Node.js (for build tooling)
+- Browser (Chrome-based UXP WebView for Photoshop plugin runtime)
 
 **Package Manager:**
-- npm - Lockfile: `package-lock.json` (present)
+- npm
+- Lockfile: present (`package-lock.json`)
 
 ## Frameworks
 
 **Core:**
-- React 19.2.0 - UI framework for webapp
-- React Router DOM 7.13.1 - Client-side routing
-- Vite 7.3.1 - Build tool and dev server
+- React 19.2.x - UI framework for webapp
+- React Router DOM 7.13.x - Client-side routing
 
-**Testing:**
-- Vitest 4.0.18 - Unit testing framework
-- Playwright 1.58.2 - E2E testing framework
-- @testing-library/react 16.3.2 - React component testing
-- @testing-library/jest-dom 6.9.1 - DOM matchers
+**State Management:**
+- Zustand 5.0.x - Lightweight state management with persistence middleware
 
 **Build/Dev:**
-- Vite 7.3.1 with @vitejs/plugin-react 5.1.1 - Development and production builds
-- TypeScript 5.9.3 with typescript-eslint 8.48.0 - Type checking and linting
+- Vite 7.3.x - Build tool and dev server
+- TypeScript 5.9.x - Type checking and compilation
+
+**Testing:**
+- Vitest 4.0.x - Unit test runner
+- Playwright 1.58.x - E2E testing
+- Testing Library (React 16.3.x, Jest DOM 6.9.x, User Event 14.6.x)
+
+**Linting:**
+- ESLint 9.39.x with typescript-eslint 8.48.x
+- eslint-plugin-react-hooks 7.0.x
+- eslint-plugin-react-refresh 0.4.x
 
 ## Key Dependencies
 
 **Critical:**
-- zustand 5.0.11 - State management (persist middleware for localStorage)
-- fflate 0.8.2 - ZIP file handling (for workflow/package management)
-- react-dom 19.2.0 - React DOM rendering
+- `fflate` 0.8.x - ZIP compression for batch downloads (`code/webapp/src/services/download.ts`)
+- `zustand` 5.0.x - State management across stores (`code/webapp/src/stores/`)
 
-**Infrastructure (MCP Server):**
-- @modelcontextprotocol/sdk 1.27.0 - MCP protocol implementation
-- ssh2 1.17.0 - SSH client library
-- socks 2.8.7 - SOCKS proxy support
-
-**Development:**
-- eslint 9.39.1 with plugins - Code linting
-- @types/node 24.10.1 - Node.js type definitions
-- @types/react 19.2.7, @types/react-dom 19.2.3 - React type definitions
+**Photoshop UXP APIs (plugin side):**
+- `photoshop` module (`core`, `action`, `app`) - Photoshop automation
+- `uxp.storage` module (`localFileSystem`, `formats`) - File system access
+- `uxp.shell` module - System shell integration
 
 ## Configuration
 
 **Environment:**
-- TypeScript strict mode enabled
-- ES2022 target with ESNext modules
-- React JSX transform enabled
-- Zustand persist middleware stores settings in localStorage
+- No `.env` files detected
+- Settings stored in localStorage via Zustand persist middleware
+- ComfyUI base URL configured dynamically in UI (default: `http://192.168.0.50:8188`)
 
 **Build:**
-- `tsconfig.json` - References app and node configs
-- `tsconfig.app.json` - Frontend TypeScript config (ES2022, bundler resolution)
-- `tsconfig.node.json` - Node.js tooling config
-- `vite.config.ts` - Vite dev server configuration (port 5173, host 0.0.0.0)
-- `eslint.config.js` - ESLint flat config with React hooks and refresh plugins
-- `playwright.config.ts` - E2E test configuration (Chromium, Firefox, WebKit)
+- `tsconfig.json` - References `tsconfig.app.json` and `tsconfig.node.json`
+- `tsconfig.app.json` - ES2022 target, bundler module resolution, strict mode
+- `vite.config.ts` - Dev server on port 5173, host 0.0.0.0
+- `eslint.config.js` - Flat config with TypeScript and React rules
+- `playwright.config.ts` - E2E test configuration for Chromium, Firefox, WebKit
+
+**Plugin Manifest:**
+- `PS-plugin/ningleai/manifest.json` - UXP plugin manifest v5
+- Requires Photoshop 24.1.0+
+- Permissions: network (all domains), webview, localFileSystem (fullAccess), clipboard
 
 ## Platform Requirements
 
 **Development:**
-- Node.js runtime for npm/Vite
-- Modern browser for testing
-- Photoshop 2023+ (version 24.1.0+) for UXP plugin testing
+- Node.js 18+ (for Vite 7.x and modern tooling)
+- npm
 
 **Production:**
-- Static file hosting for built webapp (Vite output)
-- Photoshop with UXP support for plugin deployment
-- ComfyUI server (separate deployment) for AI image generation
+- Adobe Photoshop 2023+ (version 24.1.0+)
+- ComfyUI server accessible via HTTP (user-configured URL)
 
 ---
 
-*Stack analysis: 2026-03-11*
+*Stack analysis: 2026-03-17*

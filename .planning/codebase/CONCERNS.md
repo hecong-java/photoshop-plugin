@@ -1,182 +1,198 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-03-17
 
 ## Tech Debt
 
-**Draw.tsx Component Size:**
-- Issue: Single file contains 2736 lines, mixing UI, state management, WebSocket handling, workflow parsing, and business logic
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx`
-- Impact: Difficult to maintain, test, and understand; high cognitive load; changes risky
-- Fix approach: Extract into smaller modules - workflow parsing utilities, WebSocket management hook, input rendering components, generation state management
+### Monolithic Component: Draw.tsx
+- Issue: Single 3175-line file containing all workflow management, generation logic, and UI rendering
+- Files: `code/webapp/src/pages/Draw.tsx`
+- Impact: Difficult to test, maintain, and understand; changes risk introducing regressions
+- Fix approach: Extract into smaller modules:
+  - `useWorkflowManager.ts` - workflow loading/selection logic
+  - `useGeneration.ts` - WebSocket/polling generation flow
+  - `useInputState.ts` - input values and caching
+  - `WorkflowInputRenderer.tsx` - form rendering
+  - `OutputViewer.tsx` - output image display
 
-**Duplicate Bridge Communication Logic:**
-- Issue: Bridge message handling duplicated between `upload.ts` and `usePSBridge.ts` with separate pending request maps and listeners
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/services/upload.ts`, `D:/projects/photoshop-plugin/code/webapp/src/hooks/usePSBridge.ts`
-- Impact: Risk of inconsistent behavior, duplicate event listeners, maintenance burden
-- Fix approach: Consolidate into single bridge service module; export unified API
+### Duplicate UUID Generation
+- Issue: UUID generation implemented twice with identical logic
+- Files: `code/webapp/src/services/upload.ts:42`, `code/webapp/src/hooks/usePSBridge.ts:73`
+- Impact: Code duplication, potential inconsistency if one is updated
+- Fix approach: Create shared `utils/uuid.ts` and import in both locations
 
-**Hardcoded Allowed Origins:**
-- Issue: `ALLOWED_ORIGINS` in main.js contains hardcoded development URL
-- Files: `D:/projects/photoshop-plugin/PS-plugin/ningleai/main.js` (line 1-3)
-- Impact: Security risk in production; requires code changes for different environments
-- Fix approach: Configure via manifest or environment-specific configuration
+### Console Logging in Production
+- Issue: Extensive debug logging left throughout codebase (100+ console.log statements)
+- Files: `code/webapp/src/pages/Draw.tsx` (lines 327, 368-373, 394-433, etc.)
+- Impact: Performance overhead, exposes internal state to browser console
+- Fix approach: Implement logging utility with levels, strip debug logs in production build
 
-**Type Safety Gaps with `any`:**
-- Issue: Multiple uses of `any` type in critical data handling (WebSocket messages, workflow nodes, images)
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx` (lines 1383, 1389, 1396, 1403, 1601, 1608, 1618, 1634, 1659, 2024, 2084)
-- Impact: Runtime errors possible; IDE support weakened; refactoring riskier
-- Fix approach: Define proper TypeScript interfaces for ComfyUI workflow JSON schema, WebSocket messages, and image output structures
+### Hardcoded Configuration Values
+- Issue: Magic numbers and strings scattered throughout code
+- Files: `code/webapp/src/pages/Draw.tsx:2125` (2 minute timeout), `code/webapp/src/services/upload.ts:91` (30s timeout)
+- Impact: Difficult to tune, inconsistent timeout handling
+- Fix approach: Create `constants/timeouts.ts` and `constants/config.ts`
 
 ## Known Bugs
 
-**Silent Error Handling:**
-- Symptoms: Multiple empty catch blocks silently swallow errors without logging or user notification
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/stores/historyStore.ts` (lines 264, 345), `D:/projects/photoshop-plugin/code/webapp/src/services/comfyui.ts` (line 659), `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx` (lines 609, 617, 2027)
-- Trigger: JSON parsing failures, localStorage operations, WebSocket message parsing
-- Workaround: None visible to user
+### WebSocket Connection Fallback Race Condition
+- Symptoms: Generation may start before WebSocket fallback decision is made
+- Files: `code/webapp/src/pages/Draw.tsx:2278-2301`
+- Trigger: Slow or failing WebSocket connections
+- Workaround: Polling mode eventually kicks in after 5s timeout
 
-**History Action State Race Condition:**
-- Symptoms: `hasHandledHistoryAction` ref used to prevent duplicate execution but may not handle navigation correctly
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx` (line 233)
-- Trigger: Rapid navigation between history and draw pages with rerun/edit actions
-- Workaround: None
+### Image Preview Memory Leak
+- Symptoms: Blob URLs created for image previews may not be cleaned up on rapid workflow switches
+- Files: `code/webapp/src/pages/Draw.tsx:912-916`
+- Trigger: Quickly switching between workflows with image inputs
+- Workaround: Page refresh clears accumulated blob URLs
 
 ## Security Considerations
 
-**Origin Validation:**
-- Risk: Hardcoded development origin in production code could allow unauthorized message sources if not updated
-- Files: `D:/projects/photoshop-plugin/PS-plugin/ningleai/main.js` (lines 1-3, 826-831)
-- Current mitigation: Origin check exists but uses hardcoded list
-- Recommendations: Move allowed origins to configuration; use manifest permissions; validate message structure before processing
+### Origin Validation Scope
+- Risk: Single hardcoded origin in allowed list may not cover all deployment scenarios
+- Files: `PS-plugin/ningleai/main.js:1-3`
+- Current mitigation: Origin whitelist enforced, wildcard not used
+- Recommendations:
+  - Move allowed origins to configuration file
+  - Support environment-based origin configuration
 
-**LocalStorage Data Exposure:**
-- Risk: Settings including ComfyUI base URL stored in localStorage via zustand persist
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/stores/settingsStore.ts` (lines 39-74)
-- Current mitigation: None - standard browser storage
-- Recommendations: Consider if URLs contain sensitive tokens; document storage behavior for users
+### localStorage Data Exposure
+- Risk: Settings and history stored unencrypted in browser localStorage
+- Files: `code/webapp/src/stores/historyStore.ts:287-400`, `code/webapp/src/stores/settingsStore.ts`
+- Current mitigation: No sensitive data stored (only URLs and preferences)
+- Recommendations:
+  - Document what data is persisted
+  - Consider encrypting ComfyUI URL if deployed in shared environments
 
-**File System Permissions:**
-- Risk: Plugin requests `fullAccess` to local filesystem
-- Files: `D:/projects/photoshop-plugin/PS-plugin/ningleai/manifest.json` (line 109)
-- Current mitigation: User must install plugin explicitly
-- Recommendations: Review if full access is necessary; scope to specific directories if possible
+### Bridge Message Timeout
+- Risk: 30-second timeout may be insufficient for large file operations
+- Files: `code/webapp/src/services/upload.ts:88-91`
+- Current mitigation: Timeout is configurable per-request
+- Recommendations: Add progress callbacks for long-running operations
 
 ## Performance Bottlenecks
 
-**Workflow List Processing:**
-- Problem: Each workflow selection triggers multiple fetch operations and JSON parsing of potentially large workflow files
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx` (findBestMatchingWorkflow, compileWorkflowToPrompt functions)
-- Cause: No caching of parsed workflow structures; re-parsing on every interaction
-- Improvement path: Implement workflow parsing cache; memoize compiled prompts; lazy load workflow details
+### Workflow History Matching Algorithm
+- Problem: O(n*m) algorithm loads every workflow JSON to match against history params
+- Files: `code/webapp/src/pages/Draw.tsx:596-729`
+- Cause: Each workflow requires network fetch and full parse
+- Improvement path:
+  - Cache parsed workflow metadata in memory
+  - Pre-compute node type signatures on workflow load
+  - Consider server-side matching if ComfyUI supports it
 
-**History Image URL Generation:**
-- Problem: `getViewUrl` called repeatedly for same images without memoization
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/stores/historyStore.ts` (extractHistoryImage function, lines 77-157)
-- Cause: Fresh URL generation on every history fetch
-- Improvement path: Cache generated URLs keyed by filename/subfolder/type combination
+### Blob URL Management
+- Problem: Creating and revoking blob URLs for each image preview
+- Files: `code/webapp/src/pages/Draw.tsx:2175-2179`
+- Cause: Base64 to blob conversion for every uploaded image
+- Improvement path:
+  - Reuse blob URLs when same image is re-selected
+  - Consider using object URLs directly from File objects where possible
 
-**WebSocket Reconnection:**
-- Problem: WebSocket created fresh for each generation; no connection pooling or reuse
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx` (lines 230, 286-291)
-- Cause: WebSocket closed in finally block after each generation
-- Improvement path: Maintain persistent WebSocket connection with reconnect logic
+### Large File Base64 Encoding
+- Problem: Images converted to base64 for bridge transport, doubling memory usage
+- Files: `PS-plugin/ningleai/main.js:266-275`, `code/webapp/src/services/upload.ts:343-355`
+- Cause: Bridge protocol requires serializable data
+- Improvement path:
+  - Implement chunked transfer for large files
+  - Consider binary message protocol if UXP supports it
 
 ## Fragile Areas
 
-**ComfyUI API Version Compatibility:**
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/services/comfyui.ts`, `D:/projects/photoshop-plugin/PS-plugin/ningleai/main.js`
-- Why fragile: Relies on specific ComfyUI API endpoints and response formats that may change
-- Safe modification: Add version detection; implement adapter pattern for API changes
-- Test coverage: Only basic probe endpoint test exists (`comfyui.test.ts`)
+### Workflow Input Name Parsing
+- Files: `code/webapp/src/pages/Draw.tsx:257-286`, `code/webapp/src/pages/Draw.tsx:387-491`
+- Why fragile: Relies on `${inputName}_${nodeId}` naming convention; breaks if format changes
+- Safe modification: Ensure any name format changes update all parsing locations
+- Test coverage: Limited - parsing logic not fully unit tested
 
-**Workflow JSON Schema Assumptions:**
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx` (compileWorkflowToPrompt, extractWorkflowInputs)
-- Why fragile: Assumes specific node structure, widget ordering, and input naming conventions
-- Safe modification: Add schema validation; handle missing/extra fields gracefully
-- Test coverage: No unit tests for workflow parsing logic
+### History to Workflow Matching
+- Files: `code/webapp/src/pages/Draw.tsx:731-828`
+- Why fragile: Depends on workflow structure remaining compatible with saved history params
+- Safe modification: Add version field to history entries, implement migration if structure changes
+- Test coverage: E2E tests only
 
-**UXP Bridge Transport:**
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/services/upload.ts`, `D:/projects/photoshop-plugin/PS-plugin/ningleai/main.js`
-- Why fragile: Depends on UXP-specific APIs and message passing behavior
-- Safe modification: Add comprehensive error handling; timeout management; connection state tracking
-- Test coverage: No automated tests for bridge communication
+### ComfyUI API Version Compatibility
+- Files: `code/webapp/src/services/comfyui.ts`
+- Why fragile: No version negotiation; assumes specific API structure
+- Safe modification: Add API version detection on connect, fail gracefully on mismatch
+- Test coverage: Integration tests with mock server
 
 ## Scaling Limits
 
-**LocalStorage Capacity:**
-- Current capacity: ~5-10MB depending on browser
-- Limit: History items with large output records may exceed quota
-- Scaling path: Implement data rotation; offload to IndexedDB; compress stored data
+### History Store
+- Current capacity: All ComfyUI history entries loaded into memory
+- Limit: Browser memory; observed issues at 500+ entries
+- Scaling path:
+  - Implement pagination or virtualization
+  - Add cleanup for entries older than N days
 
-**Concurrent Generations:**
-- Current capacity: Single generation at a time (isGenerating flag)
-- Limit: Cannot queue or parallelize multiple workflow executions
-- Scaling path: Implement generation queue with status tracking
+### Workflow Input Count
+- Current capacity: Handles 20-30 inputs comfortably
+- Limit: React re-renders become slow with 50+ inputs
+- Scaling path:
+  - Virtualize input list rendering
+  - Debounce input change handlers
 
-**Workflow File Size:**
-- Current capacity: Entire workflow JSON loaded into memory
-- Limit: Very large workflows with many nodes may cause UI lag
-- Scaling path: Implement lazy loading; virtual scrolling for workflow picker
+### Concurrent Generation Queue
+- Current capacity: Single WebSocket connection, single generation at a time
+- Limit: Multiple rapid submissions may queue indefinitely
+- Scaling path:
+  - Add queue management UI
+  - Implement cancel functionality
 
 ## Dependencies at Risk
 
-**fflate (zip library):**
-- Risk: Used for ZIP download functionality but has breaking changes between versions
-- Impact: Download as ZIP feature would fail
-- Migration plan: Pin version; test thoroughly before upgrades; have fallback to individual downloads
+### React 19.x
+- Risk: Very recent major version, ecosystem compatibility still stabilizing
+- Impact: Some libraries may have peer dependency warnings
+- Migration plan: Monitor for breaking changes in minor releases
 
-**React 19.x:**
-- Risk: Using latest React version which may have ecosystem compatibility issues
-- Impact: Third-party component libraries may not be compatible
-- Migration plan: Test all dependencies; maintain lockfile; review changelogs before React updates
+### zustand 5.x
+- Risk: Major version with API changes from 4.x
+- Impact: Persist middleware API changed
+- Migration plan: Current usage is compatible; avoid older tutorials
 
 ## Missing Critical Features
 
-**Error Boundary:**
-- Problem: No React error boundary to catch and display component errors gracefully
-- Blocks: User sees blank screen instead of helpful error message on component crash
+### Error Recovery UI
+- Problem: No retry button when generation fails
+- Blocks: User must manually re-trigger generation
 
-**Offline Mode:**
-- Problem: No handling for network disconnection during generation
-- Blocks: Users cannot work offline; no indication when ComfyUI is unreachable
+### Workflow Validation
+- Problem: No validation of workflow structure before submission
+- Blocks: Invalid workflows cause cryptic ComfyUI errors
 
-**Generation Cancellation:**
-- Problem: No way to cancel in-progress generation
-- Blocks: Users must wait for completion or refresh page
+### Offline Mode
+- Problem: No indication when ComfyUI connection is lost
+- Blocks: Users confused why generation doesn't start
 
 ## Test Coverage Gaps
 
-**Workflow Parsing Logic:**
-- What's not tested: compileWorkflowToPrompt, extractWorkflowInputs, sanitizePromptGraph functions
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/pages/Draw.tsx`
-- Risk: Changes to workflow format may break silently
-- Priority: High - core functionality with no automated tests
+### Workflow Compilation Logic
+- What's not tested: `compileWorkflowToPrompt`, `applyInputValuesToPrompt`, `enforceLatestImageInputs`
+- Files: `code/webapp/src/pages/Draw.tsx:1668-2029`
+- Risk: Edge cases in prompt building could corrupt generation requests
+- Priority: High
 
-**Bridge Communication:**
-- What's not tested: sendBridgeMessage, bridgeFetch, all main.js handlers
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/services/upload.ts`, `D:/projects/photoshop-plugin/PS-plugin/ningleai/main.js`
-- Risk: Communication failures go undetected until manual testing
-- Priority: High - critical for Photoshop integration
+### Bridge Communication
+- What's not tested: `sendBridgeMessage`, `bridgeFetch` error handling
+- Files: `code/webapp/src/services/upload.ts:77-214`
+- Risk: Network failures may cause silent hangs
+- Priority: Medium
 
-**History State Management:**
-- What's not tested: addLocalDownload, removeLocalDownload, deleteItem, clearAll operations
-- Files: `D:/projects/photoshop-plugin/code/webapp/src/stores/historyStore.ts`
-- Risk: Data corruption or loss may occur without detection
-- Priority: Medium - user data operations
+### History State Restoration
+- What's not tested: `extractInputValuesFromHistoryParams` edge cases
+- Files: `code/webapp/src/pages/Draw.tsx:387-491`
+- Risk: Rerun/edit may fail to restore correct values
+- Priority: Medium
 
-**E2E Tests:**
-- What's not tested: Complete generation workflow, Photoshop integration, settings persistence
-- Files: `D:/projects/photoshop-plugin/code/webapp/e2e/navigation.spec.ts` (only basic navigation)
-- Risk: Integration issues not caught before release
-- Priority: Medium - only 3 basic navigation tests exist
-
-**Component Tests:**
-- What's not tested: Draw, Settings, History pages; all custom components
-- Files: No component test files found
-- Risk: UI regressions not caught
-- Priority: Medium - testing-library dependencies present but unused
+### PS Export/Import Round-Trip
+- What's not tested: Full cycle of PS layer export -> ComfyUI -> PS layer import
+- Files: `PS-plugin/ningleai/main.js:115-194`, `code/webapp/src/services/upload.ts:216-287`
+- Risk: Image quality or dimension issues in production
+- Priority: High
 
 ---
 
-*Concerns audit: 2026-03-11*
+*Concerns audit: 2026-03-17*

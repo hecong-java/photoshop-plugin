@@ -1,139 +1,167 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-03-17
 
 ## Test Framework
 
 **Runner:**
-- Vitest v4.0.18
-- Config: Inline in `vite.config.ts` (no separate vitest.config)
-- Test UI available: `@vitest/ui`
+- Vitest 4.0.18
+- Config: Inline in `package.json` scripts (no separate vitest.config)
+- UI available via `@vitest/ui`
 
 **Assertion Library:**
-- Vitest built-in (`expect`, `describe`, `it`)
-- `@testing-library/jest-dom` v6.9.1 for DOM matchers
+- Vitest built-in assertions (`expect`)
+- `@testing-library/jest-dom` for DOM matchers
 
 **Run Commands:**
 ```bash
-npm run test          # Run all unit tests with vitest
-npm run test:e2e      # Run E2E tests with Playwright
-npm run typecheck     # TypeScript check (no tests)
+npm run test              # Run all tests (vitest)
+npm run test:e2e          # Run E2E tests (playwright test)
 ```
 
 ## Test File Organization
 
 **Location:**
-- Unit tests: Co-located with source files
-- E2E tests: Separate `e2e/` directory at project root
+- Co-located with source files (e.g., `src/services/comfyui.test.ts` next to `src/services/comfyui.ts`)
+- E2E tests in separate `e2e/` directory
 
 **Naming:**
-- Unit tests: `<filename>.test.ts` - e.g., `comfyui.test.ts`
-- E2E tests: `<feature>.spec.ts` - e.g., `navigation.spec.ts`
+- Unit tests: `[source].test.ts` or `[source].test.tsx`
+- E2E tests: `[feature].spec.ts`
 
 **Structure:**
 ```
 code/webapp/
 ├── src/
-│   └── services/
-│       ├── comfyui.ts
-│       └── comfyui.test.ts    # Co-located unit test
-├── e2e/
-│   └── navigation.spec.ts     # E2E tests
-└── playwright.config.ts
+│   ├── services/
+│   │   ├── comfyui.ts
+│   │   ├── comfyui.test.ts
+│   │   ├── config.ts
+│   │   └── config.test.ts
+│   └── stores/
+│       ├── configStore.ts
+│       └── configStore.test.ts
+└── e2e/
+    └── navigation.spec.ts
 ```
 
 ## Test Structure
 
 **Suite Organization:**
 ```typescript
-// From src/services/comfyui.test.ts
-import { describe, expect, it } from 'vitest';
-import { ComfyUIClient, normalizeBaseUrl, type Fetcher } from './comfyui';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-describe('normalizeBaseUrl', () => {
-  it('strips trailing slash and keeps protocol', () => {
-    expect(normalizeBaseUrl('http://127.0.0.1:8188/')).toBe('http://127.0.0.1:8188');
+describe('loadPluginConfig', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
-});
 
-describe('ComfyUIClient', () => {
-  it('falls back to /api prefix when /prompt is unavailable on OSS endpoints', async () => {
-    // test implementation
+  it('should return DEFAULT_CONFIG when no bridge transport', async () => {
+    vi.spyOn(upload, 'hasBridgeTransport').mockReturnValue(false);
+    const result = await loadPluginConfig();
+    expect(result).toEqual(DEFAULT_CONFIG);
   });
 });
 ```
 
 **Patterns:**
 - `describe` blocks for grouping related tests
-- `it` for individual test cases with descriptive names
-- English descriptions (not Chinese) for test names
-- Arrange-Act-Assert pattern within tests
+- `beforeEach` for setup and mock clearing
+- `afterEach` for cleanup
+- Nested `describe` for sub-features
 
 ## Mocking
 
-**Framework:** Vitest built-in mocker (`@vitest/mocker`)
+**Framework:** Vitest built-in mocking (`vi`)
 
 **Patterns:**
 ```typescript
-// From src/services/comfyui.test.ts
-// Mock fetcher for testing API client
-const jsonResponse = (payload: unknown, status = 200): Response =>
-  new Response(JSON.stringify(payload), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
+// Module mocking
+vi.mock('./upload', () => ({
+  sendBridgeMessage: vi.fn(),
+  hasBridgeTransport: vi.fn(),
+}));
 
-describe('ComfyUIClient', () => {
-  it('tests API behavior', async () => {
-    const fetcher: Fetcher = async (input) => {
-      const url = String(input);
-      if (url.endsWith('/api/prompt')) {
-        return jsonResponse({ prompt_id: 'ok' });
-      }
-      if (url.endsWith('/prompt')) {
-        return new Response(null, { status: 404 });
-      }
-      return jsonResponse({ ok: true });
-    };
+// Spy on specific functions
+vi.spyOn(upload, 'hasBridgeTransport').mockReturnValue(false);
+vi.spyOn(upload, 'sendBridgeMessage').mockResolvedValue({
+  exists: true,
+  data: { ... },
+});
 
-    const client = new ComfyUIClient({
-      baseUrl: 'http://127.0.0.1:8188',
-      fetcher,
-      timeoutMs: 1000,
-      totalProbeTimeoutMs: 5000,
-    });
+// Mock rejection
+vi.spyOn(upload, 'sendBridgeMessage').mockRejectedValue(new Error('Bridge error'));
 
-    const capabilities = await client.probeEndpoints();
-    expect(capabilities.prefixMode).toBe('api');
-  });
+// Clear all mocks
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 ```
 
 **What to Mock:**
-- Network requests (`fetch`, custom `Fetcher`)
-- External dependencies
-- Browser APIs when necessary
+- External dependencies (services, API calls)
+- Bridge transport (`hasBridgeTransport`, `sendBridgeMessage`)
+- Network requests (`fetch`)
 
 **What NOT to Mock:**
-- Business logic being tested
-- Data transformation functions
-- Type guards and validators
+- Pure utility functions being tested
+- Data validation logic
+- Type guards
+
+**Custom Mock Implementations:**
+```typescript
+// For testing async state transitions
+let resolveFn: (value: PluginConfig) => void;
+vi.mocked(configService.loadPluginConfig).mockImplementation(
+  () => new Promise<PluginConfig>((resolve) => {
+    resolveFn = resolve;
+  })
+);
+```
 
 ## Fixtures and Factories
 
 **Test Data:**
 ```typescript
-// Helper functions create test data inline
+// Inline test data
+const mockConfig = {
+  version: '1.0',
+  nodes: [{ class_type: 'KSampler' }],
+};
+
+// Helper functions for creating test data
 const jsonResponse = (payload: unknown, status = 200): Response =>
   new Response(JSON.stringify(payload), {
     status,
     headers: { 'content-type': 'application/json' },
   });
+
+// Custom fetcher mock for ComfyUI client
+const fetcher: Fetcher = async (input) => {
+  const url = String(input);
+  if (url.endsWith('/api/prompt')) {
+    return jsonResponse({ prompt_id: 'ok' });
+  }
+  return jsonResponse({ ok: true });
+};
 ```
 
 **Location:**
-- No separate fixture files
-- Test data created inline within tests or via helper functions
+- Inline within test files
+- No separate fixture directory
+
+**Store State Reset:**
+```typescript
+beforeEach(() => {
+  // Reset store state between tests
+  useConfigStore.setState({
+    config: null,
+    isLoading: false,
+    error: null,
+    loadedAt: null,
+  });
+});
+```
 
 ## Coverage
 
@@ -141,77 +169,34 @@ const jsonResponse = (payload: unknown, status = 200): Response =>
 
 **View Coverage:**
 ```bash
-npx vitest run --coverage
+npm run test -- --coverage
 ```
-
-**Note:** Coverage not configured in current setup - would need `@vitest/coverage-v8` or similar
 
 ## Test Types
 
 **Unit Tests:**
-- Located: `src/**/*.test.ts`
-- Scope: Individual functions, classes, and utilities
-- Approach: Mock external dependencies, test in isolation
-- Example: `src/services/comfyui.test.ts` tests `ComfyUIClient` class
+- Scope: Individual functions, utilities, store actions
+- Location: Co-located with source (`src/**/*.test.ts`)
+- Examples:
+  - `comfyui.test.ts` - API client, URL normalization, error handling
+  - `config.test.ts` - Config loading, validation
+  - `configStore.test.ts` - Zustand store actions
 
 **Integration Tests:**
-- Not currently present
-- Would test component interactions and store behavior
+- Scope: Store interactions with services
+- Pattern: Mock service layer, test store behavior
 
 **E2E Tests:**
-- Framework: Playwright v1.58.2
+- Framework: Playwright 1.58.2
 - Config: `playwright.config.ts`
 - Browsers: Chromium, Firefox, WebKit
-- Base URL: `http://localhost:5173`
-
-```typescript
-// From e2e/navigation.spec.ts
-import { test, expect } from '@playwright/test';
-
-test.describe('Navigation', () => {
-  test('should navigate to draw page', async ({ page }) => {
-    await page.goto('/');
-    await page.click('a:has-text("Draw")');
-    await expect(page.locator('h1')).toContainText('Draw');
-  });
-});
-```
-
-## Common Patterns
-
-**Async Testing:**
-```typescript
-// Async/await pattern
-it('handles async operations', async () => {
-  const result = await client.probeEndpoints();
-  expect(result.prefixMode).toBe('api');
-});
-```
-
-**Error Testing:**
-```typescript
-// Test that errors are thrown correctly
-it('throws on invalid URL', () => {
-  expect(() => normalizeBaseUrl('')).toThrow();
-  expect(() => normalizeBaseUrl('invalid')).toThrow('must start with http');
-});
-```
-
-**Testing Classes:**
-```typescript
-// Instantiate with test dependencies
-const client = new ComfyUIClient({
-  baseUrl: 'http://127.0.0.1:8188',
-  fetcher: mockFetcher,
-  timeoutMs: 1000,
-});
-```
+- Location: `e2e/*.spec.ts`
 
 ## E2E Test Configuration
 
-**Playwright Setup:**
+**Config File:** `playwright.config.ts`
+
 ```typescript
-// From playwright.config.ts
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -236,41 +221,91 @@ export default defineConfig({
 });
 ```
 
-**E2E Test Patterns:**
-- Use `test.describe` for grouping
-- Use semantic selectors when possible (`h1`, `a:has-text()`)
-- Use `page.goto()` for navigation
-- Use `expect(locator).toContainText()` for assertions
+## Common Patterns
 
-## Testing Library Setup
-
-**Available:**
-- `@testing-library/react` v16.3.2
-- `@testing-library/user-event` v14.6.1
-- `@testing-library/jest-dom` v6.9.1
-
-**Note:** Testing Library is installed but no React component tests exist yet. When adding:
-
+**Async Testing:**
 ```typescript
-// Example pattern for React component testing
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
-import '@testing-library/jest-dom';
+it('should populate store from service', async () => {
+  vi.mocked(configService.loadPluginConfig).mockResolvedValue(mockConfig);
+  await useConfigStore.getState().loadConfig();
+  const state = useConfigStore.getState();
+  expect(state.config).toEqual(mockConfig);
+});
 
-import { MyComponent } from './MyComponent';
+// Testing loading state during async operation
+it('should set isLoading to true during load', async () => {
+  let resolveFn: (value: PluginConfig) => void;
+  vi.mocked(configService.loadPluginConfig).mockImplementation(
+    () => new Promise((resolve) => { resolveFn = resolve; })
+  );
+  const loadPromise = useConfigStore.getState().loadConfig();
+  expect(useConfigStore.getState().isLoading).toBe(true);
+  resolveFn!({ version: '1.0', nodes: [] });
+  await loadPromise;
+  expect(useConfigStore.getState().isLoading).toBe(false);
+});
+```
 
-describe('MyComponent', () => {
-  it('renders correctly', () => {
-    render(<MyComponent />);
-    expect(screen.getByText('Expected Text')).toBeInTheDocument();
+**Error Testing:**
+```typescript
+it('should return DEFAULT_CONFIG on bridge error', async () => {
+  vi.spyOn(upload, 'hasBridgeTransport').mockReturnValue(true);
+  vi.spyOn(upload, 'sendBridgeMessage').mockRejectedValue(new Error('Bridge error'));
+  const result = await loadPluginConfig();
+  expect(result).toEqual(DEFAULT_CONFIG);
+});
+
+it('should filter invalid node entries', () => {
+  const input = {
+    version: '1.0',
+    nodes: [
+      { class_type: 'ValidNode' },
+      { class_type: '' }, // Empty - invalid
+      { class_type: 123 }, // Non-string - invalid
+      null, // Null - invalid
+    ],
+  };
+  const result = validateConfig(input);
+  expect(result.nodes).toHaveLength(1);
+  expect(result.nodes[0].class_type).toBe('ValidNode');
+});
+```
+
+**Testing with Mock Fetcher:**
+```typescript
+it('falls back to /api prefix when /prompt is unavailable', async () => {
+  const fetcher: Fetcher = async (input) => {
+    const url = String(input);
+    if (url.endsWith('/api/prompt')) {
+      return jsonResponse({ prompt_id: 'ok' });
+    }
+    if (url.endsWith('/prompt')) {
+      return new Response(null, { status: 404 });
+    }
+    return jsonResponse({ ok: true });
+  };
+
+  const client = new ComfyUIClient({
+    baseUrl: 'http://127.0.0.1:8188',
+    fetcher,
+    timeoutMs: 1000,
+    totalProbeTimeoutMs: 5000,
   });
 
-  it('handles click', async () => {
-    const user = userEvent.setup();
-    render(<MyComponent />);
-    await user.click(screen.getByRole('button'));
-    // assert state change
+  const capabilities = await client.probeEndpoints();
+  expect(capabilities.prefixMode).toBe('api');
+});
+```
+
+**Playwright E2E Pattern:**
+```typescript
+import { test, expect } from '@playwright/test';
+
+test.describe('Navigation', () => {
+  test('should navigate to draw page', async ({ page }) => {
+    await page.goto('/');
+    await page.click('a:has-text("Draw")');
+    await expect(page.locator('h1')).toContainText('Draw');
   });
 });
 ```
@@ -278,17 +313,18 @@ describe('MyComponent', () => {
 ## Test Coverage Gaps
 
 **Untested Areas:**
-- React components (no component tests exist)
-- Custom hooks (`useDownload`, `usePSBridge`)
-- Zustand stores (`settingsStore`, `historyStore`, `comfyUI` store)
-- Services: `upload.ts`, `download.ts`
-- Bridge communication logic
+- React components (no component tests found)
+- Hooks (no hook tests found)
+- Download service
+- Upload service
+- Workflow execution flow
 
-**Priority for New Tests:**
-1. High: Services that interact with external APIs (`upload.ts`, `download.ts`)
-2. Medium: Custom hooks with state management
-3. Lower: Simple presentational components
+**Priority for Adding Tests:**
+1. Core business logic in services
+2. Store state management
+3. React component rendering
+4. Hook behavior
 
 ---
 
-*Testing analysis: 2026-03-11*
+*Testing analysis: 2026-03-17*

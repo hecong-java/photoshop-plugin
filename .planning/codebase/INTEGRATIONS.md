@@ -1,138 +1,126 @@
 # External Integrations
 
-**Analysis Date:** 2026-03-11
+**Analysis Date:** 2026-03-17
 
 ## APIs & External Services
 
-**ComfyUI API:**
-- ComfyUI Server - AI image generation workflow execution
-  - SDK/Client: Custom `ComfyUIClient` class in `src/services/comfyui.ts`
-  - Connection: Configurable base URL (default: `http://192.168.0.50:8188`)
-  - Endpoints:
-    - `/object_info` or `/api/object_info` - Node information
-    - `/prompt` or `/api/prompt` - Workflow submission
-    - `/history` or `/api/history` - Execution history
-    - `/upload/image` or `/api/upload/image` - Image upload
-    - `/view` - Image retrieval
-    - `/ws` - WebSocket for real-time updates
-    - `/userdata` - Workflow file management (ps-workflows directory)
-    - `/system_stats` - Server version info
-  - Prefix modes: `oss` (direct paths) or `api` (prefixed paths)
+**ComfyUI:**
+- Purpose: AI image generation backend
+- Protocol: HTTP REST + WebSocket
+- SDK/Client: Custom `ComfyUIClient` class in `code/webapp/src/services/comfyui.ts`
+- Auth: None (assumes local/trusted network)
+- Endpoints used:
+  - `/object_info` or `/api/object_info` - Node type information
+  - `/prompt` or `/api/prompt` - Queue prompts for execution
+  - `/history` or `/api/history` - Execution history
+  - `/upload/image` or `/api/upload/image` - Image upload
+  - `/view` - Retrieve generated images
+  - `/ws` or `/api/ws` - WebSocket for real-time updates
+  - `/userdata` - Workflow file management (list/read from `ps-workflows/` directory)
+  - `/system_stats` - Version information
+  - `/api/experiment/models` - Custom model catalog
 
-**Model Context Protocol (MCP):**
-- SSH MCP Server - Remote server command execution via MCP protocol
-  - SDK: `@modelcontextprotocol/sdk` 1.27.0
-  - Transport: StdioServerTransport
-  - Config: `mcp.json` and `ssh-config.json` define server connections
-  - Location: `mcp-servers/ssh-mcp-server/`
+**Remote Webapp Server:**
+- URL: `http://123.207.74.28:8080`
+- Purpose: Hosts the React webapp loaded in Photoshop plugin webview
+- Configured in: `PS-plugin/ningleai/index.html` and `PS-plugin/ningleai/main.js`
 
 ## Data Storage
 
 **Databases:**
-- None - No traditional database
+- None (client-side only)
 
 **File Storage:**
-- Local filesystem via UXP storage API
-  - Downloads folder: Created in UXP data folder
-  - Temporary folder: Used for layer exports
-  - Entry point: `localFileSystem` from `uxp.storage`
+- UXP Plugin Local Storage - Downloaded images saved via `localFileSystem.getDataFolder()`
+  - Location: `downloads/` subfolder in plugin data directory
+  - Access via: `fs.saveDownload`, `fs.listDownloads`, `fs.deleteDownload` bridge handlers
 
 **Caching:**
 - Browser localStorage via Zustand persist middleware
-  - Settings key: `Ningleai-settings`
-  - Stores: theme, autoSave, psImportMode, comfyUI settings
+  - `Ningleai-settings` key - User preferences
+  - `workflow-cache` key - Cached workflow JSON data
+  - History cached locally in `historyStore`
 
 ## Authentication & Identity
 
 **Auth Provider:**
-- None - No user authentication system
-  - ComfyUI connection is network-based (no auth tokens in current implementation)
-  - SSH MCP server uses password authentication (stored in `ssh-config.json`)
-
-**Security Note:**
-- SSH credentials stored in plaintext in `ssh-config.json`
-- ComfyUI URL configured without authentication
-
-## Photoshop UXP Integration
-
-**UXP Host Bridge:**
-- Communication: `window.uxpHost.postMessage()` or `window.parent.postMessage()`
-- Location: `PS-plugin/ningleai/main.js`
-- Manifest: `PS-plugin/ningleai/manifest.json`
-
-**Bridge Actions (main.js handlers):**
-- `ps.importImageAsLayer` - Import image file as new layer
-- `ps.importBase64AsLayer` - Import base64 data as new layer
-- `ps.exportActiveLayerPng` - Export active layer as PNG (base64)
-- `ps.exportSelectionPng` - Export selection as PNG (base64)
-- `comfyui.fetch` - Proxy network requests through UXP (bypasses WebView CORS)
-- `comfyui.uploadImage` - Upload images to ComfyUI via multipart/form-data
-- `settings.get/set` - Plugin settings storage
-- `fs.saveDownload/listDownloads/deleteDownload/openDirectory` - File system operations
-
-**Photoshop API Usage:**
-- `photoshop.core` - Modal execution
-- `photoshop.action` - BatchPlay for PS commands
-- `photoshop.app` - Document and layer access
-- `uxp.storage` - File system operations
-- `uxp.shell` - Open external paths
+- None (Custom/No auth)
+- Implementation: ComfyUI connection uses simple HTTP with no authentication
+- User-configurable base URL in Settings page
 
 ## Monitoring & Observability
 
 **Error Tracking:**
-- None - No external error tracking service
+- Console logging only (`console.log`, `console.error`)
+- Structured error types in ComfyUI client (`ComfyUIError` with type classification)
 
 **Logs:**
-- Console logging with prefixes: `[Bridge]`, `[ComfyUI]`, `[Upload]`, `[Plugin]`
-- MCP server uses custom `Logger` utility
+- Browser console
+- Bridge message logging with `[Bridge]` prefix in `PS-plugin/ningleai/main.js`
+- ComfyUI client logging with `[ComfyUI]` prefix
 
 ## CI/CD & Deployment
 
 **Hosting:**
-- Development: Vite dev server (port 5173)
-- Production: Static build output (dist folder)
-- Plugin: Packaged as `.ccx` file (UXP plugin format)
+- Remote server: `http://123.207.74.28:8080` (webapp hosting)
+- Local development: Vite dev server on `http://localhost:5173`
 
 **CI Pipeline:**
-- None detected - No CI configuration files present
+- None detected
 
-**Build Artifacts:**
-- `PS-plugin.zip` - Packaged plugin
-- `ningleai_PS.ccx` - Compiled UXP plugin
-- `dist/` - Vite build output
-- `build/` - MCP server TypeScript output
+**Deployment:**
+- Manual ZIP packaging (`PS-plugin-*.zip` files in root)
+- Plugin distributed as folder (`PS-plugin/ningleai/`)
 
 ## Environment Configuration
 
 **Required env vars:**
-- None - Configuration stored in JSON files and localStorage
+- None detected (no `.env` files)
 
-**Configuration Files:**
-- `mcp.json` - MCP server definitions
-- `ssh-config.json` - SSH connection credentials
-- Settings persisted to browser localStorage via Zustand
+**Runtime Configuration:**
+- ComfyUI base URL: User-configured in Settings, persisted to localStorage
+- Default ComfyUI URL: `http://192.168.0.50:8188` (in `code/webapp/src/stores/settingsStore.ts`)
 
-**Secrets location:**
-- SSH passwords in `ssh-config.json` (plaintext)
-- No secure secrets management
+**Plugin Configuration:**
+- `PS-plugin/ningleai/node-config.json` - Node display configuration for UI
+- Loaded via `fs.readPluginConfig` bridge handler
 
 ## Webhooks & Callbacks
 
 **Incoming:**
-- None - No webhook endpoints
+- None
 
 **Outgoing:**
-- WebSocket connections to ComfyUI for real-time workflow updates
-  - URL: `{baseUrl}/ws?clientId={clientId}`
-  - Used for progress tracking and completion notifications
+- None
 
-## Cross-Origin Considerations
+## UXP Bridge Communication
 
-**CORS Handling:**
-- UXP WebView cannot make direct network requests due to security restrictions
-- Solution: `comfyui.fetch` bridge action proxies all requests through UXP main thread
-- ComfyUI server should enable CORS: `--enable-cors-header "*"`
+**Architecture:**
+- WebView-to-Plugin messaging via `window.postMessage` and `uxpHost.postMessage`
+- Request/response pattern with UUID correlation
+- 30-second timeout per request
+
+**Bridge Actions (handled in `PS-plugin/ningleai/main.js`):**
+
+| Action | Purpose |
+|--------|---------|
+| `settings.get` / `settings.set` | Plugin-level settings |
+| `fs.saveDownload` | Save binary data to downloads folder |
+| `fs.listDownloads` | List downloaded files |
+| `fs.deleteDownload` | Delete a downloaded file |
+| `fs.readPluginConfig` | Read `node-config.json` from plugin folder |
+| `fs.openDirectory` | Open downloads folder in system file manager |
+| `ps.importImageAsLayer` | Import image file as Photoshop layer |
+| `ps.importBase64AsLayer` | Import base64 image as Photoshop layer |
+| `ps.exportActiveLayerPng` | Export active layer as PNG (base64) |
+| `ps.exportSelectionPng` | Export selection as PNG (base64) |
+| `comfyui.fetch` | Proxy HTTP requests through plugin (CORS workaround) |
+| `comfyui.uploadImage` | Upload image to ComfyUI via plugin |
+
+**Security:**
+- Origin whitelist in `PS-plugin/ningleai/main.js`: `['http://123.207.74.28:8080']`
+- All bridge messages validated for UUID and action
 
 ---
 
-*Integration audit: 2026-03-11*
+*Integration audit: 2026-03-17*
