@@ -90,6 +90,7 @@ progress:
 | 4 | Add workflow debug logging, random seed generation, and fix rerun/edit | 2026-03-12 | 7c9eeef | [004-workflow-random-seed](./quick/004-workflow-random-seed/) |
 | 5 | Auto-open file manager after download completes | 2026-03-12 | 498640e | [005-file-manager-download](./quick/005-file-manager-download/) |
 | 6 | Fix random seed display in PS plugin webview | 2026-03-16 | 606fff5 | [6-web-ps](./quick/6-web-ps/) |
+| 7 | Fix PS layer/selection export bounds | 2026-03-17 | 90fe508 | [260317-fii-ps](./quick/260317-fii-ps/) |
 
 ### Recent Completions
 
@@ -106,13 +107,13 @@ progress:
 
 ### Last Session
 
-- **Date:** 2026-03-16
-- **Action:** Completed quick task 6 (Random seed display fix)
-- **Outcome:** Fixed random seed display inconsistency between web browser and PS plugin webview
+- **Date:** 2026-03-17
+- **Action:** Completed quick task 7 (Fix PS layer/selection export bounds)
+- **Outcome:** Fixed layer export to use actual layer bounds instead of full canvas size
 
 ### Next Action
 
-Deploy updated webapp to server and test in PS plugin.
+Test layer/selection export in PS plugin to verify correct image dimensions.
 
 ---
 
