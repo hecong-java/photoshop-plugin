@@ -11,7 +11,8 @@
       "Bash(grep:*)",
       "Bash(python:*)",
       "Skill(gsd:debug)",
-      "Bash(ssh:*)"
+      "Bash(ssh:*)",
+      "Skill(gsd:quick)"
     ]
   }
 }
