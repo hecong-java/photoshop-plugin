@@ -185,10 +185,12 @@ const sanitizePromptGraph = (prompt: Record<string, unknown>): Record<string, un
 interface HistoryActionState {
   rerunItem?: {
     workflowName?: string;
+    imageName?: string;
     params?: Record<string, unknown>;
   };
   editItem?: {
     workflowName?: string;
+    imageName?: string;
     params?: Record<string, unknown>;
   };
 }
@@ -394,6 +396,21 @@ export const Draw = () => {
     console.log('[Draw] extractInputValuesFromHistoryParams - promptData keys:', Object.keys(promptData));
     console.log('[Draw] extractInputValuesFromHistoryParams - targetInputs:', targetInputs.map(i => i.name));
 
+    // Build a map of class_type -> nodes with that class_type from history params
+    const nodesByClassType = new Map<string, Array<{ nodeId: string; node: Record<string, unknown> }>>();
+    Object.entries(promptData).forEach(([nodeId, nodeValue]) => {
+      if (!nodeValue || typeof nodeValue !== 'object' || Array.isArray(nodeValue)) return;
+      const nodeRecord = nodeValue as Record<string, unknown>;
+      const classType = nodeRecord.class_type ?? nodeRecord.type;
+      if (typeof classType === 'string') {
+        if (!nodesByClassType.has(classType)) {
+          nodesByClassType.set(classType, []);
+        }
+        nodesByClassType.get(classType)!.push({ nodeId, node: nodeRecord });
+      }
+    });
+    console.log('[Draw] Nodes by class_type:', Array.from(nodesByClassType.entries()).map(([k, v]) => `${k}(${v.length})`));
+
     targetInputs.forEach((input) => {
       const splitIndex = input.name.lastIndexOf('_');
       if (splitIndex <= 0 || splitIndex >= input.name.length - 1) {
@@ -403,29 +420,44 @@ export const Draw = () => {
 
       const inputName = input.name.slice(0, splitIndex);
       const nodeId = input.name.slice(splitIndex + 1);
-      console.log('[Draw] Trying to match input:', input.name, '-> inputName:', inputName, 'nodeId:', nodeId);
+      console.log('[Draw] Trying to match input:', input.name, '-> inputName:', inputName, 'nodeId:', nodeId, 'classType:', input.classType);
 
-      const nodeValue = promptData[nodeId];
-      if (!nodeValue || typeof nodeValue !== 'object' || Array.isArray(nodeValue)) {
-        console.log('[Draw] No nodeValue for nodeId:', nodeId, 'available keys:', Object.keys(promptData));
-        return;
+      // First try to find by exact nodeId (for same workflow)
+      let nodeValue = promptData[nodeId];
+      let nodeRecord: Record<string, unknown> | null = null;
+
+      if (nodeValue && typeof nodeValue === 'object' && !Array.isArray(nodeValue)) {
+        nodeRecord = nodeValue as Record<string, unknown>;
+        const historyClassType = nodeRecord.class_type ?? nodeRecord.type;
+        // Verify class type matches
+        if (typeof historyClassType === 'string' && typeof input.classType === 'string' && input.classType !== historyClassType) {
+          console.log('[Draw] Node ID matched but class type mismatch, will try class_type matching');
+          nodeRecord = null;
+        }
       }
 
-      const nodeRecord = nodeValue as Record<string, unknown>;
-      const historyClassType = nodeRecord.class_type ?? nodeRecord.type;
-      console.log('[Draw] Node', nodeId, 'class_type:', historyClassType, 'input.classType:', input.classType);
-      if (
-        typeof historyClassType === 'string' &&
-        typeof input.classType === 'string' &&
-        input.classType !== historyClassType
-      ) {
-        console.log('[Draw] Class type mismatch, skipping');
+      // If not found by nodeId, try to find by class_type
+      if (!nodeRecord && input.classType) {
+        const candidates = nodesByClassType.get(input.classType);
+        if (candidates && candidates.length > 0) {
+          // For inputs with the same class_type, use the first one
+          // This is a heuristic - for better matching we could use node labels
+          const firstCandidate = candidates[0];
+          nodeRecord = firstCandidate.node;
+          console.log('[Draw] Found node by class_type', input.classType, '-> nodeId:', firstCandidate.nodeId);
+          // Remove from candidates so we don't reuse it for another input
+          candidates.shift();
+        }
+      }
+
+      if (!nodeRecord) {
+        console.log('[Draw] No matching node found for input:', input.name);
         return;
       }
 
       const nodeInputs = nodeRecord.inputs;
       if (!nodeInputs || typeof nodeInputs !== 'object' || Array.isArray(nodeInputs)) {
-        console.log('[Draw] No nodeInputs for node:', nodeId);
+        console.log('[Draw] No nodeInputs for node');
         return;
       }
 
@@ -597,13 +629,75 @@ export const Draw = () => {
     params: Record<string, unknown> | undefined,
     workflowName?: string
   ): Promise<ComfyUIWorkflowInfo | null> => {
-    console.log('[Draw] findBestMatchingWorkflow - params:', params ? Object.keys(params) : 'undefined');
+    console.log('[Draw] findBestMatchingWorkflow - START');
     console.log('[Draw] findBestMatchingWorkflow - workflowName:', workflowName);
-    console.log('[Draw] findBestMatchingWorkflow - available workflows:', workflows.map(w => w.name));
-    if (workflows.length === 0) return null;
+    console.log('[Draw] findBestMatchingWorkflow - workflowName char codes:', workflowName ? Array.from(workflowName).map(c => c.charCodeAt(0)) : 'undefined');
+    console.log('[Draw] findBestMatchingWorkflow - params keys:', params ? Object.keys(params) : 'undefined');
+    console.log('[Draw] findBestMatchingWorkflow - available workflows:', workflows.map(w => ({ name: w.name, path: w.path })));
+    if (workflows.length === 0) {
+      console.log('[Draw] findBestMatchingWorkflow - No workflows available, returning null');
+      return null;
+    }
 
+    // Step 1: Try to match by workflow_name first (user's preferred approach)
+    if (workflowName) {
+      console.log('[Draw] findBestMatchingWorkflow - Attempting name match for:', workflowName);
+
+      // Check if workflowName looks like an image filename (fallback case)
+      const looksLikeImage = /\.(png|jpg|jpeg|webp|gif)$/i.test(workflowName);
+      console.log('[Draw] findBestMatchingWorkflow - looksLikeImage:', looksLikeImage);
+
+      // Normalize the search term: strip .json, strip path prefix (both / and \), lowercase
+      const normalized = workflowName.trim().toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+      const baseName = normalized.split('/').pop() || normalized; // Strip path prefix
+      console.log('[Draw] findBestMatchingWorkflow - normalized:', normalized, 'baseName:', baseName);
+
+      if (!looksLikeImage) {
+        // Try exact match first (compare both full path and base name)
+        const exactMatch = workflows.find(w => {
+          const workflowLabel = w.name.toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+          const workflowBase = workflowLabel.split('/').pop() || workflowLabel;
+          const pathMatch = workflowLabel === normalized || workflowLabel === baseName;
+          const baseMatch = workflowBase === normalized || workflowBase === baseName;
+          console.log('[Draw] findBestMatchingWorkflow - comparing with', w.name, ':', { workflowLabel, workflowBase, pathMatch, baseMatch });
+          console.log('[Draw] findBestMatchingWorkflow - workflowLabel char codes:', Array.from(workflowLabel).map(c => c.charCodeAt(0)));
+          return pathMatch || baseMatch;
+        });
+
+        if (exactMatch) {
+          console.log('[Draw] findBestMatchingWorkflow - Found EXACT match:', exactMatch.name);
+          return exactMatch;
+        }
+
+        // Try partial match (workflow name contains the search term or vice versa)
+        const partialMatch = workflows.find(w => {
+          const workflowLabel = w.name.toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+          const workflowBase = workflowLabel.split('/').pop() || workflowLabel;
+          // Check if either contains the other (but avoid matching short strings)
+          const partialMatch = (baseName.length >= 3 && workflowBase.includes(baseName)) ||
+                               (workflowBase.length >= 3 && baseName.includes(workflowBase));
+          if (partialMatch) {
+            console.log('[Draw] findBestMatchingWorkflow - PARTIAL match candidate:', w.name);
+          }
+          return partialMatch;
+        });
+
+        if (partialMatch) {
+          console.log('[Draw] findBestMatchingWorkflow - Found PARTIAL match:', partialMatch.name);
+          return partialMatch;
+        }
+
+        console.log('[Draw] findBestMatchingWorkflow - No name match found, falling back to scoring');
+      } else {
+        console.log('[Draw] findBestMatchingWorkflow - workflowName looks like image filename, skipping name match');
+      }
+    } else {
+      console.log('[Draw] findBestMatchingWorkflow - No workflowName provided, using scoring fallback');
+    }
+
+    // Step 2: Fall back to scoring-based matching if no name match
     if (!params || Object.keys(params).length === 0) {
-      console.log('[Draw] No params, returning first workflow');
+      console.log('[Draw] No params and no name match, returning first workflow');
       return workflows[0] ?? null;
     }
 
@@ -694,26 +788,6 @@ export const Draw = () => {
           }
         });
 
-        if (workflowName) {
-          const normalized = workflowName.trim().toLowerCase().replace(/\.json$/, '');
-          const workflowLabel = workflow.name.toLowerCase().replace(/\.json$/, '');
-          // Check if workflowName looks like a workflow name (not an image filename)
-          const isWorkflowName = normalized.endsWith('.json') ||
-            !/\.(png|jpg|jpeg|webp|gif)$/i.test(workflowName);
-
-          if (workflowLabel === normalized) {
-            // Exact match - give a significant boost
-            score += 50;
-            console.log('[Draw] Exact workflow name match for', workflow.name);
-          } else if (workflowLabel.includes(normalized) && normalized.length > 3) {
-            // Partial match - smaller boost
-            score += 10;
-          } else if (isWorkflowName) {
-            // workflowName looks like a workflow name but doesn't match - small penalty
-            score -= 2;
-          }
-        }
-
         if (score > bestScore) {
           bestScore = score;
           bestWorkflow = workflow;
@@ -760,13 +834,18 @@ export const Draw = () => {
 
     const applyHistoryAction = async () => {
       try {
+        console.log('[Draw] ========== HISTORY ACTION START ==========');
         console.log('[Draw] History action triggered:', {
           workflowName: historyItem.workflowName,
-          params: historyItem.params,
+          imageName: historyItem.imageName,
+          paramsKeys: historyItem.params ? Object.keys(historyItem.params) : 'undefined',
           shouldAutoGenerate
         });
+        console.log('[Draw] Current workflows available:', workflows.length, workflows.map(w => w.name));
         const targetWorkflow = await findBestMatchingWorkflow(historyItem.params, historyItem.workflowName);
+        console.log('[Draw] ========== MATCHING RESULT ==========');
         console.log('[Draw] Found target workflow:', targetWorkflow?.name);
+        console.log('[Draw] Expected workflow was:', historyItem.workflowName);
         if (!targetWorkflow) {
           console.warn('[Draw] No workflow available for history action');
           return;
@@ -2473,18 +2552,20 @@ export const Draw = () => {
       })
         : null;
 
-      const fetcher = isUXPWebView() 
+      const fetcher = isUXPWebView()
         ? (u: string, o: RequestInit) => bridgeFetch(u, o)
         : (u: string, o: RequestInit) => fetch.call(window, u, o);
+      const extraData = {
+        workflow_name: currentWorkflow?.name || '',
+      };
+      console.log('[Draw] Submitting prompt with extra_data:', extraData);
       const response = await fetcher(`${comfyUISettings.baseUrl}${prefix}/prompt`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: finalPrompt,
           client_id: clientId,
-          extra_data: {
-            workflow_name: currentWorkflow?.name || '',
-          },
+          extra_data: extraData,
         }),
       });
 

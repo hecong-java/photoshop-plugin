@@ -227,18 +227,25 @@ const convertEntryToItem = (
 
   const promptData = extractPromptNodes(workflowDict);
   // Use workflow name from extra_data if available, otherwise fall back to image name
-  const workflowName = (extraData && typeof extraData === 'object' && 'workflow_name' in extraData)
-    ? String((extraData as Record<string, unknown>).workflow_name)
+  const hasExtraData = extraData && typeof extraData === 'object';
+  const hasWorkflowName = hasExtraData && 'workflow_name' in extraData;
+  const extractedWorkflowName = hasExtraData ? (extraData as Record<string, unknown>).workflow_name : undefined;
+  const workflowName = hasWorkflowName
+    ? String(extractedWorkflowName)
     : imageInfo.imageName;
 
-  // Debug: log workflow name extraction
+  // Debug: log workflow name extraction with detailed info
   console.log('[historyStore] Converting entry to item:', {
     promptId,
     isArray: Array.isArray(promptTuple),
     tupleLength: Array.isArray(promptTuple) ? promptTuple.length : 0,
-    extraData,
-    extractedWorkflowName: workflowName,
+    hasExtraData,
+    hasWorkflowName,
+    extraDataKeys: hasExtraData ? Object.keys(extraData as Record<string, unknown>) : [],
+    extractedWorkflowName,
+    finalWorkflowName: workflowName,
     fallbackImageName: imageInfo.imageName,
+    isUsingFallback: !hasWorkflowName,
   });
 
   return {
