@@ -60,6 +60,7 @@ export interface ComfyUIHistoryEntry {
   prompt: [number, string, Record<string, unknown>, Record<string, unknown>?, string[]?, Record<string, unknown>?];
   outputs: Record<string, { images?: Array<{ filename: string; subfolder?: string; type?: string }> }>;
   status?: string | Record<string, unknown>;
+  status_str?: string; // "success" or "error" - indicates execution result
   start_time?: number;
   end_time?: number;
 }
