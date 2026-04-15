@@ -10,6 +10,7 @@ import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64T
 import { PresetToolbar } from '../components/preset/PresetToolbar';
 import { usePresetStore } from '../stores/presetStore';
 import type { PresetFile } from '../types/preset';
+import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import './Draw.css';
 
 // Types for workflow inputs
@@ -230,17 +231,11 @@ export const Draw = () => {
   const currentWorkflowKeyRef = useRef<string | null>(null);
   const uploadedImagePreviewsRef = useRef<Record<string, string>>({});
 
-  // Preset store
+  // Preset store (only what Draw.tsx uses directly; PresetToolbar accesses the store itself)
   const {
-    presets,
-    selectedPresetName,
-    selectedPresetData,
-    isLoading: isPresetLoading,
     loadPresets,
-    selectPreset,
     clearSelection,
     setLastAppliedValues,
-    hasUnsavedChanges,
   } = usePresetStore();
 
   // Invalid image references tracking
@@ -311,6 +306,13 @@ export const Draw = () => {
         return;
       }
 
+      // Preserve linked references (e.g., ["114", 0]) — overwriting them
+      // with hardcoded values would break dynamic dimensions from nodes like GetImageSize
+      const existingValue = (inputs as Record<string, unknown>)[inputName];
+      if (Array.isArray(existingValue)) {
+        return;
+      }
+
       (inputs as Record<string, unknown>)[inputName] = value;
     });
 
@@ -340,6 +342,16 @@ export const Draw = () => {
   useEffect(() => {
     uploadedImagePreviewsRef.current = uploadedImagePreviews;
   }, [uploadedImagePreviews]);
+
+  // Restore image previews from ref on mount (handles React StrictMode remount)
+  useEffect(() => {
+    // If ref has previews but state is empty (e.g., after StrictMode remount), restore them
+    const refPreviews = uploadedImagePreviewsRef.current;
+    if (Object.keys(refPreviews).length > 0 && Object.keys(uploadedImagePreviews).length === 0) {
+      console.log('[Draw] Restoring image previews from ref:', Object.keys(refPreviews));
+      setUploadedImagePreviews(refPreviews);
+    }
+  }, []); // Only run on mount
 
   // Cleanup WebSocket on unmount
   useEffect(() => {
@@ -374,12 +386,11 @@ export const Draw = () => {
         });
       }
 
-      // Cleanup all blob URLs
-      Object.values(uploadedImagePreviewsRef.current).forEach(url => {
-        if (url.startsWith('blob:')) {
-          URL.revokeObjectURL(url);
-        }
-      });
+      // NOTE: We intentionally do NOT cleanup blob URLs on unmount because:
+      // 1. React StrictMode triggers unmount/remount cycle in development
+      // 2. We restore previews from ref on remount (see useEffect above)
+      // 3. Blob URLs are cleaned up when switching workflows or explicitly removing images
+      // This prevents the preview from disappearing due to StrictMode's double-render behavior
     };
   }, []);
 
@@ -724,14 +735,19 @@ export const Draw = () => {
     workflowName?: string
   ): Promise<ComfyUIWorkflowInfo | null> => {
     console.log('[Draw] findBestMatchingWorkflow - START');
-    console.log('[Draw] findBestMatchingWorkflow - workflowName:', workflowName);
+    console.log('[Draw] findBestMatchingWorkflow - RAW workflowName:', JSON.stringify(workflowName));
     console.log('[Draw] findBestMatchingWorkflow - workflowName char codes:', workflowName ? Array.from(workflowName).map(c => c.charCodeAt(0)) : 'undefined');
     console.log('[Draw] findBestMatchingWorkflow - params keys:', params ? Object.keys(params) : 'undefined');
-    console.log('[Draw] findBestMatchingWorkflow - available workflows:', workflows.map(w => ({ name: w.name, path: w.path })));
+    console.log('[Draw] findBestMatchingWorkflow - available workflows (RAW):', JSON.stringify(workflows.map(w => ({ name: w.name, path: w.path }))));
     if (workflows.length === 0) {
       console.log('[Draw] findBestMatchingWorkflow - No workflows available, returning null');
       return null;
     }
+
+    // Helper to strip ps-workflows/ prefix for comparison
+    const stripPsWorkflowsPrefix = (name: string): string => {
+      return name.replace(/^ps-workflows\//, '');
+    };
 
     // Step 1: Try to match by workflow_name first (user's preferred approach)
     if (workflowName) {
@@ -741,20 +757,30 @@ export const Draw = () => {
       const looksLikeImage = /\.(png|jpg|jpeg|webp|gif)$/i.test(workflowName);
       console.log('[Draw] findBestMatchingWorkflow - looksLikeImage:', looksLikeImage);
 
-      // Normalize the search term: strip .json, strip path prefix (both / and \), lowercase
-      const normalized = workflowName.trim().toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+      // Normalize the search term: strip .json, strip path prefix (both / and \), lowercase, strip ps-workflows/
+      const normalized = stripPsWorkflowsPrefix(workflowName.trim().toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/'));
       const baseName = normalized.split('/').pop() || normalized; // Strip path prefix
-      console.log('[Draw] findBestMatchingWorkflow - normalized:', normalized, 'baseName:', baseName);
+      console.log('[Draw] findBestMatchingWorkflow - normalized (after stripPsWorkflows):', normalized, 'baseName:', baseName);
 
       if (!looksLikeImage) {
         // Try exact match first (compare both full path and base name)
+        // Also try matching after stripping ps-workflows/ prefix from workflow list names
         const exactMatch = workflows.find(w => {
-          const workflowLabel = w.name.toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+          const rawName = w.name;
+          const workflowLabelRaw = rawName.toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+          const workflowLabel = stripPsWorkflowsPrefix(workflowLabelRaw);
           const workflowBase = workflowLabel.split('/').pop() || workflowLabel;
-          const pathMatch = workflowLabel === normalized || workflowLabel === baseName;
+          const pathMatch = workflowLabel === normalized || workflowLabelRaw === normalized;
           const baseMatch = workflowBase === normalized || workflowBase === baseName;
-          console.log('[Draw] findBestMatchingWorkflow - comparing with', w.name, ':', { workflowLabel, workflowBase, pathMatch, baseMatch });
-          console.log('[Draw] findBestMatchingWorkflow - workflowLabel char codes:', Array.from(workflowLabel).map(c => c.charCodeAt(0)));
+          console.log('[Draw] findBestMatchingWorkflow - comparing with', JSON.stringify(rawName), ':', {
+            workflowLabelRaw,
+            workflowLabel,
+            workflowBase,
+            normalized,
+            baseName,
+            pathMatch,
+            baseMatch
+          });
           return pathMatch || baseMatch;
         });
 
@@ -765,7 +791,8 @@ export const Draw = () => {
 
         // Try partial match (workflow name contains the search term or vice versa)
         const partialMatch = workflows.find(w => {
-          const workflowLabel = w.name.toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+          const workflowLabelRaw = w.name.toLowerCase().replace(/\.json$/, '').replace(/\\/g, '/');
+          const workflowLabel = stripPsWorkflowsPrefix(workflowLabelRaw);
           const workflowBase = workflowLabel.split('/').pop() || workflowLabel;
           // Check if either contains the other (but avoid matching short strings)
           const partialMatch = (baseName.length >= 3 && workflowBase.includes(baseName)) ||
@@ -898,7 +925,21 @@ export const Draw = () => {
 
   // Handle rerun/edit from history
   useEffect(() => {
+    console.log('[Draw] History useEffect triggered:', {
+      hasHandledHistoryAction: hasHandledHistoryAction.current,
+      workflowsLength: workflows.length,
+      hasBaseUrl: !!comfyUISettings.baseUrl,
+      locationState: location.state,
+      sessionStorageRerun: sessionStorage.getItem('rerunItem') ? 'present' : 'empty',
+      sessionStorageEdit: sessionStorage.getItem('editItem') ? 'present' : 'empty'
+    });
+
     if (hasHandledHistoryAction.current || workflows.length === 0 || !comfyUISettings.baseUrl) {
+      console.log('[Draw] History useEffect SKIPPED:', {
+        reason: hasHandledHistoryAction.current ? 'already_handled' :
+                workflows.length === 0 ? 'no_workflows' :
+                'no_baseUrl'
+      });
       return;
     }
 
@@ -1035,11 +1076,20 @@ export const Draw = () => {
         }
       }
       
-      if (!selectedWorkflow) {
+      // Don't select default workflow if we're handling a history action (rerun/edit)
+      // The history action will set the correct workflow
+      // Check both the ref and sessionStorage (more reliable for timing)
+      const hasPendingHistoryAction = hasHandledHistoryAction.current ||
+        sessionStorage.getItem('rerunItem') ||
+        sessionStorage.getItem('editItem');
+
+      if (!selectedWorkflow && !hasPendingHistoryAction) {
         const defaultWorkflow = getDefaultWorkflow(workflowList);
         if (defaultWorkflow) {
           handleWorkflowSelect(defaultWorkflow, loadedObjectInfo, Object.keys(experimentModels).length > 0 ? experimentModels : undefined);
         }
+      } else if (hasPendingHistoryAction) {
+        console.log('[Draw] Skipping default workflow selection - history action pending');
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load workflows';
@@ -1559,12 +1609,28 @@ export const Draw = () => {
 
           const widgetValueByName = buildWidgetValueByName();
 
+          // Build linked input names early so widget/input loops can skip them
+          const linkedInputNames = new Set<string>();
+          if (Array.isArray(nodeData.inputs)) {
+            nodeData.inputs.forEach((input) => {
+              if (!input || typeof input !== 'object') return;
+              const inputRecord = input as Record<string, unknown>;
+              const inputName = typeof inputRecord.name === 'string' ? inputRecord.name : '';
+              if (!inputName) return;
+              if (inputRecord.link !== null && inputRecord.link !== undefined) {
+                linkedInputNames.add(inputName);
+              }
+            });
+          }
+
           const widgets = Array.isArray(nodeData.widgets)
             ? nodeData.widgets.filter((widget) => widget && typeof widget === 'object') as Array<Record<string, unknown>>
             : [];
           widgets.forEach((widget, idx) => {
             const widgetName = typeof widget.name === 'string' ? widget.name : '';
             if (!widgetName) return;
+            // Skip inputs that are linked to another node (e.g., width/height from GetImageSize)
+            if (linkedInputNames.has(widgetName)) return;
 
             const generatedName = `${widgetName}_${nodeId}`;
             if (inputs.some((input) => input.name === generatedName)) return;
@@ -1649,6 +1715,10 @@ export const Draw = () => {
               if (!widgetName) {
                 return;
               }
+              // Skip inputs that are linked to another node (e.g., width/height from GetImageSize)
+              if (inputRecord.link !== null && inputRecord.link !== undefined) {
+                return;
+              }
 
               const generatedName = `${inputName}_${nodeId}`;
               if (inputs.some((item) => item.name === generatedName)) return;
@@ -1721,19 +1791,7 @@ export const Draw = () => {
             });
           }
 
-          const linkedInputNames = new Set<string>();
-          if (Array.isArray(nodeData.inputs)) {
-            nodeData.inputs.forEach((input) => {
-              if (!input || typeof input !== 'object') return;
-              const inputRecord = input as Record<string, unknown>;
-              const inputName = typeof inputRecord.name === 'string' ? inputRecord.name : '';
-              if (!inputName) return;
-              if (inputRecord.link !== null && inputRecord.link !== undefined) {
-                linkedInputNames.add(inputName);
-              }
-            });
-          }
-
+          // linkedInputNames already built earlier — reuse for optional config filtering
           const optionalConfigCandidates: Array<[string, unknown]> = [];
           if (optionalInfo) {
             const added = new Set<string>();
@@ -1805,6 +1863,14 @@ export const Draw = () => {
       return next;
     });
   };
+
+  const handleFillPrompt = useCallback((text: string) => {
+    // Find the first text input (CLIPTextEncode node prompt)
+    const firstTextInput = sortedWorkflowInputs.find(input => input.type === 'text');
+    if (firstTextInput) {
+      handleInputChange(firstTextInput.name, text);
+    }
+  }, [sortedWorkflowInputs]);
 
   const compileWorkflowToPrompt = (
     workflow: any,
@@ -2528,15 +2594,67 @@ export const Draw = () => {
 
       const historyPrompt = pendingRerunPromptRef.current;
       const currentInputValues = latestInputValuesRef.current;
+
+      // DIAGNOSTIC: log the rerun path taken
+      console.log('[Draw-RERUN-DIAG] historyPrompt is', historyPrompt ? 'PRESENT (rerun path)' : 'NULL (fresh compile path)');
+      if (historyPrompt) {
+        // Log dimension values in the original history prompt
+        for (const [nodeId, nodeVal] of Object.entries(historyPrompt)) {
+          if (!nodeVal || typeof nodeVal !== 'object') continue;
+          const rec = nodeVal as Record<string, unknown>;
+          const ins = rec.inputs as Record<string, unknown> | undefined;
+          if (ins && (ins.width !== undefined || ins.height !== undefined)) {
+            console.log(`[Draw-RERUN-DIAG] historyPrompt node ${nodeId} (${rec.class_type ?? rec.type}): width=${JSON.stringify(ins.width)}, height=${JSON.stringify(ins.height)}`);
+          }
+        }
+      }
+      // Log any dimension keys in currentInputValues
+      const dimKeys = Object.entries(currentInputValues).filter(([k]) => {
+        const base = k.includes('_') ? k.slice(0, k.lastIndexOf('_')) : k;
+        return base === 'width' || base === 'height';
+      });
+      if (dimKeys.length > 0) {
+        console.warn('[Draw-RERUN-DIAG] currentInputValues has dimension keys:', Object.fromEntries(dimKeys));
+      } else {
+        console.log('[Draw-RERUN-DIAG] currentInputValues has NO dimension keys (good)');
+      }
+
+      // For rerun: strip dimension-related values from inputValues so they
+      // never overwrite the original prompt's dimensions (linked refs or resolved numbers)
+      let effectiveValues = currentInputValues;
+      if (historyPrompt) {
+        const dimensionInputNames = new Set(['width', 'height']);
+        const stripped: Record<string, string | number | boolean> = {};
+        let hasStrip = false;
+        for (const [key, val] of Object.entries(currentInputValues)) {
+          const baseName = key.includes('_') ? key.slice(0, key.lastIndexOf('_')) : key;
+          if (dimensionInputNames.has(baseName)) {
+            hasStrip = true;
+            continue;
+          }
+          stripped[key] = val;
+        }
+        if (hasStrip) {
+          console.log('[Draw-RERUN-DIAG] Stripped dimension keys from effectiveValues');
+          effectiveValues = stripped;
+        }
+      }
+
       const compiledPrompt = historyPrompt
-        ? sanitizePromptGraph(applyInputValuesToPrompt(historyPrompt, currentInputValues))
-        : compileWorkflowToPrompt(workflowData, currentInputValues);
-      const finalPrompt = enforceLatestImageInputs(compiledPrompt, currentInputValues, workflowInputs);
+        ? sanitizePromptGraph(applyInputValuesToPrompt(historyPrompt, effectiveValues))
+        : compileWorkflowToPrompt(workflowData, effectiveValues);
+      const finalPrompt = enforceLatestImageInputs(compiledPrompt, effectiveValues, workflowInputs);
       pendingRerunPromptRef.current = null;
 
-      // Debug logging to show workflow JSON and final prompt
-      console.log('[Draw] Workflow data loaded:', JSON.stringify(workflowData, null, 2));
-      console.log('[Draw] Final prompt sent to ComfyUI:', JSON.stringify(finalPrompt, null, 2));
+      // DIAGNOSTIC: log final prompt dimensions
+      for (const [nodeId, nodeVal] of Object.entries(finalPrompt)) {
+        if (!nodeVal || typeof nodeVal !== 'object') continue;
+        const rec = nodeVal as Record<string, unknown>;
+        const ins = rec.inputs as Record<string, unknown> | undefined;
+        if (ins && (ins.width !== undefined || ins.height !== undefined)) {
+          console.log(`[Draw-RERUN-DIAG] finalPrompt node ${nodeId} (${rec.class_type ?? rec.type}): width=${JSON.stringify(ins.width)}, height=${JSON.stringify(ins.height)}`);
+        }
+      }
 
       let promptId = '';
 
@@ -3002,10 +3120,11 @@ export const Draw = () => {
             <div className="image-upload-area">
               {uploadedImagePreviews[input.name] ? (
                 <div className="image-preview-container">
-                  <img 
-                    src={uploadedImagePreviews[input.name]} 
-                    alt="上传预览" 
+                  <img
+                    src={uploadedImagePreviews[input.name]}
+                    alt="上传预览"
                     className="image-preview"
+                    data-prompt-reverse
                   />
                   <div className="image-preview-info">
                     <span className="image-filename">{inputValues[input.name] as string}</span>
@@ -3108,10 +3227,11 @@ export const Draw = () => {
 
         <div className="preview-content">
           {progress.previewImage ? (
-            <img 
-              src={progress.previewImage} 
-              alt="Preview" 
+            <img
+              src={progress.previewImage}
+              alt="Preview"
               className="preview-image"
+              data-prompt-reverse
             />
           ) : (
             <div className="preview-placeholder">
@@ -3131,7 +3251,7 @@ export const Draw = () => {
                 onClick={() => openOutputViewer(index)}
                 title={`查看第 ${index + 1} 张输出`}
               >
-                <img src={image.previewUrl} alt={`output-${index + 1}`} />
+                <img src={image.previewUrl} alt={`output-${index + 1}`} data-prompt-reverse />
               </button>
             ))}
           </div>
@@ -3172,7 +3292,7 @@ export const Draw = () => {
               </button>
             </div>
             <div className="draw-viewer-body">
-              <img src={activeOutput.previewUrl} alt={`viewer-output-${activeOutputIndex + 1}`} />
+              <img src={activeOutput.previewUrl} alt={`viewer-output-${activeOutputIndex + 1}`} data-prompt-reverse />
             </div>
             {outputImages.length > 1 && (
               <div className="draw-viewer-controls">
@@ -3364,6 +3484,7 @@ export const Draw = () => {
           )}
         </div>
       </div>
+      <PromptReverseFlow onFillPrompt={handleFillPrompt} />
     </div>
   );
 };

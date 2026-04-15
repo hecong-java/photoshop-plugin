@@ -6,6 +6,7 @@ import { useHistoryStore } from '../stores/historyStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { HistoryList } from '../components/history/HistoryList';
 import { downloadAndSaveZip, generateDownloadFilename } from '../services/download';
+import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import './History.css';
 
 interface DownloadSuccess {
@@ -185,6 +186,7 @@ export const History = () => {
         onDelete={handleDelete}
         isLoading={isLoading}
       />
+      <PromptReverseFlow />
     </div>
   );
 };

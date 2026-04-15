@@ -78,7 +78,7 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
     <div className="history-item">
       <div className="history-item-thumbnail">
         {item.thumbnailUrl ? (
-          <img src={item.thumbnailUrl} alt={item.imageName} onClick={() => openViewer(0)} />
+          <img src={item.thumbnailUrl} alt={item.imageName} onClick={() => openViewer(0)} data-prompt-reverse />
         ) : (
           <div className="thumbnail-placeholder">无图片</div>
         )}
@@ -95,7 +95,7 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
               title={`预览第 ${index + 1} 张`}
             >
               {image.thumbnailUrl ? (
-                <img src={image.thumbnailUrl} alt={`${item.imageName}-${index + 1}`} />
+                <img src={image.thumbnailUrl} alt={`${item.imageName}-${index + 1}`} data-prompt-reverse />
               ) : (
                 <span>{index + 1}</span>
               )}
@@ -144,7 +144,7 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
               </button>
             </div>
             <div className="history-viewer-body">
-              <img src={activePreview.imageUrl} alt={activePreview.filename} />
+              <img src={activePreview.imageUrl} alt={activePreview.filename} data-prompt-reverse />
             </div>
             {previewImages.length > 1 && (
               <div className="history-viewer-controls">

@@ -3,6 +3,7 @@ import './App.css';
 import { Settings } from './pages/Settings';
 import { Draw } from './pages/Draw';
 import { History } from './pages/History';
+import { PromptReverseProvider } from './components/promptReverse/PromptReverseProvider';
 
 const navItems = [
   { to: '/draw', label: '绘图', icon: '✨' },
@@ -34,12 +35,14 @@ function App() {
         </nav>
 
         <main className="content">
-          <Routes>
-            <Route path="/draw" element={<Draw />} />
-            <Route path="/history" element={<History />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/" element={<Draw />} />
-          </Routes>
+          <PromptReverseProvider>
+            <Routes>
+              <Route path="/draw" element={<Draw />} />
+              <Route path="/history" element={<History />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/" element={<Draw />} />
+            </Routes>
+          </PromptReverseProvider>
         </main>
       </div>
     </Router>
