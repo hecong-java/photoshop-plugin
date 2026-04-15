@@ -106,6 +106,8 @@ const handlers = {
   'preset.read': async (payload) => { ... },
   'preset.write': async (payload) => { ... },
   'preset.delete': async (payload) => { ... },
+  'preset.import': async (payload) => { ... },
+  'preset.export': async (payload) => { ... },
 };
 ```
 
@@ -188,6 +190,22 @@ interface PresetFile {
 **Encoding:** UTF-8 JSON (per Claude's Discretion)
 **Sorting:** By `updatedAt` descending (most recently modified first, per Claude's Discretion)
 
+### Pattern 6: UXP File Picker for Import/Export
+**What:** Using `localFileSystem.getFileForOpening()` and `localFileSystem.getFileForSaving()` for user-chosen file locations
+**When to use:** Import (user picks a file from disk) and export (user chooses save location)
+**How it works:** These are UXP storage APIs available on `localFileSystem` (already imported in main.js line 21). They open native OS file dialogs.
+```javascript
+// Import: open file picker for user to select a JSON file
+const file = await localFileSystem.getFileForOpening({ types: ['json'] });
+const content = await file.read();
+const presetData = JSON.parse(content);
+
+// Export: open save dialog for user to choose destination
+const file = await localFileSystem.getFileForSaving(presetFilename, { types: ['json'] });
+await file.write(JSON.stringify(presetData, null, 2));
+```
+**Key constraint:** These APIs are only available on the UXP (main.js) side, not in the WebView. They must be wrapped in Bridge handlers (`preset.import` and `preset.export`) so the webapp can invoke them via `sendBridgeMessage`.
+
 ### Anti-Patterns to Avoid
 - **Do NOT store base64 image data in presets:** Per D-10, only store filename references. Base64 would bloat preset files.
 - **Do NOT use Zustand persist for preset list:** Source of truth is the filesystem. Persisting creates sync conflicts.
@@ -204,6 +222,7 @@ interface PresetFile {
 | File persistence | Custom IndexedDB or localStorage wrapper | Bridge handlers + UXP localFileSystem | Per D-01, must use Bridge filesystem |
 | JSON validation | Manual type checking | TypeScript interfaces + runtime validation function | Same pattern as validateConfig() in config.ts |
 | Filename sanitization | Custom regex | `sanitizeFilename()` already exists in main.js | Handles special characters consistently |
+| File picker dialogs | HTML input type=file | UXP `localFileSystem.getFileForOpening/getFileForSaving` via Bridge | Native file picker works in UXP; HTML file input may not work in WebView |
 
 **Key insight:** This phase is primarily about composing existing patterns (Bridge handlers, service layer, Zustand store, Draw.tsx UI integration). The novel work is the preset JSON schema and the preset toolbar UI component.
 
@@ -300,6 +319,42 @@ interface PresetFile {
 },
 ```
 
+### Bridge Handler: preset.import
+```javascript
+// Opens native file picker for user to select a JSON file, reads and returns parsed content
+'preset.import': async () => {
+  const file = await localFileSystem.getFileForOpening({ types: ['json'] });
+  if (!file) {
+    return { cancelled: true };  // User cancelled the dialog
+  }
+  try {
+    const content = await file.read();
+    const data = JSON.parse(content);
+    return { cancelled: false, data, sourceFilename: file.name };
+  } catch (e) {
+    throw new Error('preset.import: failed to read or parse file - ' + e.message);
+  }
+},
+```
+
+### Bridge Handler: preset.export
+```javascript
+// Opens native save dialog for user to choose destination, writes preset JSON to that location
+'preset.export': async (payload) => {
+  const { filename, data } = payload;
+  if (!filename || typeof filename !== 'string') {
+    throw new Error('preset.export: missing or invalid "filename" parameter');
+  }
+  const file = await localFileSystem.getFileForSaving(filename, { types: ['json'] });
+  if (!file) {
+    return { cancelled: true };  // User cancelled the dialog
+  }
+  const content = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  await file.write(content);
+  return { success: true };
+},
+```
+
 ### Preset Service (WebApp Side)
 ```typescript
 // Source: [VERIFIED: modeled after code/webapp/src/services/config.ts]
@@ -331,6 +386,16 @@ export async function readPreset(filename: string): Promise<unknown> {
 export async function deletePreset(filename: string): Promise<{ success: boolean }> {
   if (!hasBridgeTransport()) throw new Error('Bridge not available');
   return sendBridgeMessage('preset.delete', { filename }) as Promise<{ success: boolean }>;
+}
+
+export async function importPreset(): Promise<{ cancelled: boolean; data?: unknown; sourceFilename?: string }> {
+  if (!hasBridgeTransport()) throw new Error('Bridge not available');
+  return sendBridgeMessage('preset.import', {}) as Promise<any>;
+}
+
+export async function exportPreset(filename: string, data: unknown): Promise<{ success: boolean; cancelled: boolean }> {
+  if (!hasBridgeTransport()) throw new Error('Bridge not available');
+  return sendBridgeMessage('preset.export', { filename, data }) as Promise<any>;
 }
 ```
 
@@ -378,18 +443,17 @@ function hasUnsavedChanges(
 | A2 | Preset files are small enough (<100KB each) to read synchronously via `file.read()` | Bridge Handler | If presets with many image references become large, may need streaming; unlikely with filename-only storage |
 | A3 | The manifest `localFileSystem: "fullAccess"` permission covers the data folder's presets subdirectory | Architecture Patterns | Should be covered since `getDataFolder()` returns a folder within the permitted scope |
 | A4 | Only one Draw page instance exists at a time (no multi-tab concurrency concerns) | Common Pitfalls | If multiple panels exist, file write concurrency could be an issue; mitigated by loading state |
+| A5 | `localFileSystem.getFileForOpening({ types: ['json'] })` and `getFileForSaving()` are available with the current `fullAccess` manifest permission | Architecture Patterns | These are standard UXP storage APIs on the same `localFileSystem` object already used; if unavailable, fallback to in-presets-folder import/export |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Import/Export file dialog mechanism**
-   - What we know: CONTEXT D-12/D-13 define JSON format. D-14 defines import conflict resolution.
-   - What's unclear: How does the user select a file to import in the UXP WebView? Native `<input type="file">` may not work in UXP. May need a Bridge handler using `localFileSystem.getFileForOpening()`.
-   - Recommendation: Research UXP file picker API. Fallback: user places import files in a known directory and the app scans for new files.
+   - **Decision:** Use Bridge handlers wrapping `localFileSystem.getFileForOpening()` and `localFileSystem.getFileForSaving()`. The webapp calls `sendBridgeMessage('preset.import', {})` which triggers a native OS file picker on the UXP side, reads the file, and returns the parsed JSON data. Export uses `sendBridgeMessage('preset.export', { filename, data })` which opens a native save dialog. This approach keeps all UXP-native API calls in main.js (where `require('uxp').storage` is available) and the webapp only uses the standard Bridge message pattern.
+   - **Rationale:** `localFileSystem` is already imported in main.js (line 21). These APIs are part of the same UXP storage module already used for `getDataFolder()`, `createFolder()`, etc. The Bridge handler pattern is proven in this codebase. If `getFileForOpening`/`getFileForSaving` are not available in a specific UXP version, the fallback is to copy files into the presets/ folder manually and use `preset.list` to discover them.
 
 2. **Preset name uniqueness enforcement**
-   - What we know: D-03 defines filename format `{workflowName}-{presetName}.json`.
-   - What's unclear: Whether uniqueness should be enforced per-workflow or globally.
-   - Recommendation: Per-workflow (a preset name only needs to be unique within its workflow's presets).
+   - **Decision:** Per-workflow uniqueness. A preset name only needs to be unique within its parent workflow's presets. Two different workflows can have presets with the same display name.
+   - **Rationale:** The filename format `{workflowName}-{presetName}.json` already scopes presets by workflow at the filesystem level. The `preset.list` handler filters by `workflowName`. Global uniqueness would be unnecessarily restrictive -- users expect presets to be per-workflow.
 
 ## Validation Architecture
 
@@ -404,14 +468,14 @@ function hasUnsavedChanges(
 ### Phase Requirements -> Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| PRESET-01 | Save current params as named preset | unit | `cd code/webapp && npx vitest run src/services/preset.test.ts` | Wave 0 |
-| PRESET-02 | Modify existing preset parameters | unit | `cd code/webapp && npx vitest run src/services/preset.test.ts` | Wave 0 |
-| PRESET-03 | Delete preset with confirmation | unit | `cd code/webapp && npx vitest run src/services/preset.test.ts` | Wave 0 |
-| PRESET-04 | Export preset to JSON file | unit | `cd code/webapp && npx vitest run src/services/preset.test.ts` | Wave 0 |
-| PRESET-05 | Import preset from JSON file with conflict handling | unit | `cd code/webapp && npx vitest run src/services/preset.test.ts` | Wave 0 |
-| PRESET-06 | Quick switch between presets | unit | `cd code/webapp && npx vitest run src/stores/presetStore.test.ts` | Wave 0 |
-| PRESET-07 | Dirty check before preset switch | unit | `cd code/webapp && npx vitest run src/stores/presetStore.test.ts` | Wave 0 |
-| PRESET-08 | Image reference invalidation warning | integration | `cd code/webapp && npx vitest run src/services/preset.test.ts` | Wave 0 |
+| PRESET-01 | Save current params as named preset | unit | `cd code/webapp && npx vitest run src/services/__tests__/preset.test.ts` | Wave 0 |
+| PRESET-02 | Modify existing preset parameters | unit | `cd code/webapp && npx vitest run src/services/__tests__/preset.test.ts` | Wave 0 |
+| PRESET-03 | Delete preset with confirmation | unit | `cd code/webapp && npx vitest run src/services/__tests__/preset.test.ts` | Wave 0 |
+| PRESET-04 | Export preset to JSON file via getFileForSaving | unit | `cd code/webapp && npx vitest run src/services/__tests__/preset.test.ts` | Wave 0 |
+| PRESET-05 | Import preset from JSON file via getFileForOpening with conflict handling | unit | `cd code/webapp && npx vitest run src/services/__tests__/preset.test.ts` | Wave 0 |
+| PRESET-06 | Quick switch between presets | unit | `cd code/webapp && npx vitest run src/stores/__tests__/presetStore.test.ts` | Wave 0 |
+| PRESET-07 | Dirty check before preset switch | unit | `cd code/webapp && npx vitest run src/stores/__tests__/presetStore.test.ts` | Wave 0 |
+| PRESET-08 | Image reference invalidation warning | integration | `cd code/webapp && npx vitest run src/services/__tests__/preset.test.ts` | Wave 0 |
 
 ### Sampling Rate
 - **Per task commit:** `cd code/webapp && npx vitest run --reporter=verbose`
@@ -419,8 +483,8 @@ function hasUnsavedChanges(
 - **Phase gate:** Full suite green before `/gsd-verify-work`
 
 ### Wave 0 Gaps
-- [ ] `code/webapp/src/services/preset.test.ts` -- covers preset service layer (Bridge mock)
-- [ ] `code/webapp/src/stores/presetStore.test.ts` -- covers preset store state management
+- [ ] `code/webapp/src/services/__tests__/preset.test.ts` -- covers preset service layer (Bridge mock)
+- [ ] `code/webapp/src/stores/__tests__/presetStore.test.ts` -- covers preset store state management
 - [ ] Framework config: No vitest.config.ts found, uses defaults from package.json. May need to add one if test setup requires custom configuration.
 
 ## Security Domain
