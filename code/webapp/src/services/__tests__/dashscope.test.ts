@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   analyzeImage,
   imageElementToBase64,
@@ -203,6 +203,24 @@ describe('dashscope service', () => {
   });
 
   describe('imageElementToBase64', () => {
+    // These tests need document.createElement, which doesn't exist in Node.
+    // We stub a minimal document mock for the canvas-based tests.
+    let originalDocument: typeof document | undefined;
+
+    beforeEach(() => {
+      originalDocument = globalThis.document;
+    });
+
+    afterEach(() => {
+      // Restore document to its original state (undefined in Node)
+      if (originalDocument === undefined) {
+        // @ts-expect-error -- restoring global mock
+        delete globalThis.document;
+      } else {
+        globalThis.document = originalDocument;
+      }
+    });
+
     it('should extract base64 from data: URL images', async () => {
       const img = {
         src: 'data:image/png;base64,iVBORw0KGgo=',
@@ -225,9 +243,10 @@ describe('dashscope service', () => {
         height: 0,
       };
 
-      const createElementSpy = vi
-        .spyOn(document, 'createElement')
-        .mockReturnValue(mockCanvas as unknown as HTMLCanvasElement);
+      // @ts-expect-error -- mocking document for test environment
+      globalThis.document = {
+        createElement: vi.fn().mockReturnValue(mockCanvas),
+      };
 
       const img = {
         src: 'blob:http://localhost/test',
@@ -239,10 +258,8 @@ describe('dashscope service', () => {
 
       expect(mockCanvas.width).toBe(100);
       expect(mockCanvas.height).toBe(200);
-      expect(mockCtx.drawImage).toHaveBeenCalledWith(img, 0, 0);
+      expect(mockCtx.drawImage).toHaveBeenCalledWith(img, 0, 0, 100, 200);
       expect(result).toBe('Y2FudmFzZGF0YQ==');
-
-      createElementSpy.mockRestore();
     });
 
     it('should resize images larger than 2048px on longest side', async () => {
@@ -256,9 +273,10 @@ describe('dashscope service', () => {
         height: 0,
       };
 
-      const createElementSpy = vi
-        .spyOn(document, 'createElement')
-        .mockReturnValue(mockCanvas as unknown as HTMLCanvasElement);
+      // @ts-expect-error -- mocking document for test environment
+      globalThis.document = {
+        createElement: vi.fn().mockReturnValue(mockCanvas),
+      };
 
       // Landscape: 4000x2000
       const img = {
@@ -273,8 +291,6 @@ describe('dashscope service', () => {
       expect(mockCanvas.width).toBe(2048);
       expect(mockCanvas.height).toBe(1024);
       expect(mockCtx.drawImage).toHaveBeenCalledWith(img, 0, 0, 2048, 1024);
-
-      createElementSpy.mockRestore();
     });
 
     it('should resize portrait images larger than 2048px correctly', async () => {
@@ -288,9 +304,10 @@ describe('dashscope service', () => {
         height: 0,
       };
 
-      const createElementSpy = vi
-        .spyOn(document, 'createElement')
-        .mockReturnValue(mockCanvas as unknown as HTMLCanvasElement);
+      // @ts-expect-error -- mocking document for test environment
+      globalThis.document = {
+        createElement: vi.fn().mockReturnValue(mockCanvas),
+      };
 
       // Portrait: 1500x3000
       const img = {
@@ -305,8 +322,6 @@ describe('dashscope service', () => {
       expect(mockCanvas.width).toBe(1024);
       expect(mockCanvas.height).toBe(2048);
       expect(mockCtx.drawImage).toHaveBeenCalledWith(img, 0, 0, 1024, 2048);
-
-      createElementSpy.mockRestore();
     });
 
     it('should throw descriptive error on canvas cross-origin taint', async () => {
@@ -322,9 +337,10 @@ describe('dashscope service', () => {
         height: 0,
       };
 
-      const createElementSpy = vi
-        .spyOn(document, 'createElement')
-        .mockReturnValue(mockCanvas as unknown as HTMLCanvasElement);
+      // @ts-expect-error -- mocking document for test environment
+      globalThis.document = {
+        createElement: vi.fn().mockReturnValue(mockCanvas),
+      };
 
       const img = {
         src: 'https://external.com/cors-image.png',
@@ -333,8 +349,6 @@ describe('dashscope service', () => {
       } as HTMLImageElement;
 
       await expect(imageElementToBase64(img)).rejects.toThrow();
-
-      createElementSpy.mockRestore();
     });
   });
 });
