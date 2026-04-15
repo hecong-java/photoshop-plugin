@@ -5,7 +5,7 @@ milestone_name: milestone
 status: unknown
 last_updated: "2026-03-17T08:46:16.580Z"
 progress:
-  total_phases: 3
+  total_phases: 4
   completed_phases: 0
   total_plans: 5
   completed_plans: 4
@@ -72,6 +72,10 @@ progress:
 | 2026-03-11 | Display-only filtering for workflow inputs | sortedWorkflowInputs unchanged, submission uses full data with defaults |
 - [Phase quick-3]: Poll queue every 2 seconds during generation for real-time updates
 - [Phase quick-260317-fii-ps]: Use document duplicate + trim pattern to avoid modifying original document during layer export
+
+### Roadmap Evolution
+
+- Phase 4 added: 工作流参数预设功能
 
 ### Active TODOs
 
