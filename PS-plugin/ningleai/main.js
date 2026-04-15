@@ -112,6 +112,14 @@ const sanitizeFilename = (filename) => {
   return safe || `download-${Date.now()}.bin`;
 };
 
+const ensurePresetsFolder = async () => {
+  const dataFolder = await localFileSystem.getDataFolder();
+  const entries = await dataFolder.getEntries();
+  const existing = entries.find((entry) => entry.isFolder && entry.name === 'presets');
+  if (existing) return existing;
+  return dataFolder.createFolder('presets');
+};
+
 const importImageAsLayer = async ({ imagePath, layerName, mode = 'pixel', workflowName }) => {
   if (!imagePath || typeof imagePath !== 'string') {
     throw toBridgeError('INVALID_PAYLOAD', 'ps.importImageAsLayer: missing or invalid "imagePath" parameter');
@@ -867,7 +875,7 @@ const handlers = {
   // ComfyUI 文件上传 - 专门处理 multipart/form-data
   'comfyui.uploadImage': async (payload) => {
     const { url, filename, base64Data, mimeType = 'image/png' } = payload;
-    
+
     if (!url || typeof url !== 'string') {
       throw new Error('comfyui.uploadImage: missing or invalid "url" parameter');
     }
@@ -891,12 +899,12 @@ const handlers = {
       // 构建 multipart/form-data
       const boundary = '----FormBoundary' + Date.now();
       const parts = [];
-      
+
       // 添加文件部分
       parts.push(`--${boundary}\r\n`);
       parts.push(`Content-Disposition: form-data; name="image"; filename="${filename}"\r\n`);
       parts.push(`Content-Type: ${mimeType}\r\n\r\n`);
-      
+
       const headerBlob = new Blob([parts.join('')]);
       const footerBlob = new Blob(['\r\n--' + boundary + '--\r\n']);
       const formDataBlob = new Blob([headerBlob, bytes, footerBlob]);
@@ -925,6 +933,125 @@ const handlers = {
         url
       };
     }
+  },
+
+  // Preset CRUD handlers
+  'preset.list': async (payload) => {
+    const { workflowName } = payload || {};
+    const presetsFolder = await ensurePresetsFolder();
+    const entries = await presetsFolder.getEntries();
+    const jsonFiles = entries.filter((entry) => entry.isFile && entry.name.endsWith('.json'));
+
+    const results = [];
+    for (const file of jsonFiles) {
+      try {
+        // If workflowName provided, filter by filename prefix
+        if (workflowName && typeof workflowName === 'string') {
+          const prefix = workflowName + '-';
+          if (!file.name.startsWith(prefix)) continue;
+        }
+        const content = await file.read();
+        const data = JSON.parse(content);
+        results.push({
+          filename: file.name,
+          name: data.name || file.name.replace(/\.json$/, ''),
+          workflowName: data.workflowName || '',
+          updatedAt: data.updatedAt || '',
+          createdAt: data.createdAt || ''
+        });
+      } catch (err) {
+        console.warn('[preset.list] Skipping broken preset file:', file.name, err);
+      }
+    }
+
+    // Sort by updatedAt descending (most recent first)
+    results.sort((a, b) => {
+      if (!a.updatedAt) return 1;
+      if (!b.updatedAt) return -1;
+      return b.updatedAt.localeCompare(a.updatedAt);
+    });
+
+    return results;
+  },
+
+  'preset.read': async (payload) => {
+    const { filename } = payload || {};
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('preset.read: missing or invalid "filename" parameter');
+    }
+    const presetsFolder = await ensurePresetsFolder();
+    const entries = await presetsFolder.getEntries();
+    const target = entries.find((entry) => entry.isFile && entry.name === filename);
+    if (!target) {
+      throw new Error('preset.read: preset file not found');
+    }
+    try {
+      const content = await target.read();
+      return JSON.parse(content);
+    } catch (err) {
+      throw new Error('preset.read: failed to parse preset file - ' + (err.message || err));
+    }
+  },
+
+  'preset.write': async (payload) => {
+    const { filename, data } = payload || {};
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('preset.write: missing or invalid "filename" parameter');
+    }
+    if (!data || typeof data !== 'object') {
+      throw new Error('preset.write: missing or invalid "data" parameter');
+    }
+    const presetsFolder = await ensurePresetsFolder();
+    const safeFilename = sanitizeFilename(filename);
+    // Ensure .json extension
+    const finalFilename = safeFilename.endsWith('.json') ? safeFilename : safeFilename + '.json';
+    const file = await presetsFolder.createFile(finalFilename, { overwrite: true });
+    const content = JSON.stringify(data, null, 2);
+    await file.write(content);
+    return { success: true, filename: finalFilename };
+  },
+
+  'preset.delete': async (payload) => {
+    const { filename } = payload || {};
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('preset.delete: missing or invalid "filename" parameter');
+    }
+    const presetsFolder = await ensurePresetsFolder();
+    const entries = await presetsFolder.getEntries();
+    const target = entries.find((entry) => entry.isFile && entry.name === filename);
+    if (!target) {
+      return { success: false };
+    }
+    await target.delete();
+    return { success: true };
+  },
+
+  'preset.import': async () => {
+    try {
+      const file = await localFileSystem.getFileForOpening({ types: ['json'] });
+      if (!file) {
+        return { cancelled: true };
+      }
+      const content = await file.read();
+      const parsedData = JSON.parse(content);
+      return { cancelled: false, data: parsedData, sourceFilename: file.name };
+    } catch (err) {
+      throw new Error('preset.import: failed to read or parse file - ' + (err.message || err));
+    }
+  },
+
+  'preset.export': async (payload) => {
+    const { filename, data } = payload || {};
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('preset.export: missing or invalid "filename" parameter');
+    }
+    const file = await localFileSystem.getFileForSaving(filename, { types: ['json'] });
+    if (!file) {
+      return { cancelled: true };
+    }
+    const content = JSON.stringify(data, null, 2);
+    await file.write(content);
+    return { success: true };
   }
 };
 
