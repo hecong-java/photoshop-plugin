@@ -1,12 +1,17 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { ComfyUIClient, type ComfyUICapabilities } from '../services/comfyui';
+import { DASHSCOPE_MODELS } from '../services/dashscope';
 import './Settings.css';
 
 export const Settings = () => {
   const comfyUI = useSettingsStore((state) => state.comfyUI);
   const setComfyUIBaseUrl = useSettingsStore((state) => state.setComfyUIBaseUrl);
   const setComfyUIConnected = useSettingsStore((state) => state.setComfyUIConnected);
+
+  const dashScope = useSettingsStore((state) => state.dashScope);
+  const setDashScopeApiKey = useSettingsStore((state) => state.setDashScopeApiKey);
+  const setDashScopeModel = useSettingsStore((state) => state.setDashScopeModel);
 
   const [isProbing, setIsProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
@@ -145,6 +150,43 @@ export const Settings = () => {
                 <p className="cors-note">或者限制特定来源: <code>--enable-cors-header "http://192.168.0.50:3000"</code></p>
               </div>
             </details>
+          </div>
+        </div>
+
+        {/* DashScope Config Column */}
+        <div className="settings-card dashscope-config">
+          <div className="card-header">
+            <h2>提示词反推</h2>
+            <span className={`connection-status ${dashScope.apiKey ? 'connected' : 'disconnected'}`}>
+              {dashScope.apiKey ? '已配置' : '未配置'}
+            </span>
+          </div>
+
+          <div className="connection-form">
+            <div className="form-group">
+              <label htmlFor="dashscope-key">API Key</label>
+              <input
+                id="dashscope-key"
+                type="password"
+                value={dashScope.apiKey}
+                onChange={(e) => setDashScopeApiKey(e.target.value)}
+                placeholder="sk-..."
+                className="text-input"
+              />
+            </div>
+            <div className="form-group">
+              <label htmlFor="dashscope-model">模型</label>
+              <select
+                id="dashscope-model"
+                value={dashScope.model}
+                onChange={(e) => setDashScopeModel(e.target.value)}
+                className="text-input"
+              >
+                {DASHSCOPE_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
 

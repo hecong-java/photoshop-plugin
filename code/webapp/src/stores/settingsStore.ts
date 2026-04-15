@@ -3,6 +3,11 @@ import { persist } from 'zustand/middleware';
 
 export type PSImportMode = 'pixel' | 'smartObject';
 
+export interface DashScopeSettings {
+  apiKey: string;
+  model: string;
+}
+
 export interface ComfyUISettings {
   baseUrl: string;
   isConnected: boolean;
@@ -21,11 +26,14 @@ interface SettingsState {
   autoSave: boolean;
   psImportMode: PSImportMode;
   comfyUI: ComfyUISettings;
+  dashScope: DashScopeSettings;
   setTheme: (theme: 'light' | 'dark') => void;
   setAutoSave: (enabled: boolean) => void;
   setPsImportMode: (mode: PSImportMode) => void;
   setComfyUIBaseUrl: (url: string) => void;
   setComfyUIConnected: (connected: boolean, prefixMode?: 'api' | 'oss', capabilities?: ComfyUISettings['capabilities']) => void;
+  setDashScopeApiKey: (apiKey: string) => void;
+  setDashScopeModel: (model: string) => void;
 }
 
 const DEFAULT_COMFYUI_SETTINGS: ComfyUISettings = {
@@ -36,6 +44,11 @@ const DEFAULT_COMFYUI_SETTINGS: ComfyUISettings = {
   capabilities: null,
 };
 
+const DEFAULT_DASHSCOPE_SETTINGS: DashScopeSettings = {
+  apiKey: '',
+  model: 'qwen-vl-plus',
+};
+
 export const useSettingsStore = create<SettingsState>()(
   persist(
     (set) => ({
@@ -43,6 +56,7 @@ export const useSettingsStore = create<SettingsState>()(
       autoSave: true,
       psImportMode: 'pixel',
       comfyUI: DEFAULT_COMFYUI_SETTINGS,
+      dashScope: DEFAULT_DASHSCOPE_SETTINGS,
       setTheme: (theme) => set({ theme }),
       setAutoSave: (enabled) => set({ autoSave: enabled }),
       setPsImportMode: (mode) => set({ psImportMode: mode }),
@@ -60,6 +74,10 @@ export const useSettingsStore = create<SettingsState>()(
             capabilities: capabilities ?? state.comfyUI.capabilities,
           },
         })),
+      setDashScopeApiKey: (apiKey) =>
+        set((state) => ({ dashScope: { ...state.dashScope, apiKey } })),
+      setDashScopeModel: (model) =>
+        set((state) => ({ dashScope: { ...state.dashScope, model } })),
     }),
     {
       name: 'Ningleai-settings',
@@ -68,6 +86,7 @@ export const useSettingsStore = create<SettingsState>()(
         autoSave: state.autoSave,
         psImportMode: state.psImportMode,
         comfyUI: state.comfyUI,
+        dashScope: state.dashScope,
       }),
     }
   )
