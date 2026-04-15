@@ -11,6 +11,7 @@
 - [ ] **Phase 1: Configuration System** - JSON config parsing and dynamic node display
 - [ ] **Phase 2: Local Caching** - Parameter caching to local files
 - [ ] **Phase 3: Integration & Testing** - Full integration testing and refinement
+- [ ] **Phase 4: 工作流参数预设功能** - 参数预设的保存、管理、导入导出
 
 ---
 
@@ -87,6 +88,7 @@ Plans:
 | 1. Configuration System | 4/5 | In progress | 01-00, 01-01, 01-02, 01-03 |
 | 2. Local Caching | 0/1 | Not started | - |
 | 3. Integration & Testing | 0/1 | Not started | - |
+| 4. 工作流参数预设功能 | 0/3 | Not started | - |
 
 ---
 
@@ -107,10 +109,41 @@ Plans:
 | INTG-01 | Phase 1 | Complete |
 | INTG-02 | Phase 2 | Pending |
 | INTG-03 | Phase 2 | Pending |
+| PRESET-01 | Phase 4 | Pending |
+| PRESET-02 | Phase 4 | Pending |
+| PRESET-03 | Phase 4 | Pending |
+| PRESET-04 | Phase 4 | Pending |
+| PRESET-05 | Phase 4 | Pending |
+| PRESET-06 | Phase 4 | Pending |
+| PRESET-07 | Phase 4 | Pending |
+| PRESET-08 | Phase 4 | Pending |
 
-**Coverage:** 13/13 requirements mapped (100%)
+**Coverage:** 21/21 requirements mapped (100%)
+
+### Phase 4: 工作流参数预设功能
+
+**Goal:** 用户可以保存、管理当前工作流的参数预设，支持预设的新增、修改、删除、导入和导出操作，方便快速切换不同参数组合。
+
+**Depends on:** Phase 1, Phase 2
+
+**Requirements:** PRESET-01, PRESET-02, PRESET-03, PRESET-04, PRESET-05, PRESET-06, PRESET-07, PRESET-08
+
+**Success Criteria** (what must be TRUE):
+1. 用户可以为当前工作流保存一组参数作为预设（新增）
+2. 用户可以修改已保存的预设参数（修改）
+3. 用户可以删除不需要的预设（删除）
+4. 用户可以导出预设到文件（导出）
+5. 用户可以从文件导入预设（导入）
+6. 用户可以快速在不同预设之间切换应用
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 04-01-PLAN.md — Types, Bridge handlers, service layer, Zustand store, and tests
+- [ ] 04-02-PLAN.md — UI components (PresetToolbar, ConfirmDialog) and Draw.tsx integration
+- [ ] 04-03-PLAN.md — Human verification checkpoint
 
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-03-11 - Plans 01-00, 01-01, 01-02, 01-03 complete*
+*Last updated: 2026-04-15 - Phase 4 planned: 3 plans across 3 waves*
