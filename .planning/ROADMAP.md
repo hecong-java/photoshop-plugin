@@ -12,6 +12,7 @@
 - [ ] **Phase 2: Local Caching** - Parameter caching to local files
 - [ ] **Phase 3: Integration & Testing** - Full integration testing and refinement
 - [ ] **Phase 4: 工作流参数预设功能** - 参数预设的保存、管理、导入导出
+- [ ] **Phase 5: 图片提示词反推功能** - 通过图片反推生成提示词
 
 ---
 
@@ -89,6 +90,7 @@ Plans:
 | 2. Local Caching | 0/1 | Not started | - |
 | 3. Integration & Testing | 0/1 | Not started | - |
 | 4. 工作流参数预设功能 | 0/3 | Not started | - |
+| 5. 图片提示词反推功能 | 0/4 | Planning | - |
 
 ---
 
@@ -117,8 +119,23 @@ Plans:
 | PRESET-06 | Phase 4 | Pending |
 | PRESET-07 | Phase 4 | Pending |
 | PRESET-08 | Phase 4 | Pending |
+| D-01 | Phase 5 | Planned |
+| D-02 | Phase 5 | Planned |
+| D-03 | Phase 5 | Planned |
+| D-04 | Phase 5 | Planned |
+| D-05 | Phase 5 | Planned |
+| D-06 | Phase 5 | Planned |
+| D-07 | Phase 5 | Planned |
+| D-08 | Phase 5 | Planned |
+| D-09 | Phase 5 | Planned |
+| D-10 | Phase 5 | Planned |
+| D-11 | Phase 5 | Planned |
+| D-12 | Phase 5 | Planned |
+| D-13 | Phase 5 | Planned |
+| D-14 | Phase 5 | Planned |
+| D-15 | Phase 5 | Planned |
 
-**Coverage:** 21/21 requirements mapped (100%)
+**Coverage:** 36/36 requirements mapped (100%)
 
 ### Phase 4: 工作流参数预设功能
 
@@ -139,11 +156,35 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Types, Bridge handlers, service layer, Zustand store, and tests
-- [ ] 04-02-PLAN.md — UI components (PresetToolbar, ConfirmDialog) and Draw.tsx integration
+- [x] 04-01-PLAN.md — Types, Bridge handlers, service layer, Zustand store, and tests
+- [x] 04-02-PLAN.md — UI components (PresetToolbar, ConfirmDialog) and Draw.tsx integration
 - [ ] 04-03-PLAN.md — Human verification checkpoint
+
+### Phase 5: 图片提示词反推功能
+
+**Goal:** 用户右键点击任意图片，通过 DashScope Qwen VL API 分析图片内容生成中文自然语言描述性提示词，结果支持复制和填入提示词输入框。
+
+**Depends on:** Phase 4
+
+**Requirements:** D-01, D-02, D-03, D-04, D-05, D-06, D-07, D-08, D-09, D-10, D-11, D-12, D-13, D-14, D-15
+
+**Success Criteria** (what must be TRUE):
+1. 用户可在任何页面右键点击图片触发"反推提示词"
+2. 分步引导流程：预览确认 -> 模板选择 -> API 分析 -> 结果展示
+3. 提供4种描述模板（详细/简洁/构图/风格分析）
+4. 结果支持复制到剪贴板和填入提示词输入框
+5. API Key 在设置页面管理，持久化存储
+6. 网络请求自适应 UXP/Browser 环境
+
+**Plans:** 4 plans
+
+Plans:
+- [ ] 05-01-PLAN.md — DashScope API service and prompt templates
+- [ ] 05-02-PLAN.md — Settings store extension and DashScope config UI
+- [ ] 05-03-PLAN.md — Prompt reverse store, context menu, and provider component
+- [ ] 05-04-PLAN.md — Multi-step modal and full page integration
 
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-04-15 - Phase 4 planned: 3 plans across 3 waves*
+*Last updated: 2026-04-15 - Phase 5 planned with 4 plans*
