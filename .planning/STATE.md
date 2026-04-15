@@ -3,12 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-17T08:46:16.580Z"
+last_updated: "2026-04-15T02:14:51.613Z"
 progress:
-  total_phases: 4
+  total_phases: 5
   completed_phases: 0
-  total_plans: 5
+  total_plans: 8
   completed_plans: 4
+  percent: 50
 ---
 
 # STATE: Photoshop ComfyUI Plugin
@@ -21,12 +22,14 @@ progress:
 
 **Core Value:** 让用户在 Photoshop 中无缝使用 ComfyUI 的 AI 图像生成能力
 
-**Current Focus:** Configuration System - enabling users to customize which node parameters are displayed
+**Current Focus:** Phase 04 — workflow-presets
 
 ---
 
 ## Current Position
 
+Phase: 04 (workflow-presets) — EXECUTING
+Plan: 1 of 3
 | Attribute | Value |
 |-----------|-------|
 | **Phase** | 1 - Configuration System |
@@ -70,12 +73,14 @@ progress:
 | 2026-03-11 | getAllowedInputs returns null for "show all" | Consistent with config design where missing inputs means no filtering |
 | 2026-03-11 | Non-blocking config load in Draw page | UI renders immediately, filters apply when config arrives |
 | 2026-03-11 | Display-only filtering for workflow inputs | sortedWorkflowInputs unchanged, submission uses full data with defaults |
+
 - [Phase quick-3]: Poll queue every 2 seconds during generation for real-time updates
 - [Phase quick-260317-fii-ps]: Use document duplicate + trim pattern to avoid modifying original document during layer export
 
 ### Roadmap Evolution
 
 - Phase 4 added: 工作流参数预设功能
+- Phase 5 added: 图片提示词反推功能
 
 ### Active TODOs
 
