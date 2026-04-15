@@ -1128,3 +1128,13 @@
   background: rgba(245, 101, 101, 0.25);
   border-color: rgba(245, 101, 101, 0.5);
 }
+
+.image-ref-warning {
+  font-size: 12px;
+  color: #f56565;
+  background: rgba(245, 101, 101, 0.1);
+  border: 1px dashed rgba(245, 101, 101, 0.4);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-top: 6px;
+}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ComfyUIClient, type ComfyUIWorkflowInfo, type ComfyUIHistoryEntry, type ExperimentModelCatalog } from '../services/comfyui';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -7,6 +7,9 @@ import { useWorkflowCacheStore, blobToBase64, base64ToBlobUrl } from '../stores/
 import { useComfyUIStore } from '../stores/comfyui';
 import { PsExportButton } from '../components/upload/PsExportButton';
 import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer } from '../services/upload';
+import { PresetToolbar } from '../components/preset/PresetToolbar';
+import { usePresetStore } from '../stores/presetStore';
+import type { PresetFile } from '../types/preset';
 import './Draw.css';
 
 // Types for workflow inputs
@@ -227,6 +230,33 @@ export const Draw = () => {
   const currentWorkflowKeyRef = useRef<string | null>(null);
   const uploadedImagePreviewsRef = useRef<Record<string, string>>({});
 
+  // Preset store
+  const {
+    presets,
+    selectedPresetName,
+    selectedPresetData,
+    isLoading: isPresetLoading,
+    loadPresets,
+    selectPreset,
+    clearSelection,
+    setLastAppliedValues,
+    hasUnsavedChanges,
+  } = usePresetStore();
+
+  // Invalid image references tracking
+  const [invalidImageRefs, setInvalidImageRefs] = useState<Set<string>>(new Set());
+
+  // Image filenames derived from inputValues for image-type inputs
+  const currentImageFilenames = useMemo(() => {
+    const filenames: Record<string, string> = {};
+    for (const input of workflowInputs) {
+      if (input.type === 'image' && typeof inputValues[input.name] === 'string') {
+        filenames[input.name] = inputValues[input.name] as string;
+      }
+    }
+    return filenames;
+  }, [workflowInputs, inputValues]);
+
   // Generation
   const [progress, setProgress] = useState<GenerationProgress>({
     status: 'idle',
@@ -384,6 +414,70 @@ export const Draw = () => {
     }, 1000);
     return () => clearInterval(interval);
   }, [isGenerating, fetchQueue]);
+
+  // Load presets when workflow changes
+  useEffect(() => {
+    if (selectedWorkflow) {
+      const wfName = selectedWorkflow.name;
+      loadPresets(wfName);
+    } else {
+      clearSelection();
+    }
+  }, [selectedWorkflow?.name]);
+
+  // Check image reference validity on ComfyUI
+  const checkImageReference = async (inputName: string, filename: string) => {
+    try {
+      const comfyUrl = comfyUISettings.baseUrl || 'http://127.0.0.1:8188';
+      const response = await bridgeFetch(`${comfyUrl}/view?filename=${encodeURIComponent(filename)}&type=input`, { method: 'HEAD' });
+      if (!response.ok) {
+        setInvalidImageRefs(prev => new Set(prev).add(inputName));
+      } else {
+        setInvalidImageRefs(prev => {
+          const next = new Set(prev);
+          next.delete(inputName);
+          return next;
+        });
+      }
+    } catch {
+      // Network error -- don't mark as invalid, might be transient
+    }
+  };
+
+  // Apply preset values to Draw state
+  const handleApplyPreset = useCallback((preset: PresetFile) => {
+    const currentInputNames = new Set(workflowInputs.map(i => i.name));
+    const appliedValues: Record<string, string | number | boolean> = { ...inputValues };
+
+    for (const [key, value] of Object.entries(preset.inputValues)) {
+      if (currentInputNames.has(key)) {
+        appliedValues[key] = value;
+      }
+    }
+
+    setInputValues(appliedValues);
+
+    // Apply image filenames: restore uploaded image references
+    for (const [inputName, filename] of Object.entries(preset.imageFilenames)) {
+      if (currentInputNames.has(inputName)) {
+        checkImageReference(inputName, filename);
+      }
+    }
+
+    // Update cache with preset values
+    if (selectedWorkflow) {
+      const cacheKey = selectedWorkflow.path || selectedWorkflow.name;
+      const { saveCache } = useWorkflowCacheStore.getState();
+      saveCache(cacheKey, {
+        inputValues: appliedValues,
+        imageData: uploadedImageBase64Ref.current,
+        imageFilenames: preset.imageFilenames,
+      });
+    }
+
+    // Track applied values for dirty checking
+    setLastAppliedValues(appliedValues, preset.imageFilenames);
+  }, [workflowInputs, inputValues, selectedWorkflow, setLastAppliedValues]);
 
 
   const extractInputValuesFromHistoryParams = (
@@ -2279,6 +2373,12 @@ export const Draw = () => {
         latestInputValuesRef.current = next;
         return next;
       });
+      // Clear invalid image ref on successful upload
+      setInvalidImageRefs(prev => {
+        const next = new Set(prev);
+        next.delete(inputName);
+        return next;
+      });
       return uploadedName;
     } catch (error) {
       setUploadedImagePreviews((prev) => {
@@ -2948,7 +3048,11 @@ export const Draw = () => {
                 </>
               )}
             </div>
-            
+            {invalidImageRefs.has(input.name) && (
+              <div className="image-ref-warning">
+                图片引用已失效，请重新上传
+              </div>
+            )}
           </div>
         );
 
@@ -3190,7 +3294,16 @@ export const Draw = () => {
         {/* Middle: Dynamic Form */}
         <div className="control-section dynamic-form">
           <h3>参数设置</h3>
-          
+
+          {/* Preset Toolbar */}
+          <PresetToolbar
+            workflowName={selectedWorkflow?.name ?? null}
+            workflowPath={selectedWorkflow?.path}
+            inputValues={inputValues}
+            imageFilenames={currentImageFilenames}
+            onApplyPreset={handleApplyPreset}
+          />
+
           {!selectedWorkflow ? (
             <div className="form-placeholder">
               <span className="placeholder-icon">📝</span>
