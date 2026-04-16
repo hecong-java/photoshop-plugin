@@ -91,6 +91,7 @@ Plans:
 | 3. Integration & Testing | 0/1 | Not started | - |
 | 4. 工作流参数预设功能 | 0/3 | Not started | - |
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
+| 05.1. Plugin Performance Fix | 0/3 | Planned | - |
 
 ---
 
@@ -134,8 +135,15 @@ Plans:
 | D-13 | Phase 5 | Planned |
 | D-14 | Phase 5 | Planned |
 | D-15 | Phase 5 | Planned |
+| PERF-01 | Phase 05.1 | Planned |
+| PERF-02 | Phase 05.1 | Planned |
+| PERF-03 | Phase 05.1 | Planned |
+| PERF-04 | Phase 05.1 | Planned |
+| PERF-05 | Phase 05.1 | Planned |
+| PERF-06 | Phase 05.1 | Planned |
+| PERF-07 | Phase 05.1 | Planned |
 
-**Coverage:** 36/36 requirements mapped (100%)
+**Coverage:** 43/43 requirements mapped (100%)
 
 ### Phase 4: 工作流参数预设功能
 
@@ -179,12 +187,38 @@ Plans:
 **Plans:** 4 plans
 
 Plans:
-- [ ] 05-01-PLAN.md — DashScope API service and prompt templates
-- [ ] 05-02-PLAN.md — Settings store extension and DashScope config UI
-- [ ] 05-03-PLAN.md — Prompt reverse store, context menu, and provider component
-- [ ] 05-04-PLAN.md — Multi-step modal and full page integration
+- [x] 05-01-PLAN.md — DashScope API service and prompt templates
+- [x] 05-02-PLAN.md — Settings store extension and DashScope config UI
+- [x] 05-03-PLAN.md — Prompt reverse store, context menu, and provider component
+- [x] 05-04-PLAN.md — Multi-step modal and full page integration
+
+---
+
+### Phase 05.1: Plugin Performance Fix
+
+**Goal:** Fix three diagnosed root causes causing keyboard shortcut failures, UI freezing during image export/import, and slow uploads. Plus secondary wins: console.log cleanup, temp file cleanup, fs.listDownloads optimization.
+
+**Depends on:** Phase 05
+
+**Requirements:** PERF-01, PERF-02, PERF-03, PERF-04, PERF-05, PERF-06, PERF-07
+
+**Success Criteria** (what must be TRUE):
+1. PS keyboard shortcuts (Delete, Ctrl+Z, Ctrl+S, etc.) work when plugin webview has focus
+2. Large image export/import does not freeze Photoshop UI
+3. executeAsModal scope is minimized to only batchPlay calls
+4. React list components use memoization to prevent cascading re-renders
+5. No console.log statements remain in production main.js code
+6. Temp export folders are cleaned up after export operations
+7. fs.listDownloads returns file list without reading entire file contents
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 05.1-01-PLAN.md — Keyboard shortcut passthrough via Bridge (PERF-01)
+- [ ] 05.1-02-PLAN.md — Async base64 conversion and executeAsModal scope reduction (PERF-02, PERF-03)
+- [ ] 05.1-03-PLAN.md — React render optimization and secondary wins (PERF-04, PERF-05, PERF-06, PERF-07)
 
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-04-15 - Phase 5 planned with 4 plans*
+*Last updated: 2026-04-16 - Phase 05.1 planned with 3 plans*
