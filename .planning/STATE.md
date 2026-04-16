@@ -3,7 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-15T07:36:19.269Z"
+last_updated: "2026-04-15T07:49:34.561Z"
 progress:
   total_phases: 5
   completed_phases: 0
@@ -22,14 +22,14 @@ progress:
 
 **Core Value:** 让用户在 Photoshop 中无缝使用 ComfyUI 的 AI 图像生成能力
 
-**Current Focus:** Phase 04 — workflow-presets
+**Current Focus:** Phase 05 — image-prompt-reverse
 
 ---
 
 ## Current Position
 
-Phase: 04 (workflow-presets) — EXECUTING
-Plan: 1 of 3
+Phase: 05 (image-prompt-reverse) — EXECUTING
+Plan: 1 of 4
 | Attribute | Value |
 |-----------|-------|
 | **Phase** | 1 - Configuration System |
@@ -81,6 +81,7 @@ Plan: 1 of 3
 
 - Phase 4 added: 工作流参数预设功能
 - Phase 5 added: 图片提示词反推功能
+- Phase 05.1 inserted after Phase 05: plugin-performance-fix (URGENT)
 
 ### Active TODOs
 
