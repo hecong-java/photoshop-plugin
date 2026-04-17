@@ -22,7 +22,6 @@ const { localFileSystem, formats } = require('uxp').storage;
 const { shell } = require('uxp');
 
 const webviewEl = document.getElementById(WEBVIEW_ID);
-console.log('[Plugin] webviewEl:', webviewEl ? 'found' : 'NOT FOUND');
 
 // Auto cache-bust: append timestamp to webview URL
 if (webviewEl) {
@@ -262,12 +261,8 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
     // Duplicate document for safe cropping - avoids modifying original
     const duplicatedDoc = await activeDoc.duplicate();
 
-    console.log('[Export] Duplicated doc ID:', duplicatedDoc.id);
-    console.log('[Export] Original doc dimensions:', activeDoc.width, 'x', activeDoc.height);
-
     try {
       // Step 1: Get the actual layer bounds using batchPlay
-      console.log('[Export] Getting layer bounds...');
       const boundsResult = await action.batchPlay([
         {
           _obj: 'get',
@@ -275,8 +270,6 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
           _property: 'bounds'
         }
       ], { synchronousExecution: true });
-
-      console.log('[Export] Bounds result:', JSON.stringify(boundsResult));
 
       // Extract bounds values
       // batchPlay returns bounds as object with nested _value properties:
@@ -296,9 +289,6 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
       const layerWidth = right - left;
       const layerHeight = bottom - top;
 
-      console.log('[Export] Layer bounds:', { left, top, right, bottom });
-      console.log('[Export] Layer dimensions:', layerWidth, 'x', layerHeight);
-
       // Step 2: Crop to the layer bounds using DOM API
       // The DOM API crop() method takes a simple bounds array [left, top, right, bottom]
       // Skip crop if layer bounds equal document dimensions - Photoshop throws error when crop area equals entire document
@@ -307,14 +297,9 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
       const needsCrop = !(left === 0 && top === 0 && right === docWidth && bottom === docHeight);
 
       if (needsCrop) {
-        console.log('[Export] Cropping to layer bounds using DOM API...');
         // DOM API crop expects an object with left, top, right, bottom properties
         await duplicatedDoc.crop({ left, top, right, bottom });
-      } else {
-        console.log('[Export] Layer fills entire canvas - skipping crop');
       }
-
-      console.log('[Export] Document dimensions AFTER crop:', duplicatedDoc.width, 'x', duplicatedDoc.height);
 
       // Step 3: Apply size limit if needed (max 2048 pixels on either side)
       const MAX_SIZE = 2048;
@@ -327,8 +312,6 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
         finalWidth = Math.floor(finalWidth * scaleFactor);
         finalHeight = Math.floor(finalHeight * scaleFactor);
 
-        console.log('[Export] Scaling down to fit max size:', finalWidth, 'x', finalHeight, 'scale:', scaleFactor);
-
         // Resize the document
         await action.batchPlay([
           {
@@ -340,13 +323,10 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
             interfaceIconFrameDimmed: false
           }
         ], { synchronousExecution: true, modalBehavior: 'execute' });
-
-        console.log('[Export] Final document dimensions:', duplicatedDoc.width, 'x', duplicatedDoc.height);
       }
 
       // Export from the cropped (and possibly scaled) duplicate
       await duplicatedDoc.saveAs.png(exportedFile, {}, true);
-      console.log('[Export] PNG saved successfully');
     } finally {
       // Close duplicate without saving
       await duplicatedDoc.closeWithoutSaving();
@@ -394,19 +374,33 @@ const exportActiveLayerPng = async () => {
   }, { commandName: 'Export Active Layer PNG' });
 
   // Phase 2: Non-modal -- file I/O and base64 conversion (per D-04: outside modal scope)
-  if (internalResult._exportedFile) {
-    const fileData = await internalResult._exportedFile.read({ format: formats.binary });
-    const base64 = await arrayBufferToBase64(fileData);
-    return {
-      base64,
-      path: internalResult.path,
-      filename: internalResult.filename,
-      sourceLayerName: internalResult.sourceLayerName,
-      sourceLayerId: internalResult.sourceLayerId
-    };
-  }
+  try {
+    if (internalResult._exportedFile) {
+      const fileData = await internalResult._exportedFile.read({ format: formats.binary });
+      const base64 = await arrayBufferToBase64(fileData);
+      return {
+        base64,
+        path: internalResult.path,
+        filename: internalResult.filename,
+        sourceLayerName: internalResult.sourceLayerName,
+        sourceLayerId: internalResult.sourceLayerId
+      };
+    }
 
-  return internalResult;
+    return internalResult;
+  } finally {
+    // Per D-07: Clean up temp export folder
+    try {
+      if (internalResult._exportedFile) {
+        const parent = internalResult._exportedFile.parent;
+        if (parent && typeof parent.delete === 'function') {
+          await parent.delete();
+        }
+      }
+    } catch (cleanupErr) {
+      // Non-critical -- temp files are in OS temp dir
+    }
+  }
 };
 
 const exportSelectionPng = async () => {
@@ -552,17 +546,31 @@ const exportSelectionPng = async () => {
   }, { commandName: 'Export Selection PNG' });
 
   // Per D-04: File I/O and base64 conversion outside modal scope
-  if (result && result._exportedFile) {
-    const fileData = await result._exportedFile.read({ format: formats.binary });
-    const base64 = await arrayBufferToBase64(fileData);
-    return {
-      base64,
-      path: result.path,
-      filename: result.filename
-    };
-  }
+  try {
+    if (result && result._exportedFile) {
+      const fileData = await result._exportedFile.read({ format: formats.binary });
+      const base64 = await arrayBufferToBase64(fileData);
+      return {
+        base64,
+        path: result.path,
+        filename: result.filename
+      };
+    }
 
-  return result;
+    return result;
+  } finally {
+    // Per D-07: Clean up temp export folder
+    try {
+      if (result && result._exportedFile) {
+        const parent = result._exportedFile.parent;
+        if (parent && typeof parent.delete === 'function') {
+          await parent.delete();
+        }
+      }
+    } catch (cleanupErr) {
+      // Non-critical
+    }
+  }
 };
 
 const importBase64AsLayer = async ({ base64Data, layerName, mode = 'pixel', workflowName, mimeType = 'image/png' }) => {
@@ -637,17 +645,12 @@ const handlers = {
     const files = entries.filter((entry) => entry.isFile);
     const list = [];
     for (const file of files) {
-      let size = 0;
-      try {
-        const content = await file.read({ format: formats.binary });
-        size = content?.byteLength || 0;
-      } catch {
-        size = 0;
-      }
+      // Per D-07: Skip reading entire file content -- UXP entries do not expose size directly.
+      // Setting size to 0 is acceptable since the webapp primarily needs filename and path.
       list.push({
         filename: file.name,
         path: file.nativePath || `${downloadsFolder.nativePath}/${file.name}`,
-        size,
+        size: 0,
         modifiedTime: Date.now()
       });
     }
@@ -703,58 +706,40 @@ const handlers = {
     let opened = false;
     let error = '';
 
-    console.log('[fs.openDirectory] Folder info:', {
-      nativePath,
-      folderUrl,
-      folderName: downloadsFolder.name,
-      nativePathType: typeof downloadsFolder.nativePath,
-      urlType: typeof downloadsFolder.url
-    });
-
     // Approach 1: Try shell.openPath with the folder's URL property
     if (shell && typeof shell.openPath === 'function' && folderUrl && typeof folderUrl === 'string') {
       try {
-        console.log('[fs.openDirectory] Trying shell.openPath with URL:', folderUrl);
         await shell.openPath(folderUrl);
         opened = true;
-        console.log('[fs.openDirectory] shell.openPath with URL succeeded');
       } catch (shellError) {
         error = getErrorMsg(shellError);
-        console.log('[fs.openDirectory] shell.openPath with URL failed:', error);
       }
     }
 
     // Approach 2: Try with native path
     if (!opened && shell && typeof shell.openPath === 'function' && nativePath && typeof nativePath === 'string') {
       try {
-        console.log('[fs.openDirectory] Trying shell.openPath with nativePath:', nativePath);
         await shell.openPath(nativePath);
         opened = true;
-        console.log('[fs.openDirectory] shell.openPath with nativePath succeeded');
       } catch (shellError) {
         error = error || getErrorMsg(shellError);
-        console.log('[fs.openDirectory] shell.openPath with nativePath failed:', shellError);
       }
     }
 
     // Approach 3: Try creating a temp file and opening it to reveal folder
     if (!opened && shell && typeof shell.openPath === 'function') {
       try {
-        console.log('[fs.openDirectory] Trying temp file approach');
         const tempFile = await downloadsFolder.createFile(`.reveal_${Date.now()}.txt`, { overwrite: true });
         await tempFile.write('This file can be deleted');
 
         const tempUrl = typeof tempFile.url === 'string' ? tempFile.url : String(tempFile.url || '');
-        console.log('[fs.openDirectory] Created temp file:', tempUrl);
 
         if (tempUrl && typeof tempUrl === 'string') {
           await shell.openPath(tempUrl);
           opened = true;
-          console.log('[fs.openDirectory] Opening temp file succeeded (should reveal folder)');
         }
       } catch (tempError) {
         error = error || getErrorMsg(tempError);
-        console.log('[fs.openDirectory] Temp file approach failed:', tempError);
       }
     }
 
@@ -785,7 +770,6 @@ const handlers = {
     }
 
     const url = resolveComfyUploadUrl(payload);
-    console.log('[Upload] Uploading to ComfyUI:', filename, '->', url);
 
     // Delegate to the multipart uploader for compatibility with existing UIs.
     const result = await handlers['comfyui.uploadImage']({
@@ -810,8 +794,6 @@ const handlers = {
     if (!url || typeof url !== 'string') {
       throw new Error('comfyui.fetch: missing or invalid "url" parameter');
     }
-
-    console.log('[Bridge] ComfyUI fetch:', method, url);
 
     try {
       const fetchOptions = {
@@ -906,8 +888,6 @@ const handlers = {
       throw new Error('comfyui.uploadImage: missing "base64Data" parameter');
     }
 
-    console.log('[Bridge] ComfyUI upload image:', filename, 'to', url);
-
     try {
       // 将 base64 转换为二进制数据
       const binaryString = atob(base64Data);
@@ -937,7 +917,17 @@ const handlers = {
         body: formDataBlob
       });
 
-      const responseData = await response.json();
+      let responseData;
+      const responseText = await response.text();
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (parseError) {
+        throw new Error(`ComfyUI upload returned non-JSON response (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`ComfyUI upload failed (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+      }
 
       return {
         ok: response.ok,
@@ -1123,10 +1113,8 @@ const handlers = {
   }
 };
 
-console.log('[Bridge] Setting up message listener...');
 
 const processBridgeMessage = async (rawMessage, channel, source) => {
-  console.log(`[Bridge] Message received via ${channel}:`, rawMessage);
 
   if (!rawMessage || typeof rawMessage !== 'object' || !rawMessage.uuid) {
     return;
@@ -1186,9 +1174,4 @@ window.addEventListener('message', async (event) => {
     return;
   }
   await processBridgeMessage(event.data, 'window', event.source);
-});
-
-console.log('[Plugin] Initialized hardened UXP bridge', {
-  allowedOrigins: ALLOWED_ORIGINS,
-  handlers: Object.keys(handlers)
 });
