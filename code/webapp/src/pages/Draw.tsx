@@ -11,6 +11,7 @@ import { PresetToolbar } from '../components/preset/PresetToolbar';
 import { usePresetStore } from '../stores/presetStore';
 import type { PresetFile } from '../types/preset';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
+import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
 import './Draw.css';
 
 // Types for workflow inputs
@@ -318,6 +319,9 @@ export const Draw = () => {
 
     return updated;
   };
+
+  // Per D-01/D-02: Forward PS keyboard shortcuts when webview has focus
+  useKeyboardPassthrough();
 
   // Fetch workflows on mount
   useEffect(() => {

@@ -1052,6 +1052,54 @@ const handlers = {
     const content = JSON.stringify(data, null, 2);
     await file.write(content);
     return { success: true };
+  },
+
+  // Keyboard shortcut passthrough - forwards webapp shortcuts to Photoshop
+  'ps.executeShortcut': async (payload) => {
+    const { key, ctrl, shift, alt } = payload || {};
+
+    // Build the shortcut key string matching webapp-side format
+    const parts = [];
+    if (ctrl) parts.push('Ctrl');
+    if (shift) parts.push('Shift');
+    if (alt) parts.push('Alt');
+    parts.push(key);
+    const shortcutKey = parts.join('+');
+
+    // Map shortcut combinations to batchPlay action descriptors
+    const actionMap = {
+      'Delete': [{ _obj: 'delete', _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }] }],
+      'Backspace': [{ _obj: 'delete', _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }] }],
+      'Ctrl+z': [{ _obj: 'undo' }],
+      'Ctrl+Shift+z': [{ _obj: 'redo' }],
+      'Ctrl+s': [{ _obj: 'save' }],
+      'Ctrl+c': [{ _obj: 'copy' }],
+      'Ctrl+v': [{ _obj: 'paste' }],
+      'Ctrl+a': [{ _obj: 'selectAll' }],
+      'Ctrl+d': [{ _obj: 'deselect' }],
+      'Ctrl+t': [{ _obj: 'freeTransform' }],
+      'ArrowUp': [{ _obj: 'move', _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }], to: { _obj: 'offset', horizontal: { _unit: 'pixelsUnit', _value: 0 }, vertical: { _unit: 'pixelsUnit', _value: -1 } } }],
+      'ArrowDown': [{ _obj: 'move', _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }], to: { _obj: 'offset', horizontal: { _unit: 'pixelsUnit', _value: 0 }, vertical: { _unit: 'pixelsUnit', _value: 1 } } }],
+      'ArrowLeft': [{ _obj: 'move', _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }], to: { _obj: 'offset', horizontal: { _unit: 'pixelsUnit', _value: -1 }, vertical: { _unit: 'pixelsUnit', _value: 0 } } }],
+      'ArrowRight': [{ _obj: 'move', _target: [{ _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }], to: { _obj: 'offset', horizontal: { _unit: 'pixelsUnit', _value: 1 }, vertical: { _unit: 'pixelsUnit', _value: 0 } } }],
+      'BracketLeft': [{ _obj: 'decreaseBrushSize' }],
+      'BracketRight': [{ _obj: 'increaseBrushSize' }],
+    };
+
+    const actions = actionMap[shortcutKey];
+    if (!actions) return { executed: false, reason: 'No action mapping for: ' + shortcutKey };
+
+    try {
+      return await core.executeAsModal(async () => {
+        await action.batchPlay(actions, { synchronousExecution: true });
+        return { executed: true };
+      }, { commandName: `Shortcut: ${shortcutKey}` });
+    } catch (error) {
+      // Shortcuts may fail if context is wrong (e.g., no selection for deselect)
+      // Return gracefully instead of throwing
+      console.warn('[Bridge] Shortcut execution failed:', shortcutKey, error);
+      return { executed: false, reason: getErrorMsg(error) };
+    }
   }
 };
 
