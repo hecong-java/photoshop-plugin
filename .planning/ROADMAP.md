@@ -91,7 +91,7 @@ Plans:
 | 3. Integration & Testing | 0/1 | Not started | - |
 | 4. 工作流参数预设功能 | 0/3 | Not started | - |
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
-| 05.1. Plugin Performance Fix | 0/3 | Planned | - |
+| 05.1. Plugin Performance Fix | 3/3 | Complete   | 2026-04-17 |
 
 ---
 
@@ -211,12 +211,12 @@ Plans:
 6. Temp export folders are cleaned up after export operations
 7. fs.listDownloads returns file list without reading entire file contents
 
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
-- [ ] 05.1-01-PLAN.md — Keyboard shortcut passthrough via Bridge (PERF-01)
-- [ ] 05.1-02-PLAN.md — Async base64 conversion and executeAsModal scope reduction (PERF-02, PERF-03)
-- [ ] 05.1-03-PLAN.md — React render optimization and secondary wins (PERF-04, PERF-05, PERF-06, PERF-07)
+- [x] 05.1-01-PLAN.md — Keyboard shortcut passthrough via Bridge (PERF-01)
+- [x] 05.1-02-PLAN.md — Async base64 conversion and executeAsModal scope reduction (PERF-02, PERF-03)
+- [x] 05.1-03-PLAN.md — React render optimization and secondary wins (PERF-04, PERF-05, PERF-06, PERF-07)
 
 ---
 

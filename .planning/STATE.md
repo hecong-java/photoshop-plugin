@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-15T07:49:34.561Z"
+last_updated: "2026-04-17T01:39:59.384Z"
 progress:
-  total_phases: 5
-  completed_phases: 0
-  total_plans: 12
-  completed_plans: 6
-  percent: 50
+  total_phases: 6
+  completed_phases: 2
+  total_plans: 15
+  completed_plans: 13
+  percent: 87
 ---
 
 # STATE: Photoshop ComfyUI Plugin
@@ -22,14 +22,14 @@ progress:
 
 **Core Value:** 让用户在 Photoshop 中无缝使用 ComfyUI 的 AI 图像生成能力
 
-**Current Focus:** Phase 05 — image-prompt-reverse
+**Current Focus:** Phase 05.1 — plugin-performance-fix
 
 ---
 
 ## Current Position
 
-Phase: 05 (image-prompt-reverse) — EXECUTING
-Plan: 1 of 4
+Phase: 05.1 (plugin-performance-fix) — EXECUTING
+Plan: 2 of 3
 | Attribute | Value |
 |-----------|-------|
 | **Phase** | 1 - Configuration System |
@@ -55,6 +55,7 @@ Plan: 1 of 4
 | Phase quick-6 P01 | 2m | 1 tasks | 1 files |
 | Phase quick-260317-fii-ps P01 | 1 | 1 tasks | 1 files |
 | Phase quick-260317-n67-status-str-error P01 | 1m | 1 tasks | 2 files |
+| Phase 05.1 P03 | 8min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,9 @@ Plan: 1 of 4
 
 - [Phase quick-3]: Poll queue every 2 seconds during generation for real-time updates
 - [Phase quick-260317-fii-ps]: Use document duplicate + trim pattern to avoid modifying original document during layer export
+- [Phase 05.1]: openOutputViewer wrapped in useCallback with outputImages dep for stable reference to memo child
+- [Phase 05.1]: fs.listDownloads returns size: 0 because UXP entries do not expose file size directly
+- [Phase 05.1]: Temp export cleanup uses parent.delete() on export folder in finally block
 
 ### Roadmap Evolution
 
