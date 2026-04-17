@@ -41,6 +41,26 @@ const getErrorMsg = (err) => {
   return JSON.stringify(err);
 };
 
+/**
+ * Convert ArrayBuffer to base64 string asynchronously, yielding to the
+ * event loop between chunks. This prevents the UXP main thread from
+ * freezing during large image conversions.
+ * Per D-03: replaces synchronous String.fromCharCode.apply pattern.
+ */
+const arrayBufferToBase64 = async (buffer) => {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000; // 32KB chunks -- same as original
+  let binary = '';
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    // Yield to event loop between chunks to keep PS UI responsive
+    if (i + chunkSize < bytes.length) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+  return btoa(binary);
+};
+
 const toBridgeError = (code, message) => ({ code, message });
 
 const settingsStorage = {
@@ -341,15 +361,7 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
   }
 
   const fileData = await exportedFile.read({ format: formats.binary });
-
-  let binary = '';
-  const bytes = new Uint8Array(fileData);
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-  }
-
-  const base64 = btoa(binary);
+  const base64 = await arrayBufferToBase64(fileData);
 
   return {
     base64,
@@ -511,15 +523,7 @@ const exportSelectionPng = async () => {
       }
 
       const fileData = await exportedFile.read({ format: formats.binary });
-
-      let binary = '';
-      const bytes = new Uint8Array(fileData);
-      const chunkSize = 0x8000;
-      for (let i = 0; i < bytes.length; i += chunkSize) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-      }
-
-      const base64 = btoa(binary);
+      const base64 = await arrayBufferToBase64(fileData);
 
       return {
         base64,
@@ -833,20 +837,14 @@ const handlers = {
         responseData = await response.json();
       } else if (contentType.includes('image/') || contentType.includes('application/octet-stream')) {
         const arrayBuffer = await response.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuffer);
-        let binary = '';
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-        }
-        const b64 = btoa(binary);
+        const b64 = await arrayBufferToBase64(arrayBuffer);
         responseData = {
           __base64__: true,
           data: b64,
           contentType,
           // Convenience field for <img src="..."> preview in the WebView UI.
           dataUrl: `data:${contentType || 'application/octet-stream'};base64,${b64}`,
-          byteLength: bytes.byteLength
+          byteLength: arrayBuffer.byteLength
         };
       } else {
         responseData = await response.text();
