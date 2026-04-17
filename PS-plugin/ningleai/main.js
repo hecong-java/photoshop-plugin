@@ -360,11 +360,9 @@ const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
     }
   }
 
-  const fileData = await exportedFile.read({ format: formats.binary });
-  const base64 = await arrayBufferToBase64(fileData);
-
+  // Return the exported file reference -- caller reads and converts base64 OUTSIDE modal
   return {
-    base64,
+    _exportedFile: exportedFile,
     path: `${exportFolder.nativePath}/${exportedFile.name}`,
     filename: exportedFile.name,
     sourceLayerName: activeLayer.name || '',
@@ -386,13 +384,29 @@ const exportActiveLayerPng = async () => {
     throw toBridgeError('ACTIVE_LAYER_HIDDEN', 'ps.exportActiveLayerPng: active selected layer is hidden; please make it visible');
   }
 
-  return core.executeAsModal(async () => {
+  // Phase 1: Modal -- run all PS-mutating operations (dup, crop, resize, save, cleanup)
+  const internalResult = await core.executeAsModal(async () => {
     try {
       return await exportActiveLayerPngInternal(activeDoc, activeLayer);
     } catch (error) {
       throw toBridgeError('PS_EXPORT_FAILED', `ps.exportActiveLayerPng failed: ${getErrorMsg(error)}`);
     }
   }, { commandName: 'Export Active Layer PNG' });
+
+  // Phase 2: Non-modal -- file I/O and base64 conversion (per D-04: outside modal scope)
+  if (internalResult._exportedFile) {
+    const fileData = await internalResult._exportedFile.read({ format: formats.binary });
+    const base64 = await arrayBufferToBase64(fileData);
+    return {
+      base64,
+      path: internalResult.path,
+      filename: internalResult.filename,
+      sourceLayerName: internalResult.sourceLayerName,
+      sourceLayerId: internalResult.sourceLayerId
+    };
+  }
+
+  return internalResult;
 };
 
 const exportSelectionPng = async () => {
@@ -406,7 +420,7 @@ const exportSelectionPng = async () => {
     throw toBridgeError('NO_ACTIVE_LAYER', 'ps.exportSelectionPng: no active selected layer');
   }
 
-  return core.executeAsModal(async () => {
+  const result = await core.executeAsModal(async () => {
     try {
       const tempFolder = await localFileSystem.getTemporaryFolder();
       const exportFolderName = `ps-selection-export-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -491,11 +505,8 @@ const exportSelectionPng = async () => {
           }
 
           const exportedFromLayer = await exportActiveLayerPngInternal(activeDoc, copiedLayer);
-          return {
-            base64: exportedFromLayer.base64,
-            path: exportedFromLayer.path,
-            filename: exportedFromLayer.filename
-          };
+          // Pass through the internal result (contains _exportedFile) for outer handling
+          return exportedFromLayer;
         } finally {
           try {
             await action.batchPlay([
@@ -522,11 +533,9 @@ const exportSelectionPng = async () => {
         }
       }
 
-      const fileData = await exportedFile.read({ format: formats.binary });
-      const base64 = await arrayBufferToBase64(fileData);
-
+      // Return file reference -- caller reads and converts OUTSIDE modal (per D-04)
       return {
-        base64,
+        _exportedFile: exportedFile,
         path: `${exportFolder.nativePath}/${exportedFile.name}`,
         filename: exportedFile.name
       };
@@ -541,6 +550,19 @@ const exportSelectionPng = async () => {
       throw toBridgeError('PS_EXPORT_FAILED', `ps.exportSelectionPng failed: ${message}`);
     }
   }, { commandName: 'Export Selection PNG' });
+
+  // Per D-04: File I/O and base64 conversion outside modal scope
+  if (result && result._exportedFile) {
+    const fileData = await result._exportedFile.read({ format: formats.binary });
+    const base64 = await arrayBufferToBase64(fileData);
+    return {
+      base64,
+      path: result.path,
+      filename: result.filename
+    };
+  }
+
+  return result;
 };
 
 const importBase64AsLayer = async ({ base64Data, layerName, mode = 'pixel', workflowName, mimeType = 'image/png' }) => {
