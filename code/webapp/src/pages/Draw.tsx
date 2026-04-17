@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ComfyUIClient, type ComfyUIWorkflowInfo, type ComfyUIHistoryEntry, type ExperimentModelCatalog } from '../services/comfyui';
 import { useSettingsStore } from '../stores/settingsStore';
@@ -200,6 +200,29 @@ interface HistoryActionState {
   };
 }
 
+// Per D-05: Memoized output image strip item to prevent re-renders
+const OutputImageItem = React.memo(({
+  image,
+  index,
+  isActive,
+  onSelect
+}: {
+  image: { previewUrl: string };
+  index: number;
+  isActive: boolean;
+  onSelect: (index: number) => void;
+}) => (
+  <button
+    key={`draw-output-${index}`}
+    type="button"
+    className={`preview-strip-item ${isActive ? 'active' : ''}`}
+    onClick={() => onSelect(index)}
+    title={`查看第 ${index + 1} 张输出`}
+  >
+    <img src={image.previewUrl} alt={`output-${index + 1}`} data-prompt-reverse />
+  </button>
+));
+
 export const Draw = () => {
   const location = useLocation();
   // Settings
@@ -276,7 +299,7 @@ export const Draw = () => {
   const hasHandledHistoryAction = useRef(false);
   const pendingRerunPromptRef = useRef<Record<string, unknown> | null>(null);
 
-  const applyInputValuesToPrompt = (
+  const applyInputValuesToPrompt = useCallback((
     prompt: Record<string, unknown>,
     values: Record<string, string | number | boolean>
   ): Record<string, unknown> => {
@@ -318,7 +341,7 @@ export const Draw = () => {
     });
 
     return updated;
-  };
+  }, []); // Pure function -- only uses its parameters, no external dependencies
 
   // Per D-01/D-02: Forward PS keyboard shortcuts when webview has focus
   useKeyboardPassthrough();
@@ -2830,7 +2853,7 @@ export const Draw = () => {
   // Helper to render input controls
   const activeOutput = outputImages[activeOutputIndex] || null;
 
-  const openOutputViewer = (index: number) => {
+  const openOutputViewer = useCallback((index: number) => {
     if (outputImages.length === 0) return;
     setActiveOutputIndex(index);
     setProgress((prev) => ({
@@ -2838,7 +2861,7 @@ export const Draw = () => {
       previewImage: outputImages[index]?.previewUrl || prev.previewImage,
     }));
     setIsViewerOpen(true);
-  };
+  }, [outputImages]);
 
   const closeOutputViewer = () => {
     setIsViewerOpen(false);
@@ -3248,15 +3271,13 @@ export const Draw = () => {
         {outputImages.length > 1 && (
           <div className="preview-strip">
             {outputImages.map((image, index) => (
-              <button
+              <OutputImageItem
                 key={`draw-output-${index}`}
-                type="button"
-                className={`preview-strip-item ${index === activeOutputIndex ? 'active' : ''}`}
-                onClick={() => openOutputViewer(index)}
-                title={`查看第 ${index + 1} 张输出`}
-              >
-                <img src={image.previewUrl} alt={`output-${index + 1}`} data-prompt-reverse />
-              </button>
+                image={image}
+                index={index}
+                isActive={index === activeOutputIndex}
+                onSelect={openOutputViewer}
+              />
             ))}
           </div>
         )}
