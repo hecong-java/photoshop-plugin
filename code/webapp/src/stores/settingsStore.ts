@@ -25,11 +25,13 @@ interface SettingsState {
   theme: 'light' | 'dark';
   autoSave: boolean;
   psImportMode: PSImportMode;
+  connectionMode: 'direct' | 'cluster';
   comfyUI: ComfyUISettings;
   dashScope: DashScopeSettings;
   setTheme: (theme: 'light' | 'dark') => void;
   setAutoSave: (enabled: boolean) => void;
   setPsImportMode: (mode: PSImportMode) => void;
+  setConnectionMode: (mode: 'direct' | 'cluster') => void;
   setComfyUIBaseUrl: (url: string) => void;
   setComfyUIConnected: (connected: boolean, prefixMode?: 'api' | 'oss', capabilities?: ComfyUISettings['capabilities']) => void;
   setDashScopeApiKey: (apiKey: string) => void;
@@ -55,11 +57,13 @@ export const useSettingsStore = create<SettingsState>()(
       theme: 'dark',
       autoSave: true,
       psImportMode: 'pixel',
+      connectionMode: 'direct' as const,
       comfyUI: DEFAULT_COMFYUI_SETTINGS,
       dashScope: DEFAULT_DASHSCOPE_SETTINGS,
       setTheme: (theme) => set({ theme }),
       setAutoSave: (enabled) => set({ autoSave: enabled }),
       setPsImportMode: (mode) => set({ psImportMode: mode }),
+      setConnectionMode: (mode) => set({ connectionMode: mode }),
       setComfyUIBaseUrl: (baseUrl) =>
         set((state) => ({
           comfyUI: { ...state.comfyUI, baseUrl, isConnected: false, capabilities: null },
@@ -85,6 +89,7 @@ export const useSettingsStore = create<SettingsState>()(
         theme: state.theme,
         autoSave: state.autoSave,
         psImportMode: state.psImportMode,
+        connectionMode: state.connectionMode,
         comfyUI: state.comfyUI,
         dashScope: state.dashScope,
       }),

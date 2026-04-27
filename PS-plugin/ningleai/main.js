@@ -1,5 +1,5 @@
 const ALLOWED_ORIGINS = [
-  'http://123.207.74.28:8080',
+  'http://192.168.0.124:5173',
 ];
 
 const normalizeOrigin = (origin) => {
@@ -25,7 +25,7 @@ const webviewEl = document.getElementById(WEBVIEW_ID);
 
 // Auto cache-bust: append timestamp to webview URL
 if (webviewEl) {
-  const baseUrl = 'http://123.207.74.28:8080';
+  const baseUrl = 'http://192.168.0.124:5173';
   const currentSrc = webviewEl.getAttribute('src') || '';
   if (currentSrc.startsWith(baseUrl)) {
     const timestamp = Date.now();
@@ -1065,6 +1065,288 @@ const handlers = {
   },
 
   // Keyboard shortcut passthrough - forwards webapp shortcuts to Photoshop
+  // LemonGrid WebSocket connection tracking
+  // Key = connectionId, Value = WebSocket instance
+  // Declared as lazy property on handlers so it is module-level accessible.
+
+  'lemongrid.fetch': async (payload) => {
+    const { url, method = 'GET', headers = {}, body, timeout = 30000 } = payload;
+
+    if (!url || typeof url !== 'string') {
+      throw new Error('lemongrid.fetch: missing or invalid "url" parameter');
+    }
+
+    // Inject JWT Authorization header from settingsStorage
+    const lgSettings = settingsStorage.get('lemongrid') || {};
+    const token = lgSettings.accessToken || '';
+
+    try {
+      const fetchOptions = {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          ...headers
+        },
+      };
+
+      if (body && method !== 'GET') {
+        fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+      }
+
+      const performFetchWithTimeout = async (requestTimeout) => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+        try {
+          return await fetch(url, {
+            ...fetchOptions,
+            signal: controller.signal
+          });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+      };
+
+      const response = await performFetchWithTimeout(timeout);
+
+      const contentType = response.headers.get('content-type') || '';
+      let responseData;
+
+      if (contentType.includes('application/json')) {
+        responseData = await response.json();
+      } else if (contentType.includes('image/') || contentType.includes('application/octet-stream')) {
+        const arrayBuffer = await response.arrayBuffer();
+        const b64 = await arrayBufferToBase64(arrayBuffer);
+        responseData = {
+          __base64__: true,
+          data: b64,
+          contentType,
+          dataUrl: `data:${contentType || 'application/octet-stream'};base64,${b64}`,
+          byteLength: arrayBuffer.byteLength
+        };
+      } else {
+        responseData = await response.text();
+      }
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries()),
+        data: responseData
+      };
+    } catch (error) {
+      console.error('[Bridge] LemonGrid fetch error:', error);
+      const isAbortError = error && (error._name === 'AbortError' || error.name === 'AbortError');
+      throw {
+        code: isAbortError ? 'TIMEOUT' : 'FETCH_ERROR',
+        message: isAbortError
+          ? `Request timed out after ${timeout}ms`
+          : (error.message || error._message || 'Network request failed'),
+        url
+      };
+    }
+  },
+
+  'lemongrid.websocket': async (payload) => {
+    const { taskId } = payload;
+
+    if (!taskId || typeof taskId !== 'string') {
+      throw new Error('lemongrid.websocket: missing or invalid "taskId" parameter');
+    }
+
+    const lgSettings = settingsStorage.get('lemongrid') || {};
+    if (!lgSettings.serverUrl || !lgSettings.accessToken) {
+      throw new Error('lemongrid.websocket: not authenticated or server URL not configured');
+    }
+
+    // Build WebSocket URL from LemonGrid server URL
+    const wsUrl = lgSettings.serverUrl.replace(/^http/i, 'ws') + '/ws/v1/realtime?token=' + lgSettings.accessToken;
+
+    // Initialize connection tracking map if not exists
+    if (!handlers._lgWsConnections) {
+      handlers._lgWsConnections = new Map();
+    }
+
+    const connectionId = 'lg-ws-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
+
+    return new Promise((resolve, reject) => {
+      try {
+        const ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          // Resolve the Bridge call with connection ID once WS is open
+          resolve({ connectionId });
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            // Relay message to webview
+            if (webviewEl && typeof webviewEl.postMessage === 'function') {
+              webviewEl.postMessage({
+                type: 'lemongrid.ws.message',
+                taskId,
+                connectionId,
+                data
+              });
+            }
+          } catch (parseError) {
+            console.warn('[Bridge] LemonGrid WS message parse error:', parseError);
+          }
+        };
+
+        ws.onerror = (event) => {
+          console.error('[Bridge] LemonGrid WS error:', event);
+          if (webviewEl && typeof webviewEl.postMessage === 'function') {
+            webviewEl.postMessage({
+              type: 'lemongrid.ws.close',
+              taskId,
+              connectionId,
+              code: 'ERROR',
+              reason: 'WebSocket error'
+            });
+          }
+          // Clean up from map
+          if (handlers._lgWsConnections) {
+            handlers._lgWsConnections.delete(connectionId);
+          }
+        };
+
+        ws.onclose = (event) => {
+          if (webviewEl && typeof webviewEl.postMessage === 'function') {
+            webviewEl.postMessage({
+              type: 'lemongrid.ws.close',
+              taskId,
+              connectionId,
+              code: event.code,
+              reason: event.reason || 'Connection closed'
+            });
+          }
+          // Clean up from map
+          if (handlers._lgWsConnections) {
+            handlers._lgWsConnections.delete(connectionId);
+          }
+        };
+
+        // Store in connection map for cleanup
+        handlers._lgWsConnections.set(connectionId, ws);
+
+      } catch (error) {
+        reject({
+          code: 'WS_ERROR',
+          message: error.message || 'Failed to create WebSocket connection',
+          taskId
+        });
+      }
+    });
+  },
+
+  'lemongrid.websocket.close': async (payload) => {
+    const { connectionId } = payload;
+
+    if (!connectionId || typeof connectionId !== 'string') {
+      throw new Error('lemongrid.websocket.close: missing or invalid "connectionId" parameter');
+    }
+
+    if (!handlers._lgWsConnections) {
+      return { success: true, reason: 'no active connections' };
+    }
+
+    const ws = handlers._lgWsConnections.get(connectionId);
+    if (ws) {
+      try {
+        ws.close();
+      } catch (e) {
+        // Ignore close errors
+      }
+      handlers._lgWsConnections.delete(connectionId);
+      return { success: true };
+    }
+
+    return { success: true, reason: 'connection not found' };
+  },
+
+  'lemongrid.uploadAsset': async (payload) => {
+    const { url, filename, base64Data, mimeType = 'image/png', libraryType = 'REFERENCE' } = payload;
+
+    if (!url || typeof url !== 'string') {
+      throw new Error('lemongrid.uploadAsset: missing or invalid "url" parameter');
+    }
+    if (!filename || typeof filename !== 'string') {
+      throw new Error('lemongrid.uploadAsset: missing or invalid "filename" parameter');
+    }
+    if (!base64Data) {
+      throw new Error('lemongrid.uploadAsset: missing "base64Data" parameter');
+    }
+
+    // Inject JWT Authorization header from settingsStorage
+    const lgSettings = settingsStorage.get('lemongrid') || {};
+    const token = lgSettings.accessToken || '';
+
+    try {
+      // Convert base64 to binary
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+
+      // Build multipart/form-data
+      const boundary = '----FormBoundary' + Date.now();
+      const parts = [];
+
+      // Add library_type as additional form field (LemonGrid specific)
+      parts.push(`--${boundary}\r\n`);
+      parts.push(`Content-Disposition: form-data; name="library_type"\r\n\r\n`);
+      parts.push(`${libraryType}\r\n`);
+
+      // Add file part (name="file" for LemonGrid, not "image")
+      parts.push(`--${boundary}\r\n`);
+      parts.push(`Content-Disposition: form-data; name="file"; filename="${filename}"\r\n`);
+      parts.push(`Content-Type: ${mimeType}\r\n\r\n`);
+
+      const headerBlob = new Blob([parts.join('')]);
+      const footerBlob = new Blob(['\r\n--' + boundary + '--\r\n']);
+      const formDataBlob = new Blob([headerBlob, bytes, footerBlob]);
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+        },
+        body: formDataBlob
+      });
+
+      let responseData;
+      const responseText = await response.text();
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (parseError) {
+        throw new Error(`LemonGrid upload returned non-JSON response (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+      }
+
+      if (!response.ok) {
+        throw new Error(`LemonGrid upload failed (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+      }
+
+      return {
+        ok: response.ok,
+        status: response.status,
+        statusText: response.statusText,
+        data: responseData
+      };
+    } catch (error) {
+      console.error('[Bridge] LemonGrid upload error:', error);
+      throw {
+        code: 'UPLOAD_ERROR',
+        message: error.message || 'Upload failed',
+        url
+      };
+    }
+  },
+
   'ps.executeShortcut': async (payload) => {
     const { key, ctrl, shift, alt } = payload || {};
 
