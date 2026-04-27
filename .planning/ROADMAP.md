@@ -218,6 +218,16 @@ Plans:
 - [x] 05.1-02-PLAN.md — Async base64 conversion and executeAsModal scope reduction (PERF-02, PERF-03)
 - [x] 05.1-03-PLAN.md — React render optimization and secondary wins (PERF-04, PERF-05, PERF-06, PERF-07)
 
+### Phase 6: LemonGrid Integration
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 5
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 6 to break down)
+
 ---
 
 *Roadmap created: 2026-03-11*

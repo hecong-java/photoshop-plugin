@@ -86,6 +86,7 @@ Plan: 2 of 3
 - Phase 4 added: 工作流参数预设功能
 - Phase 5 added: 图片提示词反推功能
 - Phase 05.1 inserted after Phase 05: plugin-performance-fix (URGENT)
+- Phase 6 added: LemonGrid Integration
 
 ### Active TODOs
 
