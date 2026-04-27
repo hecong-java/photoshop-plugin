@@ -92,6 +92,7 @@ Plans:
 | 4. 工作流参数预设功能 | 0/3 | Not started | - |
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
 | 05.1. Plugin Performance Fix | 3/3 | Complete   | 2026-04-17 |
+| 6. LemonGrid Integration | 0/3 | Planning   | - |
 
 ---
 
@@ -220,15 +221,31 @@ Plans:
 
 ### Phase 6: LemonGrid Integration
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Add "Cluster Mode" to the Photoshop ComfyUI Plugin that connects to LemonGrid's GPU cluster management platform. Users can switch between Direct Mode (existing single ComfyUI instance) and Cluster Mode (LemonGrid platform with multi-GPU scheduling). Cluster Mode uses LemonGrid's template system, JWT authentication, and task API.
+
 **Depends on:** Phase 5
-**Plans:** 0 plans
+
+**Requirements:** D-01 through D-105 (decisions in 06-CONTEXT.md)
+
+**Success Criteria** (what must be TRUE):
+1. Users can toggle between Direct Mode and Cluster Mode in Settings
+2. Cluster Mode authenticates via LemonGrid JWT login
+3. Template list replaces workflow list in Cluster Mode
+4. Parameters render dynamically from template param_schema
+5. Tasks submit via LemonGrid API and track progress via WebSocket/polling
+6. Results auto-download and import to PS layers
+7. Mini task list shows all cluster tasks with state badges and actions
+8. History panel has source filter for Direct/Cluster/All
+9. Direct Mode remains completely unchanged
+
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 6 to break down)
+- [ ] 06-01-PLAN.md — Bridge handlers, stores, auth service, login modal, and Settings mode toggle
+- [ ] 06-02-PLAN.md — LemonGridClient service, template system, dynamic param UI, and preset integration
+- [ ] 06-03-PLAN.md — Mini task list, WebSocket progress, polling fallback, retry/cancel, and history filter
 
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-04-16 - Phase 05.1 planned with 3 plans*
+*Last updated: 2026-04-27 - Phase 6 planned with 3 plans*
