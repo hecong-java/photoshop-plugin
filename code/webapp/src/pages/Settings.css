@@ -394,6 +394,76 @@
 }
 
 
+/* Mode Toggle - per D-93 */
+.mode-toggle .mode-toggle-group {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.mode-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary, #a0a0a0);
+}
+
+.mode-option input[type="radio"] {
+  accent-color: #4299e1;
+}
+
+.mode-option input[type="radio"]:checked + span {
+  color: var(--text-primary, #e0e0e0);
+  font-weight: 500;
+}
+
+/* LemonGrid Connection Card */
+.lemongrid-connection .lg-account-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.lg-user-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lg-username {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary, #e0e0e0);
+}
+
+.lg-role {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: rgba(66, 153, 225, 0.15);
+  color: #4299e1;
+}
+
+.lg-logout-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #f56565;
+  background: rgba(245, 101, 101, 0.1);
+  border: 1px solid rgba(245, 101, 101, 0.3);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.lg-logout-btn:hover {
+  background: rgba(245, 101, 101, 0.2);
+}
+
 /* CORS Help Section */
 .cors-help-section { margin-top: 16px; }
 .cors-accordion {

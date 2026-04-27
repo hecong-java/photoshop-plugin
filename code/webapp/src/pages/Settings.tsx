@@ -1,7 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useLemonGridStore } from '../stores/lemongridStore';
 import { ComfyUIClient, type ComfyUICapabilities } from '../services/comfyui';
 import { DASHSCOPE_MODELS } from '../services/dashscope';
+import { sendBridgeMessage } from '../services/upload';
+import { ensureValidToken } from '../services/lemongrid-auth';
+import { LoginModal } from '../components/LoginModal';
 import './Settings.css';
 
 export const Settings = () => {
@@ -13,9 +17,23 @@ export const Settings = () => {
   const setDashScopeApiKey = useSettingsStore((state) => state.setDashScopeApiKey);
   const setDashScopeModel = useSettingsStore((state) => state.setDashScopeModel);
 
+  const connectionMode = useSettingsStore((state) => state.connectionMode);
+  const setConnectionMode = useSettingsStore((state) => state.setConnectionMode);
+
+  const lgIsConnected = useLemonGridStore((state) => state.isConnected);
+  const lgServerUrl = useLemonGridStore((state) => state.serverUrl);
+  const lgUsername = useLemonGridStore((state) => state.username);
+  const lgUserRole = useLemonGridStore((state) => state.userRole);
+  const lgSetServerUrl = useLemonGridStore((state) => state.setServerUrl);
+  const lgClearAuth = useLemonGridStore((state) => state.clearAuth);
+  const lgSetConnected = useLemonGridStore((state) => state.setConnected);
+  const lgTasks = useLemonGridStore((state) => state.tasks);
+
   const [isProbing, setIsProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeResult, setProbeResult] = useState<ComfyUICapabilities | null>(null);
+
+  const [showLoginModal, setShowLoginModal] = useState(false);
 
   // Connection status indicator
   const getConnectionStatus = () => {
@@ -28,7 +46,7 @@ export const Settings = () => {
 
   // Probe connection on mount if we have a saved URL
   useEffect(() => {
-    if (comfyUI.baseUrl && comfyUI.isConnected) {
+    if (connectionMode === 'direct' && comfyUI.baseUrl && comfyUI.isConnected) {
       handleProbeConnection();
     }
   }, []);
@@ -93,67 +111,213 @@ export const Settings = () => {
     setComfyUIBaseUrl(e.target.value);
   };
 
+  // Mode change handler per D-48, D-46, D-75
+  const handleModeChange = async (mode: 'direct' | 'cluster') => {
+    if (mode === connectionMode) return;
+
+    // D-48: Block mode switching while LemonGrid tasks are running
+    if (mode === 'direct') {
+      const tasks = Object.values(useLemonGridStore.getState().tasks);
+      const runningTasks = tasks.filter(t =>
+        ['PENDING', 'QUEUED', 'SYNCING', 'RUNNING'].includes(t.status));
+      if (runningTasks.length > 0) {
+        alert('有正在运行的集群任务，请等待完成后再切换模式');
+        return;
+      }
+    }
+
+    setConnectionMode(mode);
+
+    if (mode === 'cluster') {
+      // D-75: Auto-open login modal if not authenticated
+      const lg = useLemonGridStore.getState();
+      if (!lg.isConnected || !lg.accessToken) {
+        setShowLoginModal(true);
+      } else {
+        // D-73: Try silent token validation
+        try {
+          await ensureValidToken();
+        } catch {
+          setShowLoginModal(true);
+        }
+      }
+    }
+  };
+
+  // Logout handler per D-76, D-87
+  const handleLogout = async () => {
+    // D-87: Cancel all running cluster tasks first (warn user)
+    const tasks = Object.values(lgTasks);
+    const runningTasks = tasks.filter(t =>
+      ['PENDING', 'QUEUED', 'SYNCING', 'RUNNING'].includes(t.status));
+
+    if (runningTasks.length > 0) {
+      const confirmed = window.confirm(`有 ${runningTasks.length} 个正在运行的集群任务，确定要登出吗？`);
+      if (!confirmed) return;
+    }
+
+    // Clear auth but keep serverUrl and username per D-76
+    lgClearAuth();
+
+    // Clear Bridge settings
+    try {
+      await sendBridgeMessage('settings.set', {
+        key: 'lemongrid',
+        value: null,
+      });
+    } catch {
+      // Bridge may not be available in browser mode
+    }
+
+    lgSetConnected(false);
+  };
+
+  // LemonGrid connection status
+  const getLgConnectionStatus = () => {
+    if (!lgIsConnected) return { text: '未连接', class: 'disconnected' };
+    return { text: '已连接', class: 'connected' };
+  };
+
+  const lgConnectionStatus = getLgConnectionStatus();
+
   return (
     <div className="settings-page">
       <h1 className="settings-title">设置</h1>
 
       <div className="settings-grid">
-        {/* ComfyUI Connection Column */}
-        <div className="settings-card comfy-connection">
-          <div className="card-header">
-            <h2>ComfyUI 连接</h2>
-            <span className={`connection-status ${connectionStatus.class}`}>
-              {connectionStatus.text}
-            </span>
-          </div>
-
-          <div className="connection-form">
-            <div className="form-group">
-              <label htmlFor="comfy-url">服务器地址</label>
+        {/* Mode Toggle - per D-93, D-94 */}
+        <div className="settings-card mode-toggle">
+          <h2>连接模式</h2>
+          <div className="mode-toggle-group">
+            <label className="mode-option">
               <input
-                id="comfy-url"
-                type="text"
-                value={comfyUI.baseUrl}
-                onChange={handleUrlChange}
-                placeholder="http://localhost:8188"
-                className="text-input"
+                type="radio"
+                name="connectionMode"
+                value="direct"
+                checked={connectionMode === 'direct'}
+                onChange={() => handleModeChange('direct')}
               />
-            </div>
-
-            <button
-              onClick={handleProbeConnection}
-              disabled={isProbing}
-              className="test-connection-btn"
-            >
-              {isProbing ? '连接中...' : '测试连接'}
-            </button>
-          </div>
-
-          {probeError && (
-            <div className="error-message">
-              <span className="error-icon">⚠</span>
-              {probeError}
-            </div>
-          )}
-
-          {/* CORS Help Accordion */}
-          <div className="cors-help-section">
-            <details className="cors-accordion">
-              <summary className="cors-accordion-header">
-                <span className="cors-icon">🔒</span>
-                CORS 配置帮助
-              </summary>
-              <div className="cors-accordion-content">
-                <p>此应用在浏览器/webview中运行，需要ComfyUI服务器返回 <code>Access-Control-Allow-Origin</code> 头。</p>
-                <h4>启动 ComfyUI 时添加以下参数：</h4>
-                <code className="cors-command">python main.py --enable-cors-header "*"</code>
-                <p className="cors-note">或者限制特定来源: <code>--enable-cors-header "http://192.168.0.50:3000"</code></p>
-              </div>
-            </details>
+              <span>直连 (ComfyUI)</span>
+            </label>
+            <label className="mode-option">
+              <input
+                type="radio"
+                name="connectionMode"
+                value="cluster"
+                checked={connectionMode === 'cluster'}
+                onChange={() => handleModeChange('cluster')}
+              />
+              <span>集群 (LemonGrid)</span>
+            </label>
           </div>
         </div>
 
-        {/* DashScope Config Column */}
+        {/* ComfyUI Connection Column - per D-94: visible only in direct mode */}
+        {connectionMode === 'direct' && (
+          <div className="settings-card comfy-connection">
+            <div className="card-header">
+              <h2>ComfyUI 连接</h2>
+              <span className={`connection-status ${connectionStatus.class}`}>
+                {connectionStatus.text}
+              </span>
+            </div>
+
+            <div className="connection-form">
+              <div className="form-group">
+                <label htmlFor="comfy-url">服务器地址</label>
+                <input
+                  id="comfy-url"
+                  type="text"
+                  value={comfyUI.baseUrl}
+                  onChange={handleUrlChange}
+                  placeholder="http://localhost:8188"
+                  className="text-input"
+                />
+              </div>
+
+              <button
+                onClick={handleProbeConnection}
+                disabled={isProbing}
+                className="test-connection-btn"
+              >
+                {isProbing ? '连接中...' : '测试连接'}
+              </button>
+            </div>
+
+            {probeError && (
+              <div className="error-message">
+                <span className="error-icon">⚠</span>
+                {probeError}
+              </div>
+            )}
+
+            {/* CORS Help Accordion */}
+            <div className="cors-help-section">
+              <details className="cors-accordion">
+                <summary className="cors-accordion-header">
+                  <span className="cors-icon">🔒</span>
+                  CORS 配置帮助
+                </summary>
+                <div className="cors-accordion-content">
+                  <p>此应用在浏览器/webview中运行，需要ComfyUI服务器返回 <code>Access-Control-Allow-Origin</code> 头。</p>
+                  <h4>启动 ComfyUI 时添加以下参数：</h4>
+                  <code className="cors-command">python main.py --enable-cors-header "*"</code>
+                  <p className="cors-note">或者限制特定来源: <code>--enable-cors-header "http://192.168.0.50:3000"</code></p>
+                </div>
+              </details>
+            </div>
+          </div>
+        )}
+
+        {/* LemonGrid Connection Column - per D-94: visible only in cluster mode */}
+        {connectionMode === 'cluster' && (
+          <div className="settings-card lemongrid-connection">
+            <div className="card-header">
+              <h2>LemonGrid 连接</h2>
+              <span className={`connection-status ${lgConnectionStatus.class}`}>
+                {lgConnectionStatus.text}
+              </span>
+            </div>
+
+            <div className="connection-form">
+              <div className="form-group">
+                <label htmlFor="lg-url">服务器地址</label>
+                <input
+                  id="lg-url"
+                  type="text"
+                  value={lgServerUrl}
+                  onChange={(e) => lgSetServerUrl(e.target.value)}
+                  placeholder="https://lemongrid.example.com"
+                  className="text-input"
+                />
+              </div>
+
+              {!lgIsConnected ? (
+                <button
+                  onClick={() => setShowLoginModal(true)}
+                  className="test-connection-btn"
+                >
+                  登录
+                </button>
+              ) : (
+                <div className="lg-account-info">
+                  <div className="lg-user-info">
+                    <span className="lg-username">{lgUsername}</span>
+                    {lgUserRole && <span className="lg-role">{lgUserRole}</span>}
+                  </div>
+                  <button
+                    onClick={handleLogout}
+                    className="lg-logout-btn"
+                  >
+                    登出
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* DashScope Config Column - always visible per D-94 */}
         <div className="settings-card dashscope-config">
           <div className="card-header">
             <h2>提示词反推</h2>
@@ -190,55 +354,61 @@ export const Settings = () => {
           </div>
         </div>
 
-        {/* Capabilities Matrix Column */}
-        <div className="settings-card capabilities-matrix">
-          <h2>能力矩阵</h2>
-          
-          {comfyUI.isConnected && probeResult ? (
-            <div className="capabilities-list">
-              <div className={`capability-item ${probeResult.endpoints.objectInfo?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.objectInfo?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">节点信息</span>
-              </div>
-              <div className={`capability-item ${probeResult.endpoints.workflowList?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.workflowList?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">列出工作流</span>
-              </div>
-              <div className={`capability-item ${probeResult.endpoints.workflowRead?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.workflowRead?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">读取工作流</span>
-              </div>
-              <div className={`capability-item ${probeResult.endpoints.prompt?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.prompt?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">生成图像</span>
-              </div>
-              <div className={`capability-item ${probeResult.endpoints.history?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.history?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">历史记录</span>
-              </div>
-              <div className={`capability-item ${probeResult.endpoints.viewImage?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.viewImage?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">查看图片</span>
-              </div>
-              <div className={`capability-item ${probeResult.endpoints.uploadImage?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.uploadImage?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">上传图片</span>
-              </div>
-              <div className={`capability-item ${probeResult.endpoints.ws?.status === 'ok' ? 'available' : 'unavailable'}`}>
-                <span className="capability-icon">{probeResult.endpoints.ws?.status === 'ok' ? '✓' : '✗'}</span>
-                <span className="capability-name">WebSocket连接</span>
-              </div>
-            </div>
-          ) : (
+        {/* Capabilities Matrix Column - per D-94: visible only in direct mode */}
+        {connectionMode === 'direct' && (
+          <div className="settings-card capabilities-matrix">
+            <h2>能力矩阵</h2>
 
-            <div className="capabilities-placeholder">
-              <span className="placeholder-icon">🔌</span>
-              <p>请先连接ComfyUI服务器</p>
-            </div>
-          )}
-        </div>
-
+            {comfyUI.isConnected && probeResult ? (
+              <div className="capabilities-list">
+                <div className={`capability-item ${probeResult.endpoints.objectInfo?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.objectInfo?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">节点信息</span>
+                </div>
+                <div className={`capability-item ${probeResult.endpoints.workflowList?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.workflowList?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">列出工作流</span>
+                </div>
+                <div className={`capability-item ${probeResult.endpoints.workflowRead?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.workflowRead?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">读取工作流</span>
+                </div>
+                <div className={`capability-item ${probeResult.endpoints.prompt?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.prompt?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">生成图像</span>
+                </div>
+                <div className={`capability-item ${probeResult.endpoints.history?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.history?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">历史记录</span>
+                </div>
+                <div className={`capability-item ${probeResult.endpoints.viewImage?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.viewImage?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">查看图片</span>
+                </div>
+                <div className={`capability-item ${probeResult.endpoints.uploadImage?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.uploadImage?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">上传图片</span>
+                </div>
+                <div className={`capability-item ${probeResult.endpoints.ws?.status === 'ok' ? 'available' : 'unavailable'}`}>
+                  <span className="capability-icon">{probeResult.endpoints.ws?.status === 'ok' ? '✓' : '✗'}</span>
+                  <span className="capability-name">WebSocket连接</span>
+                </div>
+              </div>
+            ) : (
+              <div className="capabilities-placeholder">
+                <span className="placeholder-icon">🔌</span>
+                <p>请先连接ComfyUI服务器</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
+      <LoginModal
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        onLoginSuccess={() => setShowLoginModal(false)}
+      />
     </div>
   );
 };
