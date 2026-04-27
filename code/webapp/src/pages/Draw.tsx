@@ -12,6 +12,8 @@ import { usePresetStore } from '../stores/presetStore';
 import type { PresetFile } from '../types/preset';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
+import { LemonGridClient, isImageParam, renderParamDefault, LEMONGRID_ERROR_SUGGESTIONS, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField } from '../services/lemongrid';
+import { useLemonGridStore } from '../stores/lemongridStore';
 import './Draw.css';
 
 // Types for workflow inputs
@@ -231,7 +233,7 @@ export const Draw = () => {
   const psImportMode = useSettingsStore((state) => state.psImportMode);
 
   // Config store for filtering displayed nodes
-  const { shouldDisplayNode, getAllowedInputs, loadConfig } = useConfigStore();
+  const { shouldDisplayNode, getAllowedInputs, loadConfig, config } = useConfigStore();
 
   // ComfyUI queue store
   const { queueRunning, queuePending, fetchQueue, setBaseUrl: setComfyUIBaseUrl } = useComfyUIStore();
@@ -248,6 +250,18 @@ export const Draw = () => {
   const [isWorkflowPickerOpen, setIsWorkflowPickerOpen] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [uploadedImagePreviews, setUploadedImagePreviews] = useState<Record<string, string>>({});
+
+  // Cluster Mode state per D-50, D-51
+  const connectionMode = useSettingsStore((s) => s.connectionMode);
+  const lemonGridStore = useLemonGridStore();
+  const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl } = lemonGridStore;
+
+  // Template state (replaces workflow state in Cluster Mode)
+  const [clusterTemplates, setClusterTemplates] = useState<LemonGridTemplateSummary[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<LemonGridTemplateDetail | null>(null);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [templateParams, setTemplateParams] = useState<Record<string, unknown>>({});
+  const [templateImageInputs, setTemplateImageInputs] = useState<Record<string, string>>({});
   const latestInputValuesRef = useRef<Record<string, string | number | boolean>>({});
   // Refs for workflow cache - store blob and base64 data for image inputs
   const uploadedImageBlobsRef = useRef<Record<string, Blob>>({});
@@ -432,6 +446,55 @@ export const Draw = () => {
       setComfyUIBaseUrl(comfyUISettings.baseUrl);
     }
   }, [comfyUISettings.baseUrl, setComfyUIBaseUrl]);
+
+  // Cluster Mode: Load templates when connectionMode is 'cluster' and connected
+  // Per D-04: Switching modes reloads from new source
+  // Per D-15: Block until connected
+  // Per D-05: Strictly separated, no mixing
+  useEffect(() => {
+    if (connectionMode !== 'cluster') {
+      setClusterTemplates([]);
+      setSelectedTemplate(null);
+      setTemplateParams({});
+      setTemplateImageInputs({});
+      return;
+    }
+    if (!isLemonGridConnected || !lemonGridServerUrl) return;
+
+    let cancelled = false;
+    const loadTemplates = async () => {
+      setIsLoadingTemplates(true);
+      try {
+        const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+        const templates = await client.listTemplates();
+        if (!cancelled) {
+          setClusterTemplates(templates);
+        }
+      } catch (error) {
+        console.error('[Draw] Failed to load LemonGrid templates:', error);
+        if (!cancelled) {
+          setClusterTemplates([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingTemplates(false);
+        }
+      }
+    };
+    loadTemplates();
+    return () => { cancelled = true; };
+  }, [connectionMode, isLemonGridConnected, lemonGridServerUrl]);
+
+  // Cluster Mode: Load presets when template changes
+  // Per D-10, D-104: Presets work per-template using template_id as key
+  useEffect(() => {
+    if (connectionMode !== 'cluster') return;
+    if (selectedTemplate) {
+      loadPresets(selectedTemplate.id);
+    } else {
+      clearSelection();
+    }
+  }, [connectionMode, selectedTemplate?.id]);
 
   // Fetch queue on mount and when connection status changes
   useEffect(() => {
@@ -1497,6 +1560,7 @@ export const Draw = () => {
             const widgetInputs = Array.isArray(nodeData.inputs)
               ? nodeData.inputs
                   .filter((input) => input && typeof input === 'object')
+                  .filter((input) => (input as Record<string, unknown>).type !== 'IMAGEUPLOAD')
                   .map((input) => {
                     const inputRecord = input as Record<string, unknown>;
                     const widgetRecord = inputRecord.widget;
@@ -1746,6 +1810,10 @@ export const Draw = () => {
               if (inputRecord.link !== null && inputRecord.link !== undefined) {
                 return;
               }
+              // Skip internal upload widgets (LoadImage's IMAGEUPLOAD)
+              if (inputRecord.type === 'IMAGEUPLOAD') {
+                return;
+              }
 
               const generatedName = `${inputName}_${nodeId}`;
               if (inputs.some((item) => item.name === generatedName)) return;
@@ -1813,6 +1881,77 @@ export const Draw = () => {
                   label: resolveInputLabel(inputName, inputRecord.label),
                   default: normalizeSelectDefault(undefined, options, numericMeta.defaultValue),
                   options,
+                });
+              }
+            });
+          }
+
+          // Fallback: use objectInfo required keys to parse widgets_values
+          // for workflow formats that lack both nodeData.widgets and inputs[].widget
+          if (requiredInfo && Array.isArray(widgetValues) && widgetValues.length > 0) {
+            const addedNames = new Set(inputs.map(i => i.name));
+            const requiredKeys = Object.keys(requiredInfo);
+            let valueCursor = 0;
+            requiredKeys.forEach((inputName) => {
+              const generatedName = `${inputName}_${nodeId}`;
+
+              // Always advance cursor to stay synchronized with widgets_values order,
+              // even when skipping linked or already-added inputs
+              if (valueCursor >= widgetValues.length) return;
+              const candidateValue = widgetValues[valueCursor];
+              valueCursor++;
+
+              if (addedNames.has(generatedName)) return;
+              if (linkedInputNames.has(inputName)) return;
+
+              const config = getInputConfig(inputName);
+              const configOptions = extractOptions(config);
+              const modelOptions = resolveModelOptions(inputName);
+              const numericMeta = extractNumericMeta(config);
+              const inputTypeTag = extractInputTypeTag(config);
+              const defaultValue = candidateValue;
+
+              if ((modelOptions && modelOptions.length > 0) || (configOptions && configOptions.length > 0)) {
+                const options = modelOptions && modelOptions.length > 0 ? modelOptions : configOptions;
+                inputs.push({
+                  name: generatedName,
+                  type: 'select',
+                  label: resolveInputLabel(inputName),
+                  default: normalizeSelectDefault(defaultValue, options, numericMeta.defaultValue),
+                  options,
+                });
+                return;
+              }
+
+              if (typeof defaultValue === 'number' || inputTypeTag === 'INT' || inputTypeTag === 'FLOAT') {
+                inputs.push({
+                  name: generatedName,
+                  type: 'number',
+                  label: resolveInputLabel(inputName),
+                  default: normalizeNumericDefault(defaultValue, undefined, numericMeta.defaultValue),
+                  min: numericMeta.min,
+                  max: numericMeta.max,
+                  step: numericMeta.step,
+                });
+                return;
+              }
+
+              if (typeof defaultValue === 'boolean' || inputTypeTag === 'BOOLEAN') {
+                inputs.push({
+                  name: generatedName,
+                  type: 'boolean',
+                  label: resolveInputLabel(inputName),
+                  default: normalizeBooleanDefault(defaultValue, undefined, numericMeta.defaultValue),
+                });
+                return;
+              }
+
+              if (typeof defaultValue === 'string') {
+                inputs.push({
+                  name: generatedName,
+                  type: 'text',
+                  label: resolveInputLabel(inputName),
+                  default: defaultValue,
                 });
               }
             });
@@ -1890,6 +2029,34 @@ export const Draw = () => {
       return next;
     });
   };
+
+  // Must be defined before handleFillPrompt which depends on it
+  const getInputNodeOrder = (input: WorkflowInput): number => {
+    const directNodeId = input.nodeId;
+    if (typeof directNodeId === 'string' && directNodeId.trim() !== '' && !Number.isNaN(Number(directNodeId))) {
+      return Number(directNodeId);
+    }
+
+    const splitIndex = input.name.lastIndexOf('_');
+    if (splitIndex > 0 && splitIndex < input.name.length - 1) {
+      const parsed = Number(input.name.slice(splitIndex + 1));
+      if (!Number.isNaN(parsed)) {
+        return parsed;
+      }
+    }
+
+    return Number.MAX_SAFE_INTEGER;
+  };
+
+  const sortedWorkflowInputs = useMemo(() => {
+    return [...workflowInputs].sort((a, b) => {
+      const nodeDiff = getInputNodeOrder(a) - getInputNodeOrder(b);
+      if (nodeDiff !== 0) {
+        return nodeDiff;
+      }
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+  }, [workflowInputs]);
 
   const handleFillPrompt = useCallback((text: string) => {
     // Find the first text input (CLIPTextEncode node prompt)
@@ -2496,6 +2663,148 @@ export const Draw = () => {
     await uploadImageFileToInput(file, imageInputName, blob);
   };
 
+  // Cluster Mode: Handle template selection
+  // Per D-08: Fetch full template detail on demand when user selects a template
+  // Per D-12: Show template description and help_text
+  // Per D-16: Allow offline parameter editing using cached param_schema
+  const handleTemplateSelect = async (template: LemonGridTemplateSummary) => {
+    if (!lemonGridServerUrl) return;
+
+    try {
+      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+      const detail = await client.getTemplateDetail(template.id);
+
+      // Per D-17: Detect version change and notify user
+      if (selectedTemplate && selectedTemplate.id === detail.id && selectedTemplate.version !== detail.version) {
+        console.log('[Draw] Template version changed:', selectedTemplate.version, '->', detail.version);
+        // Drop old param values that no longer match the updated schema
+        const newFieldNames = new Set(detail.param_schema.map(f => f.name));
+        const cleanedParams: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(templateParams)) {
+          if (newFieldNames.has(key)) {
+            cleanedParams[key] = value;
+          }
+        }
+        setTemplateParams(cleanedParams);
+      } else {
+        // Per D-09: Initialize templateParams with defaults from param_schema
+        const defaults: Record<string, unknown> = {};
+        for (const field of detail.param_schema) {
+          defaults[field.name] = renderParamDefault(field);
+        }
+        setTemplateParams(defaults);
+      }
+
+      // Per D-19: Auto-detect image inputs
+      const imageInputs: Record<string, string> = {};
+      for (const field of detail.param_schema) {
+        if (isImageParam(field)) {
+          imageInputs[field.name] = '';
+        }
+      }
+      setTemplateImageInputs(imageInputs);
+      setSelectedTemplate(detail);
+      setUploadedImagePreviews({});
+    } catch (error) {
+      console.error('[Draw] Failed to load template detail:', error);
+    }
+  };
+
+  // Cluster Mode: Handle template parameter change
+  const handleTemplateParamChange = (paramName: string, value: unknown) => {
+    setTemplateParams(prev => ({ ...prev, [paramName]: value }));
+  };
+
+  // Cluster Mode: Handle image upload for a template image param
+  // Per D-18, D-19: Same image input UI, upload target is LemonGrid asset API
+  const handleTemplateImageUpload = async (file: File, paramName: string) => {
+    if (!lemonGridServerUrl) return;
+
+    // Show preview immediately
+    const previewUrl = URL.createObjectURL(file);
+    setUploadedImagePreviews(prev => ({ ...prev, [paramName]: previewUrl }));
+
+    try {
+      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+      const result = await client.uploadAsset(file);
+      // Store asset_id as param value
+      handleTemplateParamChange(paramName, result.id);
+      setTemplateImageInputs(prev => ({ ...prev, [paramName]: result.filename }));
+    } catch (error) {
+      console.error('[Draw] Failed to upload image to LemonGrid:', error);
+      setUploadedImagePreviews(prev => {
+        const next = { ...prev };
+        delete next[paramName];
+        return next;
+      });
+    }
+  };
+
+  // Cluster Mode: Submit task stub
+  // Per D-50: Same handleGenerate function with connectionMode branch
+  // Per D-41: Snapshot parameter values at submit time
+  // NOTE: Polling/WS progress tracking and result download are handled by Plan 06-03
+  const handleClusterSubmit = async () => {
+    if (!isLemonGridConnected || !selectedTemplate || !lemonGridServerUrl) return;
+
+    setIsGenerating(true);
+    setProgress({
+      status: 'generating',
+      percentage: 0,
+      currentNode: '提交任务中...',
+      previewImage: null,
+      error: null,
+      promptId: null,
+    });
+
+    try {
+      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+      // Per D-41: Snapshot parameter values at submit time
+      const snapshotParams = { ...templateParams };
+      const result = await client.submitTask(selectedTemplate.id, snapshotParams);
+
+      // Add task to lemongridStore for tracking
+      useLemonGridStore.getState().updateTask(result.id, {
+        taskId: result.id,
+        templateId: selectedTemplate.id,
+        templateName: selectedTemplate.name,
+        status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
+        progress: 0,
+        progressDetail: null,
+        queuePosition: null,
+        errorCode: null,
+        errorMessage: null,
+        outputAssetIds: [],
+        submittedAt: Date.now(),
+        completedAt: null,
+        durationSeconds: null,
+        params: snapshotParams,
+        thumbnail: null,
+      });
+
+      setProgress(prev => ({
+        ...prev,
+        status: 'generating',
+        currentNode: '任务已提交，等待处理...',
+        promptId: result.id,
+      }));
+
+      // NOTE: Polling/WS progress tracking and result download are handled by Plan 06-03
+      // This function only submits and stores the initial task state
+      setIsGenerating(false);
+    } catch (error) {
+      // Per D-45: Show user-friendly error
+      const errorCode = error instanceof Error ? error.message : '任务提交失败';
+      const suggestion = LEMONGRID_ERROR_SUGGESTIONS[errorCode] || LEMONGRID_ERROR_SUGGESTIONS.UNKNOWN;
+      setProgress(prev => ({
+        ...prev,
+        status: 'error',
+        error: `${suggestion}`,
+      }));
+      setIsGenerating(false);
+    }
+  };
+
   const syncGeneratedImageToPs = async (blob: Blob, comfyFilename: string) => {
     if (!isUXPWebView()) {
       return;
@@ -2513,6 +2822,16 @@ export const Draw = () => {
   };
 
   const handleGenerate = async () => {
+    // Per D-50: Branch on connectionMode for cluster vs direct
+    const currentConnectionMode = useSettingsStore.getState().connectionMode;
+    if (currentConnectionMode === 'cluster') {
+      // Per D-15: Must be connected to LemonGrid
+      if (!isLemonGridConnected || !selectedTemplate) return;
+      await handleClusterSubmit();
+      return;
+    }
+
+    // Direct Mode (existing flow) continues unchanged below
     // Use ref to get the latest workflow (avoids stale closure issues)
     const currentWorkflow = selectedWorkflowRef.current || selectedWorkflow;
     console.log('[Draw] handleGenerate called, workflow:', currentWorkflow?.name);
@@ -2891,33 +3210,6 @@ export const Draw = () => {
     });
   };
 
-  const getInputNodeOrder = (input: WorkflowInput): number => {
-    const directNodeId = input.nodeId;
-    if (typeof directNodeId === 'string' && directNodeId.trim() !== '' && !Number.isNaN(Number(directNodeId))) {
-      return Number(directNodeId);
-    }
-
-    const splitIndex = input.name.lastIndexOf('_');
-    if (splitIndex > 0 && splitIndex < input.name.length - 1) {
-      const parsed = Number(input.name.slice(splitIndex + 1));
-      if (!Number.isNaN(parsed)) {
-        return parsed;
-      }
-    }
-
-    return Number.MAX_SAFE_INTEGER;
-  };
-
-  const sortedWorkflowInputs = useMemo(() => {
-    return [...workflowInputs].sort((a, b) => {
-      const nodeDiff = getInputNodeOrder(a) - getInputNodeOrder(b);
-      if (nodeDiff !== 0) {
-        return nodeDiff;
-      }
-      return a.name.localeCompare(b.name, 'zh-CN');
-    });
-  }, [workflowInputs]);
-
   const inputGroups: WorkflowInputGroup[] = sortedWorkflowInputs.reduce((groups, input) => {
     const classType = input.classType || DEFAULT_CLASS_TYPE;
     const groupKey = input.nodeId ? `node-${input.nodeId}` : `type-${classType}`;
@@ -2991,7 +3283,7 @@ export const Draw = () => {
     });
     
     return filtered;
-  }, [inputGroups, shouldDisplayNode, getAllowedInputs]);
+  }, [inputGroups, shouldDisplayNode, getAllowedInputs, config]);
 
   const workflowGroups = useMemo<WorkflowDirectoryGroup[]>(() => {
     const files = workflows.filter((workflow) => !workflow.isDirectory);
@@ -3384,53 +3676,154 @@ export const Draw = () => {
 
       {/* Lower Section: Control Panel */}
       <div className="control-panel">
-        {/* Left: Workflow Selector */}
+        {/* Left: Workflow/Template Selector */}
         <div className="control-section workflow-selector">
-          <h3>工作流</h3>
-          
-          {!comfyUISettings.isConnected ? (
-            <div className="workflow-notice">
-              <span className="notice-icon">⚠️</span>
-              <p>请先在设置页面连接ComfyUI</p>
-            </div>
-          ) : (
-            <>
-              <div className="workflow-dropdown">
-                <button
-                  type="button"
-                  className="workflow-picker-trigger"
-                  onClick={() => setIsWorkflowPickerOpen(true)}
-                  disabled={isLoadingWorkflows || workflowGroups.length === 0}
-                >
-                  <span className="workflow-picker-title">
-                    {isLoadingWorkflows
-                      ? '加载工作流中...'
-                      : selectedWorkflowMeta
-                        ? selectedWorkflowMeta.fileLabel
-                        : '选择工作流'}
-                  </span>
-                  <span className="workflow-picker-subtitle">
-                    {selectedWorkflowMeta
-                      ? `${selectedWorkflowMeta.directory}`
-                      : '点击打开工具集面板'}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="workflow-refresh-btn"
-                  onClick={fetchWorkflows}
-                  disabled={isLoadingWorkflows}
-                  title="刷新工作流列表"
-                >
-                  {isLoadingWorkflows ? '...' : '\u21BB'}
-                </button>
-              </div>
+          <h3>
+            {/* Per D-95: Small mode label in Draw page header */}
+            {connectionMode === 'cluster' ? (
+              <>
+                模板
+                <span className="mode-indicator cluster-mode" title="集群模式">
+                  <span className={`mode-dot ${isLemonGridConnected ? 'connected' : 'disconnected'}`}></span>
+                  集群
+                </span>
+              </>
+            ) : (
+              <>
+                工作流
+                <span className="mode-indicator direct-mode" title="直连模式">
+                  <span className={`mode-dot ${comfyUISettings.isConnected ? 'connected' : 'disconnected'}`}></span>
+                  直连
+                </span>
+              </>
+            )}
+          </h3>
 
-              {workflowError && (
-                <div className="workflow-error">
-                  <span className="error-icon">⚠</span>
-                  {workflowError}
+          {connectionMode === 'cluster' ? (
+            // Cluster Mode: Template selector per D-04, D-05
+            <>
+              {!isLemonGridConnected ? (
+                // Per D-15: Block until connected
+                <div className="workflow-notice">
+                  <span className="notice-icon">⚠️</span>
+                  <p>请先在设置中连接 LemonGrid</p>
                 </div>
+              ) : (
+                <>
+                  <div className="workflow-dropdown">
+                    <select
+                      className="template-select"
+                      value={selectedTemplate?.id || ''}
+                      onChange={(e) => {
+                        const template = clusterTemplates.find(t => t.id === e.target.value);
+                        if (template) handleTemplateSelect(template);
+                      }}
+                      disabled={isLoadingTemplates}
+                    >
+                      <option value="">
+                        {isLoadingTemplates ? '加载模板中...' : '选择模板'}
+                      </option>
+                      {/* Per D-07: Group by category from metadata */}
+                      {Array.from(new Set(clusterTemplates.map(t => t.category || '未分类'))).map(category => (
+                        <optgroup key={category} label={category}>
+                          {clusterTemplates
+                            .filter(t => (t.category || '未分类') === category)
+                            .map(template => (
+                              <option key={template.id} value={template.id}>
+                                {template.name}
+                              </option>
+                            ))}
+                        </optgroup>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="workflow-refresh-btn"
+                      onClick={async () => {
+                        if (!lemonGridServerUrl) return;
+                        setIsLoadingTemplates(true);
+                        try {
+                          const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+                          const templates = await client.listTemplates();
+                          setClusterTemplates(templates);
+                        } catch (error) {
+                          console.error('[Draw] Failed to refresh templates:', error);
+                        } finally {
+                          setIsLoadingTemplates(false);
+                        }
+                      }}
+                      disabled={isLoadingTemplates}
+                      title="刷新模板列表"
+                    >
+                      {isLoadingTemplates ? '...' : '\u21BB'}
+                    </button>
+                  </div>
+                  {/* Per D-11: Show template thumbnail */}
+                  {selectedTemplate?.thumbnail_url && (
+                    <div className="template-thumbnail">
+                      <img src={selectedTemplate.thumbnail_url} alt={selectedTemplate.name} />
+                    </div>
+                  )}
+                  {/* Per D-12: Show template description */}
+                  {selectedTemplate && (
+                    <div className="template-description">
+                      <p className="template-desc-text">{selectedTemplate.description}</p>
+                      {selectedTemplate.help_text && (
+                        <p className="template-help-text">{selectedTemplate.help_text}</p>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+            </>
+          ) : (
+            // Direct Mode: Existing workflow selector (unchanged)
+            <>
+              {!comfyUISettings.isConnected ? (
+                <div className="workflow-notice">
+                  <span className="notice-icon">⚠️</span>
+                  <p>请先在设置页面连接ComfyUI</p>
+                </div>
+              ) : (
+                <>
+                  <div className="workflow-dropdown">
+                    <button
+                      type="button"
+                      className="workflow-picker-trigger"
+                      onClick={() => setIsWorkflowPickerOpen(true)}
+                      disabled={isLoadingWorkflows || workflowGroups.length === 0}
+                    >
+                      <span className="workflow-picker-title">
+                        {isLoadingWorkflows
+                          ? '加载工作流中...'
+                          : selectedWorkflowMeta
+                            ? selectedWorkflowMeta.fileLabel
+                            : '选择工作流'}
+                      </span>
+                      <span className="workflow-picker-subtitle">
+                        {selectedWorkflowMeta
+                          ? `${selectedWorkflowMeta.directory}`
+                          : '点击打开工具集面板'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="workflow-refresh-btn"
+                      onClick={fetchWorkflows}
+                      disabled={isLoadingWorkflows}
+                      title="刷新工作流列表"
+                    >
+                      {isLoadingWorkflows ? '...' : '\u21BB'}
+                    </button>
+                  </div>
+
+                  {workflowError && (
+                    <div className="workflow-error">
+                      <span className="error-icon">⚠</span>
+                      {workflowError}
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
@@ -3440,51 +3833,296 @@ export const Draw = () => {
         <div className="control-section dynamic-form">
           <h3>参数设置</h3>
 
-          {/* Preset Toolbar */}
-          <PresetToolbar
-            workflowName={selectedWorkflow?.name ?? null}
-            workflowPath={selectedWorkflow?.path}
-            inputValues={inputValues}
-            imageFilenames={currentImageFilenames}
-            onApplyPreset={handleApplyPreset}
-          />
+          {connectionMode === 'cluster' ? (
+            // Cluster Mode: Dynamic parameter UI from param_schema per D-02, D-09
+            <>
+              {/* Preset Toolbar - per D-10, D-104: template_id as key */}
+              <PresetToolbar
+                workflowName={selectedTemplate?.id ?? null}
+                workflowPath={undefined}
+                inputValues={templateParams as Record<string, string | number | boolean>}
+                imageFilenames={templateImageInputs}
+                onApplyPreset={(preset) => {
+                  // Apply preset values to template params
+                  const applied: Record<string, unknown> = { ...templateParams };
+                  for (const [key, value] of Object.entries(preset.inputValues)) {
+                    if (key in applied) {
+                      applied[key] = value;
+                    }
+                  }
+                  setTemplateParams(applied);
+                }}
+              />
 
-          {!selectedWorkflow ? (
-            <div className="form-placeholder">
-              <span className="placeholder-icon">📝</span>
-              <p>请先选择一个工作流</p>
-            </div>
-          ) : workflowInputs.length === 0 ? (
-            <div className="form-placeholder">
-              <span className="placeholder-icon">✓</span>
-              <p>此工作流无需配置参数</p>
-            </div>
+              {!selectedTemplate ? (
+                <div className="form-placeholder">
+                  <span className="placeholder-icon">📝</span>
+                  <p>请先选择一个模板</p>
+                </div>
+              ) : selectedTemplate.param_schema.length === 0 ? (
+                <div className="form-placeholder">
+                  <span className="placeholder-icon">✓</span>
+                  <p>此模板无需配置参数</p>
+                </div>
+              ) : (
+                <div className="form-fields">
+                  {selectedTemplate.param_schema.map((field) => {
+                    const value = templateParams[field.name] ?? renderParamDefault(field);
+
+                    // Per D-09: Render inputs based on param_schema type
+                    switch (field.type) {
+                      case 'text':
+                        return (
+                          <div key={field.name} className="form-field">
+                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
+                            <textarea
+                              value={String(value)}
+                              onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
+                              rows={4}
+                              placeholder={field.description || `输入${field.label}...`}
+                            />
+                          </div>
+                        );
+
+                      case 'number': {
+                        const numericValue = typeof value === 'number' ? value : Number(value || 0);
+                        const min = typeof field.min === 'number' ? field.min : 0;
+                        const max = typeof field.max === 'number' ? field.max : 100;
+                        const step = typeof field.step === 'number' && field.step > 0 ? field.step : 1;
+                        return (
+                          <div key={field.name} className="form-field">
+                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
+                            <input
+                              type="number"
+                              value={numericValue}
+                              onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
+                              min={min}
+                              max={max}
+                              step={step}
+                            />
+                          </div>
+                        );
+                      }
+
+                      case 'slider': {
+                        const sliderValue = typeof value === 'number' ? value : Number(value || 0);
+                        const min = typeof field.min === 'number' ? field.min : 0;
+                        const max = typeof field.max === 'number' ? field.max : 100;
+                        const step = typeof field.step === 'number' && field.step > 0 ? field.step : 1;
+                        return (
+                          <div key={field.name} className="form-field slider-field">
+                            <div className="slider-header">
+                              <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
+                              <span className="slider-badge">{sliderValue}</span>
+                            </div>
+                            <input
+                              type="range"
+                              value={sliderValue}
+                              onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
+                              min={min}
+                              max={max}
+                              step={step}
+                            />
+                            <div className="slider-meta">
+                              <span>{min}</span>
+                              <input
+                                type="number"
+                                value={sliderValue}
+                                onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
+                                min={min}
+                                max={max}
+                                step={step}
+                              />
+                              <span>{max}</span>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      case 'select':
+                        return (
+                          <div key={field.name} className="form-field">
+                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
+                            <select
+                              value={String(value)}
+                              onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
+                            >
+                              {field.options?.map((opt) => (
+                                <option key={String(opt.value)} value={String(opt.value)}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+
+                      case 'boolean':
+                        return (
+                          <div key={field.name} className="form-field boolean-field">
+                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
+                            <label className="boolean-toggle">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(value)}
+                                onChange={(e) => handleTemplateParamChange(field.name, e.target.checked)}
+                              />
+                              <span>{Boolean(value) ? '开启' : '关闭'}</span>
+                            </label>
+                          </div>
+                        );
+
+                      case 'image':
+                        // Per D-18, D-19: Same image upload UI, target is LemonGrid asset API
+                        return (
+                          <div key={field.name} className="form-field image-field">
+                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
+                            {isUXPWebView() && (
+                              <div className="image-upload-ps-buttons">
+                                <div className="image-upload-ps-item">
+                                  <span className="image-upload-ps-label">选区</span>
+                                  <PsExportButton
+                                    mode="selection"
+                                    label="从 PS 选区加载"
+                                    iconOnly
+                                    compact
+                                    onExport={(blob) => {
+                                      const file = new File([blob], `ps-export-${Date.now()}.png`, { type: 'image/png' });
+                                      handleTemplateImageUpload(file, field.name);
+                                    }}
+                                    onError={(err) => console.error('Selection export error:', err)}
+                                  />
+                                </div>
+                                <div className="image-upload-ps-item">
+                                  <span className="image-upload-ps-label">图层</span>
+                                  <PsExportButton
+                                    mode="layer"
+                                    label="从 PS 图层加载"
+                                    iconOnly
+                                    compact
+                                    onExport={(blob) => {
+                                      const file = new File([blob], `ps-export-${Date.now()}.png`, { type: 'image/png' });
+                                      handleTemplateImageUpload(file, field.name);
+                                    }}
+                                    onError={(err) => console.error('Layer export error:', err)}
+                                  />
+                                </div>
+                              </div>
+                            )}
+                            <div className="image-upload-area">
+                              {uploadedImagePreviews[field.name] ? (
+                                <div className="image-preview-container">
+                                  <img
+                                    src={uploadedImagePreviews[field.name]}
+                                    alt="上传预览"
+                                    className="image-preview"
+                                  />
+                                  <div className="image-preview-info">
+                                    <span className="image-filename">{templateImageInputs[field.name] || '已上传'}</span>
+                                    <button
+                                      type="button"
+                                      className="remove-image-btn"
+                                      onClick={() => {
+                                        handleTemplateParamChange(field.name, '');
+                                        setUploadedImagePreviews(prev => {
+                                          const next = { ...prev };
+                                          delete next[field.name];
+                                          return next;
+                                        });
+                                        setTemplateImageInputs(prev => {
+                                          const next = { ...prev };
+                                          next[field.name] = '';
+                                          return next;
+                                        });
+                                      }}
+                                    >
+                                      移除
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <input
+                                    type="file"
+                                    accept="image/*"
+                                    onChange={async (e) => {
+                                      const file = e.target.files?.[0];
+                                      if (file) {
+                                        try {
+                                          await handleTemplateImageUpload(file, field.name);
+                                        } catch (error) {
+                                          console.error('[Draw] 上传图片到 LemonGrid 失败:', error);
+                                        }
+                                      }
+                                    }}
+                                  />
+                                  <span className="upload-hint">点击或拖拽上传图片</span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+
+                      default:
+                        return null;
+                    }
+                  })}
+                </div>
+              )}
+            </>
           ) : (
-            <div className="form-fields">
-              {filteredInputGroups.map((group) => (
-                <section key={group.key} className="form-group-card">
-                  <header className="form-group-header">
-                    <h4>{group.label}</h4>
-                    <span>{group.items.length} 项</span>
-                  </header>
-                  <div className="form-group-fields">
-                    {group.items.map((input) => renderInput(input))}
-                  </div>
-                </section>
-              ))}
-            </div>
+            // Direct Mode: Existing form rendering (unchanged)
+            <>
+              {/* Preset Toolbar */}
+              <PresetToolbar
+                workflowName={selectedWorkflow?.name ?? null}
+                workflowPath={selectedWorkflow?.path}
+                inputValues={inputValues}
+                imageFilenames={currentImageFilenames}
+                onApplyPreset={handleApplyPreset}
+              />
+
+              {!selectedWorkflow ? (
+                <div className="form-placeholder">
+                  <span className="placeholder-icon">📝</span>
+                  <p>请先选择一个工作流</p>
+                </div>
+              ) : workflowInputs.length === 0 ? (
+                <div className="form-placeholder">
+                  <span className="placeholder-icon">✓</span>
+                  <p>此工作流无需配置参数</p>
+                </div>
+              ) : (
+                <div className="form-fields">
+                  {filteredInputGroups.map((group) => (
+                    <section key={group.key} className="form-group-card">
+                      <header className="form-group-header">
+                        <h4>{group.label}</h4>
+                        <span>{group.items.length} 项</span>
+                      </header>
+                      <div className="form-group-fields">
+                        {group.items.map((input) => renderInput(input))}
+                      </div>
+                    </section>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Right: Generate Button + PS Operations */}
         <div className="control-section action-panel">
           <h3>操作</h3>
-          
+
           <div className="action-buttons">
             <button
               className={`generate-btn ${isGenerating ? 'generating' : ''}`}
               onClick={handleGenerate}
-              disabled={!selectedWorkflow || isGenerating || !comfyUISettings.isConnected}
+              disabled={
+                connectionMode === 'cluster'
+                  ? !selectedTemplate || isGenerating || !isLemonGridConnected
+                  : !selectedWorkflow || isGenerating || !comfyUISettings.isConnected
+              }
             >
               {isGenerating ? (
                 <>
@@ -3500,12 +4138,20 @@ export const Draw = () => {
             </button>
           </div>
 
-
-          {!comfyUISettings.isConnected && (
-            <div className="connection-notice">
-              <span className="notice-icon">⚠️</span>
-              <p>请先在设置页面连接ComfyUI</p>
-            </div>
+          {connectionMode === 'cluster' ? (
+            !isLemonGridConnected && (
+              <div className="connection-notice">
+                <span className="notice-icon">⚠️</span>
+                <p>请先在设置中连接 LemonGrid</p>
+              </div>
+            )
+          ) : (
+            !comfyUISettings.isConnected && (
+              <div className="connection-notice">
+                <span className="notice-icon">⚠️</span>
+                <p>请先在设置页面连接ComfyUI</p>
+              </div>
+            )
           )}
         </div>
       </div>

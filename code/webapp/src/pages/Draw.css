@@ -1138,3 +1138,123 @@
   padding: 6px 10px;
   margin-top: 6px;
 }
+
+/* Cluster Mode styles */
+.mode-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  vertical-align: middle;
+}
+
+.mode-indicator.direct-mode {
+  background: rgba(72, 187, 120, 0.15);
+  color: #68d391;
+}
+
+.mode-indicator.cluster-mode {
+  background: rgba(99, 179, 237, 0.15);
+  color: #90cdf4;
+}
+
+.mode-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.mode-dot.connected {
+  background: #48bb78;
+  box-shadow: 0 0 4px rgba(72, 187, 120, 0.5);
+}
+
+.mode-dot.disconnected {
+  background: #fc8181;
+  box-shadow: 0 0 4px rgba(252, 129, 129, 0.5);
+}
+
+.template-select {
+  flex: 1;
+  background: rgba(30, 30, 50, 0.8);
+  color: #e0e0e0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.template-select:hover {
+  border-color: rgba(99, 179, 237, 0.4);
+  background: rgba(35, 35, 55, 0.9);
+}
+
+.template-select:focus {
+  border-color: #63b3ed;
+  box-shadow: 0 0 0 2px rgba(99, 179, 237, 0.2);
+}
+
+.template-select optgroup {
+  background: #1a1a2e;
+  color: #a0aec0;
+  font-weight: 600;
+}
+
+.template-select option {
+  background: #1a1a2e;
+  color: #e0e0e0;
+}
+
+.template-thumbnail {
+  margin-top: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.template-thumbnail img {
+  width: 100%;
+  max-height: 120px;
+  object-fit: cover;
+  display: block;
+}
+
+.template-description {
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(30, 30, 50, 0.5);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.template-desc-text {
+  font-size: 12px;
+  color: #a0aec0;
+  margin: 0;
+  line-height: 1.4;
+}
+
+.template-help-text {
+  font-size: 11px;
+  color: #718096;
+  margin: 4px 0 0;
+  line-height: 1.4;
+  font-style: italic;
+}
+
+.required-mark {
+  color: #fc8181;
+  margin-left: 2px;
+  font-size: 12px;
+}
