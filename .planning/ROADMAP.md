@@ -92,6 +92,7 @@ Plans:
 | 4. 工作流参数预设功能 | 0/3 | Not started | - |
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
 | 05.1. Plugin Performance Fix | 3/3 | Complete   | 2026-04-17 |
+| 6. LemonGrid Integration | 0/3 | Planning | - |
 | 6. LemonGrid Integration | 0/3 | Planning   | - |
 
 ---

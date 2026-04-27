@@ -541,27 +541,31 @@ Steps 2, 3, 7 are nearly identical. Steps 1, 4, 5, 6 need new cluster-mode imple
 | A6 | The LemonGrid WebSocket endpoint can be reached from UXP webview, or polling fallback is acceptable | Common Pitfalls | No real-time progress; degraded UX |
 | A7 | Lemongrid server URL and credentials will be configurable per-user (not hardcoded) | Architecture | All users connect to same server |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **WebSocket via UXP WebView to Remote Server**
    - What we know: UXP webview can connect to localhost WebSocket (ComfyUI). LemonGrid WebSocket is at a different origin.
    - What's unclear: Whether UXP webview can connect to a remote WebSocket server, or if it must be proxied through main.js.
    - Recommendation: Implement polling as the primary approach for cluster mode (simpler, more reliable). Add WebSocket support as an optimization later if needed.
+   - RESOLVED: D-23, D-24 — WebSocket proxied through Bridge (main.js `lemongrid.websocket` handler). Polling as auto-fallback per D-22, D-38.
 
 2. **Workflow Template Integration**
    - What we know: LemonGrid has a workflow template system with `template_id` and `param_schema`. The PS plugin has its own workflow file system.
    - What's unclear: Whether the plugin should use LemonGrid templates (mapped to existing workflows) or submit raw `workflow_json`.
    - Recommendation: Start with raw `workflow_json` submission (backward compatible). Template integration can be added later for better parameter validation.
+   - RESOLVED: D-01, D-02, D-03 — Use LemonGrid template system. Plugin submits template_id + params, not raw workflow_json. Dynamic UI from param_schema per D-09.
 
 3. **Image Input Format in Cluster Mode**
    - What we know: The agent expects `parameters` to contain asset_id references (either `{"asset_id": "uuid"}` or plain `"uuid"` string). The plugin currently uploads images to ComfyUI and gets a filename.
    - What's unclear: The exact parameter key format the plugin uses for image inputs vs what the agent expects.
    - Recommendation: In cluster mode, upload image to LemonGrid first, then pass the asset_id as the parameter value. The agent code already handles this pattern.
+   - RESOLVED: D-18, D-19 — Image inputs auto-detected from param_schema. Upload to LemonGrid asset API, pass asset_id as param value. Agent handles sync per D-18.
 
 4. **Credential Storage Security**
    - What we know: The plugin uses Zustand persist (localStorage) for settings including ComfyUI URL.
    - What's unclear: Whether storing LemonGrid password in localStorage is acceptable, or if we need a more secure approach.
    - Recommendation: Store only the JWT token in Zustand persist. Store credentials in the Bridge/main.js in-memory store (not persisted). User re-enters password after plugin restart, or use a "remember me" option that stores encrypted credentials.
+   - RESOLVED: D-77, D-78 — "Remember me" stores AES-GCM encrypted password via Web Crypto API. Token in Zustand persist per D-70, D-92. Password never stored plaintext per D-70.
 
 ## Environment Availability
 
