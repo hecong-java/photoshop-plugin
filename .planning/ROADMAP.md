@@ -92,8 +92,7 @@ Plans:
 | 4. 工作流参数预设功能 | 0/3 | Not started | - |
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
 | 05.1. Plugin Performance Fix | 3/3 | Complete   | 2026-04-17 |
-| 6. LemonGrid Integration | 0/3 | Planning | - |
-| 6. LemonGrid Integration | 3/3 | Complete | 06-01, 06-02, 06-03 |
+| 6. LemonGrid Integration | 3/3 | Complete | 2026-04-28 |
 
 ---
 
@@ -249,4 +248,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-04-27 - Phase 6 planned with 3 plans*
+*Last updated: 2026-04-28 - Phase 6 complete (3/3 plans executed)*
