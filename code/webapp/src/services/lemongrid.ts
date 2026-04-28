@@ -242,7 +242,9 @@ export class LemonGridClient {
     if (isUXPWebView()) {
       // Use Bridge proxy for upload
       const base64Data = await fileToBase64(file);
+      const uploadUrl = `${this.serverUrl}/api/v1/assets/library/upload`;
       const result = await sendBridgeMessage('lemongrid.uploadAsset', {
+        url: uploadUrl,
         filename: file.name,
         base64Data,
         mimeType: file.type || 'image/png',
