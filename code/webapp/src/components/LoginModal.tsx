@@ -42,7 +42,13 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     if (!inputServerUrl.trim()) {
       return '请输入服务器地址';
     }
-    if (!/^https?:\/\/.+/.test(inputServerUrl.trim())) {
+    let url = inputServerUrl.trim();
+    // Auto-prepend http:// if user omits protocol (common for LAN addresses)
+    if (/^\d{1,3}(\.\d{1,3}){3}/.test(url) || /^localhost/i.test(url) || /^[a-z][\w-]*$/i.test(url)) {
+      url = 'http://' + url;
+      setInputServerUrl(url);
+    }
+    if (!/^https?:\/\/.+/.test(url)) {
       return '无效的服务器地址';
     }
     if (!inputUsername.trim()) {
@@ -158,7 +164,7 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
               type="text"
               value={inputServerUrl}
               onChange={(e) => setInputServerUrl(e.target.value)}
-              placeholder="https://lemongrid.example.com"
+              placeholder="192.168.0.105 或 https://lemongrid.example.com"
               className="text-input"
               disabled={isLoading}
               autoFocus
