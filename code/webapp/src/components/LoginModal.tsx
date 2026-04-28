@@ -37,17 +37,21 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     }
   }, [isOpen, serverUrl, storedUsername]);
 
+  // Normalize URL: auto-prepend http:// for bare IP/hostname
+  const normalizeUrl = (raw: string): string => {
+    const url = raw.trim();
+    if (/^\d{1,3}(\.\d{1,3}){3}/.test(url) || /^localhost/i.test(url) || /^[a-z][\w-]*$/i.test(url)) {
+      return 'http://' + url;
+    }
+    return url;
+  };
+
   // Validate inputs per D-83
   const validateInputs = (): string | null => {
     if (!inputServerUrl.trim()) {
       return '请输入服务器地址';
     }
-    let url = inputServerUrl.trim();
-    // Auto-prepend http:// if user omits protocol (common for LAN addresses)
-    if (/^\d{1,3}(\.\d{1,3}){3}/.test(url) || /^localhost/i.test(url) || /^[a-z][\w-]*$/i.test(url)) {
-      url = 'http://' + url;
-      setInputServerUrl(url);
-    }
+    const url = normalizeUrl(inputServerUrl);
     if (!/^https?:\/\/.+/.test(url)) {
       return '无效的服务器地址';
     }
@@ -71,7 +75,10 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     setError(null);
 
     try {
-      const url = inputServerUrl.trim();
+      // Use normalized URL (with protocol) for all API calls
+      const url = normalizeUrl(inputServerUrl);
+      // Also update input state so user sees the corrected URL
+      setInputServerUrl(url);
 
       // Login per D-85
       const loginResult = await loginToLemonGrid(url, inputUsername.trim(), inputPassword);
