@@ -1258,3 +1258,31 @@
   margin-left: 2px;
   font-size: 12px;
 }
+
+/* Per D-36: History source filter for Direct/Cluster/All */
+.history-source-filter {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.history-source-filter button {
+  background: rgba(30, 30, 50, 0.6);
+  color: #a0a0a0;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.history-source-filter button.active {
+  background: rgba(66, 153, 225, 0.2);
+  color: #90cdf4;
+  border-color: rgba(66, 153, 225, 0.3);
+}
+
+.history-source-filter button:hover:not(.active) {
+  background: rgba(40, 40, 65, 0.8);
+}

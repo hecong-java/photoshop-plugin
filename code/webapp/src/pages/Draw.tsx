@@ -6,7 +6,7 @@ import { useConfigStore } from '../stores/configStore';
 import { useWorkflowCacheStore, blobToBase64, base64ToBlobUrl } from '../stores/workflowCacheStore';
 import { useComfyUIStore } from '../stores/comfyui';
 import { PsExportButton } from '../components/upload/PsExportButton';
-import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer } from '../services/upload';
+import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer, sendBridgeMessage } from '../services/upload';
 import { PresetToolbar } from '../components/preset/PresetToolbar';
 import { usePresetStore } from '../stores/presetStore';
 import type { PresetFile } from '../types/preset';
@@ -14,6 +14,8 @@ import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow
 import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
 import { LemonGridClient, isImageParam, renderParamDefault, LEMONGRID_ERROR_SUGGESTIONS, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField } from '../services/lemongrid';
 import { useLemonGridStore } from '../stores/lemongridStore';
+import { ensureValidToken } from '../services/lemongrid-auth';
+import { MiniTaskList } from '../components/MiniTaskList';
 import './Draw.css';
 
 // Types for workflow inputs
@@ -262,6 +264,10 @@ export const Draw = () => {
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [templateParams, setTemplateParams] = useState<Record<string, unknown>>({});
   const [templateImageInputs, setTemplateImageInputs] = useState<Record<string, string>>({});
+  // Per D-36: History source filter for Direct/Cluster/All
+  const [historySourceFilter, setHistorySourceFilter] = useState<'all' | 'direct' | 'cluster'>('all');
+  // Per D-24: WebSocket connection refs for per-task connections
+  const wsConnectionRefs = useRef<Record<string, string>>({});
   const latestInputValuesRef = useRef<Record<string, string | number | boolean>>({});
   // Refs for workflow cache - store blob and base64 data for image inputs
   const uploadedImageBlobsRef = useRef<Record<string, Blob>>({});
@@ -495,6 +501,75 @@ export const Draw = () => {
       clearSelection();
     }
   }, [connectionMode, selectedTemplate?.id]);
+
+  // Per D-22, D-23, D-37, D-38: WebSocket progress through Bridge + auto-fallback to polling
+  useEffect(() => {
+    if (connectionMode !== 'cluster') return;
+
+    const handleWsMessage = (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'lemongrid.ws.message' && data.taskId && data.data) {
+        const { taskId, data: wsData } = data as { taskId: string; data: { type: string; progress?: number; detail?: string; duration_seconds?: number; error_code?: string; error_message?: string } };
+        const store = useLemonGridStore.getState();
+
+        switch (wsData.type) {
+          case 'task_started':
+            store.updateTask(taskId, {
+              status: 'RUNNING',
+              progress: 0,
+              progressDetail: '任务开始执行...',
+            });
+            break;
+          case 'task_progress':
+            store.updateTask(taskId, {
+              status: 'RUNNING',
+              progress: wsData.progress || 0,
+              progressDetail: wsData.detail || null,
+            });
+            break;
+          case 'task_completed':
+            store.updateTask(taskId, {
+              status: 'COMPLETED',
+              progress: 100,
+              completedAt: Date.now(),
+              durationSeconds: wsData.duration_seconds || null,
+            });
+            // Per D-47: auto-download and import results
+            handleTaskCompletion(taskId);
+            break;
+          case 'task_failed':
+            store.updateTask(taskId, {
+              status: 'FAILED',
+              errorCode: wsData.error_code || 'UNKNOWN',
+              errorMessage: wsData.error_message || '任务失败',
+            });
+            setIsGenerating(false);
+            break;
+        }
+      }
+
+      if ((data as { type?: string }).type === 'lemongrid.ws.close') {
+        // Per D-38: WS dropped, auto-fallback to polling
+        const closeData = data as { taskId: string; code?: number; reason?: string };
+        console.warn('[Draw] LemonGrid WS closed for task:', closeData.taskId);
+        startPollingForTask(closeData.taskId);
+      }
+    };
+
+    window.addEventListener('message', handleWsMessage);
+    return () => window.removeEventListener('message', handleWsMessage);
+  }, [connectionMode]);
+
+  // Per D-24: Cleanup WS connections on unmount
+  useEffect(() => {
+    return () => {
+      Object.keys(wsConnectionRefs.current).forEach((taskId) => {
+        closeTaskWebSocket(taskId);
+      });
+    };
+  }, []);
 
   // Fetch queue on mount and when connection status changes
   useEffect(() => {
@@ -2789,13 +2864,26 @@ export const Draw = () => {
         promptId: result.id,
       }));
 
-      // NOTE: Polling/WS progress tracking and result download are handled by Plan 06-03
-      // This function only submits and stores the initial task state
-      setIsGenerating(false);
+      // Per D-22, D-37: Start WebSocket progress tracking through Bridge
+      startClusterWebSocket(result.id);
     } catch (error) {
-      // Per D-45: Show user-friendly error
-      const errorCode = error instanceof Error ? error.message : '任务提交失败';
-      const suggestion = LEMONGRID_ERROR_SUGGESTIONS[errorCode] || LEMONGRID_ERROR_SUGGESTIONS.UNKNOWN;
+      // Per D-69: Show concurrent limit message
+      const errMsg = error instanceof Error ? error.message : '任务提交失败';
+      if (errMsg.includes('concurrent') || errMsg.includes('limit') || errMsg.includes('429')) {
+        setProgress(prev => ({
+          ...prev,
+          status: 'error',
+          error: '已达到同时任务上限，请等待当前任务完成后再提交新任务',
+        }));
+      } else {
+        // Per D-45: Show user-friendly error
+        const suggestion = LEMONGRID_ERROR_SUGGESTIONS[errMsg] || LEMONGRID_ERROR_SUGGESTIONS.UNKNOWN;
+        setProgress(prev => ({
+          ...prev,
+          status: 'error',
+          error: `${suggestion}`,
+        }));
+      }
       setProgress(prev => ({
         ...prev,
         status: 'error',
@@ -2819,6 +2907,172 @@ export const Draw = () => {
       layerName: normalizedName,
       mimeType: 'image/png'
     });
+  };
+
+  // Per D-44: Same PS layer import flow for Cluster Mode results
+  const syncGeneratedImageToPsLayer = async (blob: Blob, filename: string) => {
+    if (!isUXPWebView()) return;
+    const normalizedName = (filename || '').trim() || `cluster-${Date.now()}.png`;
+    const file = new File([blob], normalizedName, { type: 'image/png' });
+    const base64Data = await fileToBase64(file);
+    await importBase64ToPsLayer({
+      base64Data,
+      mode: psImportMode,
+      workflowName: 'cluster-output',
+      layerName: normalizedName,
+      mimeType: 'image/png'
+    });
+  };
+
+  // Per D-24: Start per-task WebSocket connection through Bridge
+  const startClusterWebSocket = async (taskId: string) => {
+    try {
+      const result = await sendBridgeMessage('lemongrid.websocket', { taskId }) as { connectionId: string };
+      wsConnectionRefs.current[taskId] = result.connectionId;
+    } catch (error) {
+      console.warn('[Draw] WS setup failed, falling back to polling:', error);
+      // Per D-38: Auto-fallback to polling, no user prompt
+      startPollingForTask(taskId);
+    }
+  };
+
+  // Per D-24: Close per-task WebSocket connection
+  const closeTaskWebSocket = async (taskId: string) => {
+    const connectionId = wsConnectionRefs.current[taskId];
+    if (connectionId) {
+      try {
+        await sendBridgeMessage('lemongrid.websocket.close', { connectionId });
+      } catch (_e) { /* ignore close errors */ }
+      delete wsConnectionRefs.current[taskId];
+    }
+  };
+
+  // Per D-22, D-28, D-31, D-32, D-38: Polling fallback with adaptive intervals
+  const startPollingForTask = (taskId: string) => {
+    const poll = async () => {
+      try {
+        // Per D-42: Auto re-auth on 401
+        await ensureValidToken();
+        const serverUrl = useLemonGridStore.getState().serverUrl;
+        const client = new LemonGridClient({ serverUrl });
+        const status = await client.getTaskStatus(taskId);
+        const store = useLemonGridStore.getState();
+
+        store.updateTask(taskId, {
+          status: status.status,
+          progress: status.progress,
+          progressDetail: status.progress_detail,
+          queuePosition: status.queue_position,
+          errorCode: status.error_code,
+          errorMessage: status.error_message,
+          outputAssetIds: status.output_file_ids || [],
+          completedAt: status.completed_at ? new Date(status.completed_at).getTime() : null,
+          durationSeconds: status.duration_seconds,
+        });
+
+        if (['PENDING', 'QUEUED', 'SYNCING', 'RUNNING'].includes(status.status)) {
+          // Per D-28: Adaptive interval - 1s running, 2s queued/syncing
+          const interval = status.status === 'RUNNING' ? 1000 : 2000;
+          setTimeout(poll, interval);
+        } else {
+          // Task reached terminal state
+          if (status.status === 'COMPLETED') {
+            await handleTaskCompletion(taskId);
+          }
+          setIsGenerating(false);
+        }
+      } catch (_error) {
+        // Per D-31: Keep polling on error, Per D-32: No client timeout
+        setTimeout(poll, 2000);
+      }
+    };
+    poll();
+  };
+
+  // Per D-34, D-35, D-44, D-47: Download all outputs and auto-import to PS
+  const handleTaskCompletion = async (taskId: string) => {
+    const task = useLemonGridStore.getState().tasks[taskId];
+    if (!task || !task.outputAssetIds.length) {
+      setIsGenerating(false);
+      return;
+    }
+
+    const serverUrl = useLemonGridStore.getState().serverUrl;
+    const client = new LemonGridClient({ serverUrl });
+
+    for (const assetId of task.outputAssetIds) {
+      try {
+        const blob = await client.downloadAsset(assetId);
+        const filename = `cluster-${assetId.substring(0, 8)}.png`;
+        // Per D-35: Auto-import to PS as separate layer
+        await syncGeneratedImageToPsLayer(blob, filename);
+        // Per D-51: Store in clusterOutputImages
+        useLemonGridStore.getState().addClusterOutputImage({
+          url: URL.createObjectURL(blob),
+          blob,
+          filename,
+          assetId,
+        });
+      } catch (e) {
+        console.error('[Draw] Download/import failed for asset:', assetId, e);
+      }
+    }
+    // Per D-47: Auto-display results
+    setIsGenerating(false);
+    closeTaskWebSocket(taskId);
+  };
+
+  // Per D-43: Retry failed task with same params
+  const handleRetryTask = async (taskId: string) => {
+    const task = useLemonGridStore.getState().tasks[taskId];
+    if (!task) return;
+
+    // Remove the failed task
+    useLemonGridStore.getState().removeTask(taskId);
+
+    // Re-submit with same params per D-41
+    setIsGenerating(true);
+    try {
+      const serverUrl = useLemonGridStore.getState().serverUrl;
+      const client = new LemonGridClient({ serverUrl });
+      const result = await client.submitTask(task.templateId, task.params);
+
+      useLemonGridStore.getState().updateTask(result.id, {
+        taskId: result.id,
+        templateId: task.templateId,
+        templateName: task.templateName,
+        status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
+        progress: 0,
+        progressDetail: null,
+        queuePosition: null,
+        errorCode: null,
+        errorMessage: null,
+        outputAssetIds: [],
+        submittedAt: Date.now(),
+        completedAt: null,
+        durationSeconds: null,
+        params: task.params,
+        thumbnail: null,
+      });
+
+      startClusterWebSocket(result.id);
+    } catch (error) {
+      setIsGenerating(false);
+      console.error('[Draw] Retry failed:', error);
+    }
+  };
+
+  // Per D-63: Re-import completed task result
+  const handleImportClusterResult = async (taskId: string, assetId: string) => {
+    try {
+      const serverUrl = useLemonGridStore.getState().serverUrl;
+      const client = new LemonGridClient({ serverUrl });
+      const blob = await client.downloadAsset(assetId);
+      const filename = `cluster-${assetId.substring(0, 8)}.png`;
+      await syncGeneratedImageToPsLayer(blob, filename);
+    } catch (e) {
+      console.error('[Draw] Re-import failed:', e);
+    }
   };
 
   const handleGenerate = async () => {
@@ -3542,6 +3796,23 @@ export const Draw = () => {
           {isGenerating && (
             <span className="generating-badge">生成中...</span>
           )}
+          {/* Per D-36: History source filter for Direct/Cluster/All */}
+          {connectionMode === 'cluster' && (
+            <div className="history-source-filter">
+              <button
+                className={historySourceFilter === 'all' ? 'active' : ''}
+                onClick={() => setHistorySourceFilter('all')}
+              >全部</button>
+              <button
+                className={historySourceFilter === 'direct' ? 'active' : ''}
+                onClick={() => setHistorySourceFilter('direct')}
+              >直连</button>
+              <button
+                className={historySourceFilter === 'cluster' ? 'active' : ''}
+                onClick={() => setHistorySourceFilter('cluster')}
+              >集群</button>
+            </div>
+          )}
         </div>
 
         <div className="preview-content">
@@ -4152,6 +4423,14 @@ export const Draw = () => {
                 <p>请先在设置页面连接ComfyUI</p>
               </div>
             )
+          )}
+
+          {/* Per D-40, D-55: Mini task list below Generate button in Cluster Mode */}
+          {connectionMode === 'cluster' && (
+            <MiniTaskList
+              onRetry={handleRetryTask}
+              onImportResult={handleImportClusterResult}
+            />
           )}
         </div>
       </div>
