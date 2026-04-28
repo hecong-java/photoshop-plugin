@@ -93,7 +93,7 @@ Plans:
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
 | 05.1. Plugin Performance Fix | 3/3 | Complete   | 2026-04-17 |
 | 6. LemonGrid Integration | 0/3 | Planning | - |
-| 6. LemonGrid Integration | 1/3 | In progress | 06-01 |
+| 6. LemonGrid Integration | 3/3 | Complete | 06-01, 06-02, 06-03 |
 
 ---
 
@@ -243,8 +243,8 @@ Plans:
 
 Plans:
 - [x] 06-01-PLAN.md — Bridge handlers, stores, auth service, login modal, and Settings mode toggle
-- [ ] 06-02-PLAN.md — LemonGridClient service, template system, dynamic param UI, and preset integration
-- [ ] 06-03-PLAN.md — Mini task list, WebSocket progress, polling fallback, retry/cancel, and history filter
+- [x] 06-02-PLAN.md — LemonGridClient service, template system, dynamic param UI, and preset integration
+- [x] 06-03-PLAN.md — Mini task list, WebSocket progress, polling fallback, retry/cancel, and history filter
 
 ---
 

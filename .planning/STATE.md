@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-04-27T09:39:45Z"
+last_updated: "2026-04-28T01:37:00Z"
 progress:
   total_phases: 7
   completed_phases: 2
   total_plans: 18
-  completed_plans: 14
-  percent: 78
+  completed_plans: 16
+  percent: 89
 ---
 
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-04-27T09:39:45Z
+**Last Updated:** 2026-04-28T01:37:00Z
 
 ---
 
@@ -28,14 +28,14 @@ progress:
 
 ## Current Position
 
-Phase: 06 (lemongrid-integration) — EXECUTING (1/3 plans complete)
+Phase: 06 (lemongrid-integration) — EXECUTING (3/3 plans complete)
 Plans: 3 plans in 3 waves
 | Attribute | Value |
 |-----------|-------|
 | **Phase** | 6 - LemonGrid Integration |
-| **Plan** | 1/3 complete |
-| **Status** | In progress |
-| **Progress** | `[████                ]` 33% |
+| **Plan** | 3/3 complete |
+| **Status** | Phase complete |
+| **Progress** | `[████████████████    ]` 100% |
 
 ---
 
@@ -57,6 +57,8 @@ Plans: 3 plans in 3 waves
 | Phase quick-260317-n67-status-str-error P01 | 1m | 1 tasks | 2 files |
 | Phase 05.1 P03 | 8min | 2 tasks | 2 files |
 | Phase 06 P01 | 12min | 2 tasks | 8 files |
+| Phase 06 P02 | 13min | 2 tasks | 3 files |
+| Phase 06 P03 | 16min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -84,6 +86,10 @@ Plans: 3 plans in 3 waves
 - [Phase 06 P01]: Bridge handlers inject JWT from settingsStorage set by webview via settings.set
 - [Phase 06 P01]: AES-GCM encryption for Remember Me uses PBKDF2 key derivation with static salt
 - [Phase 06 P01]: Tasks and clusterOutputImages are transient (not persisted) per D-102
+- [Phase 06 P02]: LemonGridClient uses lemongridFetch + ensureValidToken for all authenticated requests
+- [Phase 06 P02]: handleClusterSubmit only submits and stores initial task state; polling/download deferred to Plan 06-03
+- [Phase 06 P03]: Per-task WebSocket connections tracked in useRef to avoid re-render issues
+- [Phase 06 P03]: Polling fallback auto-activates on WS close/failure with no user prompt per D-38
 
 ### Roadmap Evolution
 
@@ -128,13 +134,13 @@ Plans: 3 plans in 3 waves
 
 ### Last Session
 
-- **Date:** 2026-04-27
-- **Action:** Completed Phase 06 Plan 01 (Bridge handlers, auth service, stores, login modal, settings toggle)
-- **Outcome:** LemonGrid Cluster Mode foundation complete with 4 Bridge handlers, JWT auth lifecycle, lemongridStore, LoginModal, and Settings mode toggle
+- **Date:** 2026-04-28
+- **Action:** Completed Phase 06 Plan 03 (Mini task list, WebSocket progress, polling fallback, retry, history filter)
+- **Outcome:** Full Cluster Mode task lifecycle complete with MiniTaskList component, WS+polling progress tracking, cancel/retry/dismiss actions, result auto-download and PS import, History source filter
 
 ### Next Action
 
-Execute Phase 06 Plan 02 (LemonGridClient service, template system, dynamic param UI, preset integration)
+Phase 06 (LemonGrid Integration) is complete. All 3 plans executed.
 
 ---
 
