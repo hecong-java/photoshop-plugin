@@ -1,0 +1,264 @@
+/* MiniTaskList styles per D-55 through D-68 */
+/* Compact task items with state badges, progress bars, and expand/collapse */
+
+.mini-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.mini-task-summary {
+  font-size: 11px;
+  color: #a0a0a0;
+  padding: 2px 4px;
+  margin-bottom: 2px;
+}
+
+/* Per D-58: Compact single-row items when collapsed (~40px height) */
+.mini-task-item {
+  background: rgba(30, 30, 50, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.mini-task-item:hover {
+  background: rgba(40, 40, 65, 0.8);
+}
+
+.mini-task-item.collapsed {
+  /* Collapsed: just the header row */
+}
+
+.mini-task-item.expanded {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+/* Header row (always visible) */
+.task-header-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  min-height: 36px;
+}
+
+.task-template-name {
+  font-size: 12px;
+  font-weight: 500;
+  color: #e0e0e0;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* Mini progress bar in collapsed view */
+.task-progress-mini {
+  flex: 0 0 60px;
+  display: flex;
+  align-items: center;
+}
+
+.progress-bar-mini {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-fill-mini {
+  height: 100%;
+  background: linear-gradient(90deg, #4299e1 0%, #48bb78 100%);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Per D-57: State badge colors */
+.task-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.badge-pending {
+  background: rgba(160, 160, 160, 0.2);
+  color: #a0a0a0;
+}
+
+.badge-queued {
+  background: rgba(236, 201, 75, 0.2);
+  color: #ecc94b;
+}
+
+.badge-syncing {
+  background: rgba(66, 153, 225, 0.2);
+  color: #4299e1;
+}
+
+.badge-running {
+  background: rgba(72, 187, 120, 0.2);
+  color: #48bb78;
+}
+
+.badge-completed {
+  background: rgba(72, 187, 120, 0.25);
+  color: #48bb78;
+}
+
+.badge-failed {
+  background: rgba(245, 101, 101, 0.2);
+  color: #f56565;
+}
+
+.badge-cancelled {
+  background: rgba(160, 160, 160, 0.2);
+  color: #a0a0a0;
+}
+
+.queue-position {
+  font-size: 10px;
+  color: #ecc94b;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.task-cancel-btn {
+  background: rgba(245, 101, 101, 0.15);
+  border: 1px solid rgba(245, 101, 101, 0.3);
+  color: #f56565;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.task-cancel-btn:hover {
+  background: rgba(245, 101, 101, 0.3);
+}
+
+/* Expanded details */
+.task-details {
+  padding: 4px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-detail-row {
+  font-size: 11px;
+  color: #a0a0a0;
+}
+
+.task-results {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.task-import-btn {
+  background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.task-import-btn:hover {
+  opacity: 0.85;
+}
+
+/* Error details per D-45, D-61, D-64 */
+.task-error {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px 8px;
+  background: rgba(245, 101, 101, 0.08);
+  border: 1px solid rgba(245, 101, 101, 0.2);
+  border-radius: 4px;
+}
+
+.error-code {
+  font-size: 11px;
+  font-weight: 600;
+  color: #f56565;
+}
+
+.error-message {
+  font-size: 11px;
+  color: #c0c0c0;
+}
+
+.error-suggestion {
+  font-size: 11px;
+  color: #ecc94b;
+  font-style: italic;
+}
+
+.error-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.retry-btn {
+  background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.retry-btn:hover {
+  opacity: 0.85;
+}
+
+.dismiss-btn {
+  background: rgba(160, 160, 160, 0.15);
+  color: #a0a0a0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dismiss-btn:hover {
+  background: rgba(160, 160, 160, 0.25);
+}
+
+.task-cancelled-details {
+  display: flex;
+  gap: 6px;
+}
+
+/* Per D-67: Result thumbnail in expanded completed task */
+.task-thumbnail {
+  max-width: 120px;
+  max-height: 80px;
+  border-radius: 4px;
+  margin-top: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
