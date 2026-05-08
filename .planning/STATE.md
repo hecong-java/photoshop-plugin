@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-08T08:51:48Z"
+last_updated: "2026-05-08T09:17:32Z"
 progress:
   total_phases: 7
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 18
-  completed_plans: 17
-  percent: 94
+  completed_plans: 18
+  percent: 100
 ---
 
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-05-08T08:51:48Z
+**Last Updated:** 2026-05-08T09:17:32Z
 
 ---
 
@@ -28,13 +28,13 @@ progress:
 
 ## Current Position
 
-Phase: 07 (dingtalk-auth) — EXECUTING (1/? plans complete)
+Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
 | Attribute | Value |
 |-----------|-------|
 | **Phase** | 7 - DingTalk Auth Integration |
-| **Plan** | 1/? complete |
-| **Status** | Executing |
-| **Progress** | `[█████████████████   ]` 94% |
+| **Plan** | 3/3 complete |
+| **Status** | Complete |
+| **Progress** | `[████████████████████]` 100% |
 
 ---
 
@@ -59,6 +59,8 @@ Phase: 07 (dingtalk-auth) — EXECUTING (1/? plans complete)
 | Phase 06 P02 | 13min | 2 tasks | 3 files |
 | Phase 06 P03 | 16min | 2 tasks | 4 files |
 | Phase 07 P01 | 5min | 2 tasks | 2 files |
+| Phase 07 P02 | 3min | 2 tasks | 3 files |
+| Phase 07 P03 | 1min | 1 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -93,6 +95,11 @@ Phase: 07 (dingtalk-auth) — EXECUTING (1/? plans complete)
 - [Phase 07 P01]: setAuth defaults authProvider to 'password' so existing callers are unaffected
 - [Phase 07 P01]: v1->v2 migration infers authProvider from encryptedPassword presence
 - [Phase 07 P01]: ensureValidToken inserts DingTalk check between refresh failure and password re-login
+- [Phase 07 P02]: iframe attempt first with 5s timeout, falls back to qrcode.react static QR image per D-04
+- [Phase 07 P02]: Browser mode uses redirect OAuth, UXP mode uses QR code view per D-20/D-21
+- [Phase 07 P02]: loginView state initialized based on authProvider + token validity per D-14
+- [Phase 07 P03]: showLoginModal state moved from local useState to lemongridStore for global access
+- [Phase 07 P03]: Smart modal on mode switch requires no additional code -- ensureValidToken + LoginModal handle it
 
 ### Roadmap Evolution
 
@@ -100,6 +107,7 @@ Phase: 07 (dingtalk-auth) — EXECUTING (1/? plans complete)
 - Phase 5 added: 图片提示词反推功能
 - Phase 05.1 inserted after Phase 05: plugin-performance-fix (URGENT)
 - Phase 6 added: LemonGrid Integration
+- Phase 7 added: DingTalk Auth Integration
 
 ### Active TODOs
 
@@ -138,12 +146,12 @@ Phase: 07 (dingtalk-auth) — EXECUTING (1/? plans complete)
 ### Last Session
 
 - **Date:** 2026-05-08
-- **Action:** Completed Phase 07 Plan 01 (DingTalk OAuth service layer + authProvider tracking)
-- **Outcome:** lemongridStore has authProvider field with v1->v2 migration; three DingTalk OAuth service functions added; ensureValidToken routes dingtalk users to QR view on token expiry
+- **Action:** Completed Phase 07 Plan 03 (Settings login method display and smart modal on mode switch)
+- **Outcome:** Settings.tsx reads authProvider from store and displays "密码登录" or "钉钉登录" badge; smart modal on mode switch works via existing ensureValidToken + LoginModal flow; showLoginModal moved to lemongridStore for global access
 
 ### Next Action
 
-Phase 07 Plan 02: DingTalk QR code UI in LoginModal + Settings display
+Phase 07 complete. All DingTalk auth UI implemented. Backend poll/callback endpoints still need implementation in separate backend repo.
 
 ---
 
