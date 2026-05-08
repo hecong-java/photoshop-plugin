@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useLemonGridStore } from '../stores/lemongridStore';
-import { loginToLemonGrid, getUserProfile, syncAuthToBridge, encryptPassword } from '../services/lemongrid-auth';
+import { loginToLemonGrid, getUserProfile, syncAuthToBridge, encryptPassword, getDingTalkLoginUrl } from '../services/lemongrid-auth';
+import { DingTalkQRView } from './DingTalkQRView';
+import { isUXPWebView } from '../services/upload';
 import './LoginModal.css';
 
 interface LoginModalProps {
@@ -24,6 +26,9 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
   const [inputRememberMe, setInputRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loginView, setLoginView] = useState<'password' | 'dingtalk'>('password');
+  const authProvider = useLemonGridStore((state) => state.authProvider);
+  const tokenExpiresAt = useLemonGridStore((state) => state.tokenExpiresAt);
 
   // Pre-fill from stored values on mount
   useEffect(() => {
@@ -34,8 +39,16 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
       setInputRememberMe(false);
       setError(null);
       setIsLoading(false);
+
+      // Per D-14: If authProvider is dingtalk and token is expired, show QR view directly
+      const isTokenValid = tokenExpiresAt && tokenExpiresAt > Date.now() + 120000;
+      if (authProvider === 'dingtalk' && !isTokenValid) {
+        setLoginView('dingtalk');
+      } else {
+        setLoginView('password');
+      }
     }
-  }, [isOpen, serverUrl, storedUsername]);
+  }, [isOpen, serverUrl, storedUsername, authProvider, tokenExpiresAt]);
 
   // Normalize URL: auto-prepend http:// for bare IP/hostname
   const normalizeUrl = (raw: string): string => {
@@ -62,6 +75,40 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
       return '请输入密码';
     }
     return null;
+  };
+
+  const handleDingTalkClick = async () => {
+    const url = normalizeUrl(inputServerUrl || serverUrl || '');
+    if (!url) {
+      setError('请先输入服务器地址');
+      return;
+    }
+
+    if (!isUXPWebView()) {
+      // Per D-20, D-21: Browser mode uses standard redirect OAuth
+      try {
+        const { auth_url } = await getDingTalkLoginUrl(url, 'redirect');
+        window.location.href = auth_url;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error';
+        setError('钉钉登录失败: ' + message);
+      }
+      return;
+    }
+
+    // UXP mode: switch to QR code view per D-07
+    setLoginView('dingtalk');
+    setError(null);
+  };
+
+  const handleClose = () => {
+    setLoginView('password');
+    onClose();
+  };
+
+  const handleDingTalkSuccess = () => {
+    setConnected(true);
+    onLoginSuccess();
   };
 
   const handleSubmit = async () => {
@@ -150,7 +197,7 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
       handleSubmit();
     }
     if (e.key === 'Escape') {
-      onClose();
+      handleClose();
     }
   };
 
@@ -159,10 +206,11 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
   const isSubmitDisabled = isLoading || !inputServerUrl.trim() || !inputUsername.trim() || !inputPassword;
 
   return (
-    <div className="login-modal-overlay" onClick={onClose}>
+    <div className="login-modal-overlay" onClick={handleClose}>
       <div className="login-modal-card" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
         <h2 className="login-modal-title">LemonGrid 登录</h2>
 
+        {loginView === 'password' && (
         <div className="login-modal-form">
           <div className="form-group">
             <label htmlFor="lg-server-url">服务器地址</label>
@@ -232,13 +280,53 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
             </button>
             <button
               className="login-modal-btn cancel-btn"
-              onClick={onClose}
+              onClick={handleClose}
               disabled={isLoading}
             >
               取消
             </button>
           </div>
+
+          <div className="dingtalk-divider">
+            <span>或</span>
+          </div>
+          <button
+            className="dingtalk-btn"
+            onClick={handleDingTalkClick}
+            disabled={isLoading}
+            type="button"
+          >
+            <svg className="dingtalk-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm4 0h-2v-6h2v6zm-2-8c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1z"/>
+            </svg>
+            钉钉扫码登录
+          </button>
         </div>
+        )}
+
+        {loginView === 'dingtalk' && (
+          <div className="dingtalk-qrcode-view">
+            <a
+              className="dingtalk-back-link"
+              href="#"
+              onClick={(e) => {
+                e.preventDefault();
+                setLoginView('password');
+              }}
+            >
+              返回密码登录
+            </a>
+            <DingTalkQRView
+              serverUrl={normalizeUrl(inputServerUrl || serverUrl || '')}
+              onSuccess={handleDingTalkSuccess}
+              onError={(err) => {
+                // Errors are displayed inside DingTalkQRView per D-29
+                // This callback is for logging only
+                console.warn('[LoginModal] DingTalk auth error:', err);
+              }}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
