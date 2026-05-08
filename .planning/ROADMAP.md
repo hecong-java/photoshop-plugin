@@ -93,6 +93,7 @@ Plans:
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
 | 05.1. Plugin Performance Fix | 3/3 | Complete   | 2026-04-17 |
 | 6. LemonGrid Integration | 3/3 | Complete | 2026-04-28 |
+| 7. DingTalk Auth Integration | 1/3 | In progress | 07-01 |
 | 7. DingTalk Auth Integration | 0/3 | Planning | - |
 
 ---
@@ -268,7 +269,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Store authProvider field + DingTalk OAuth service functions + ensureValidToken routing
+- [x] 07-01-PLAN.md — Store authProvider field + DingTalk OAuth service functions + ensureValidToken routing
 - [ ] 07-02-PLAN.md — DingTalkQRView component (iframe + qrcode.react) + LoginModal integration + CSS
 - [ ] 07-03-PLAN.md — Settings login method display + smart modal on mode switch + integration verification
 
