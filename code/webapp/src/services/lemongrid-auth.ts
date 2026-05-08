@@ -29,6 +29,22 @@ interface LemonGridProfile {
   [key: string]: unknown;
 }
 
+interface DingTalkPollResponse {
+  status: 'pending' | 'completed' | 'error';
+  data?: {
+    access_token: string;
+    token_type: string;
+    expires_in: number;
+    user: {
+      id: string;
+      username: string;
+      role: string;
+      display_name?: string;
+    };
+  };
+  error?: string;
+}
+
 // AES-GCM encryption constants per D-78
 const ENCRYPTION_SALT = new TextEncoder().encode('Ningleai-LemonGrid-Encrypt-Salt');
 const ENCRYPTION_KEY_MATERIAL = 'Ningleai-LG-DeviceKey-v1';
@@ -318,6 +334,103 @@ export async function getUserProfile(
 }
 
 /**
+ * Get DingTalk OAuth login URL from backend.
+ * Per D-19: redirect_mode tells backend whether to use Web redirect or plugin poll mode.
+ * Per D-20/D-21: Browser mode uses 'redirect', UXP mode uses 'poll'.
+ */
+export async function getDingTalkLoginUrl(
+  serverUrl: string,
+  redirectMode: 'redirect' | 'poll' = 'poll'
+): Promise<{ auth_url: string; state: string }> {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/login-url?redirect_mode=${redirectMode}`;
+  const response = await lemongridFetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to get DingTalk login URL: ${response.status}`);
+  }
+  return (await response.json()) as { auth_url: string; state: string };
+}
+
+/**
+ * Poll backend for DingTalk OAuth result.
+ * Per D-11: Polling interval 2 seconds, total timeout 5 minutes (300000ms).
+ * Per D-03/D-17: Polls backend endpoint which returns pending/completed/error.
+ * Accepts optional AbortSignal for cancellation on component unmount.
+ */
+export async function pollDingTalkAuth(
+  serverUrl: string,
+  state: string,
+  options: { intervalMs?: number; timeoutMs?: number; signal?: AbortSignal } = {}
+): Promise<DingTalkPollResponse> {
+  const interval = options.intervalMs ?? 2000;
+  const timeout = options.timeoutMs ?? 300000; // 5 min per D-11
+  const startTime = Date.now();
+  const pollUrl = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/poll?state=${encodeURIComponent(state)}`;
+
+  while (Date.now() - startTime < timeout) {
+    if (options.signal?.aborted) {
+      throw new Error('POLL_CANCELLED');
+    }
+
+    const response = await lemongridFetch(pollUrl);
+    if (!response.ok) {
+      throw new Error(`Poll request failed: ${response.status}`);
+    }
+    const result = (await response.json()) as DingTalkPollResponse;
+
+    if (result.status === 'completed') return result;
+    if (result.status === 'error') {
+      throw new Error(result.error || 'DingTalk auth failed');
+    }
+    // result.status === 'pending' -- continue polling
+
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+
+  throw new Error('POLL_TIMEOUT');
+}
+
+/**
+ * Complete DingTalk login: store JWT and set authProvider to dingtalk.
+ * Per D-22: Store display_name as username if available, fallback to username.
+ * Per D-13: Set auth provider to dingtalk.
+ */
+export async function loginWithDingTalk(
+  serverUrl: string,
+  pollData: DingTalkPollResponse['data']
+): Promise<void> {
+  if (!pollData) throw new Error('No poll data received');
+
+  const store = useLemonGridStore.getState();
+
+  // Per D-22: Store display_name as username if available, fallback to username
+  const displayName = pollData.user.display_name || pollData.user.username || 'DingTalk User';
+
+  store.setAuth({
+    accessToken: pollData.access_token,
+    expiresIn: pollData.expires_in,
+    username: displayName,
+    role: pollData.user.role,
+  });
+
+  // Per D-13: Set auth provider to dingtalk
+  store.setAuthProvider('dingtalk');
+
+  // DingTalk users don't need stored passwords
+  store.setEncryptedPassword(null);
+  store.setRememberMe(false);
+
+  // Sync auth to Bridge (same pattern as password login)
+  await syncAuthToBridge();
+
+  // Fetch full user profile (same pattern as password login)
+  try {
+    await getUserProfile(serverUrl, pollData.access_token);
+  } catch {
+    // Profile fetch failure should not block login
+  }
+}
+
+/**
  * Sync auth state to Bridge so main.js handlers can inject JWT.
  * Per plan: Called automatically after login/refresh.
  */
@@ -375,6 +488,12 @@ export async function ensureValidToken(): Promise<string> {
     }
   }
 
+  // Per D-14, D-15: DingTalk users should see QR code view, not password re-login
+  if (lgState.authProvider === 'dingtalk') {
+    useLemonGridStore.getState().setShowLoginModal(true);
+    throw new Error('AUTH_EXPIRED_DINGTALK');
+  }
+
   // Try re-login with stored credentials (per D-77, D-72)
   if (lgState.rememberMe && lgState.encryptedPassword && lgState.username && lgState.serverUrl) {
     try {
@@ -396,6 +515,10 @@ export async function ensureValidToken(): Promise<string> {
       // Re-login failed
     }
   }
+
+  // All auth methods failed — update store so UI reflects expired state
+  useLemonGridStore.getState().setConnected(false);
+  useLemonGridStore.getState().setShowLoginModal(true);
 
   throw new Error('AUTH_EXPIRED');
 }
