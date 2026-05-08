@@ -44,6 +44,12 @@ interface LemonGridState {
   tasks: Record<string, LemonGridTaskState>;
   clusterOutputImages: ClusterOutputImage[];
 
+  // Global login modal trigger (transient - not persisted)
+  showLoginModal: boolean;
+
+  // Auth provider tracking per D-13
+  authProvider: 'password' | 'dingtalk' | null;
+
   // Actions
   setAuth: (data: {
     accessToken: string;
@@ -61,6 +67,8 @@ interface LemonGridState {
   setRememberMe: (enabled: boolean) => void;
   addClusterOutputImage: (image: ClusterOutputImage) => void;
   clearClusterOutputImages: () => void;
+  setShowLoginModal: (show: boolean) => void;
+  setAuthProvider: (provider: 'password' | 'dingtalk' | null) => void;
 }
 
 export const useLemonGridStore = create<LemonGridState>()(
@@ -83,6 +91,12 @@ export const useLemonGridStore = create<LemonGridState>()(
       tasks: {},
       clusterOutputImages: [],
 
+      // Global login modal
+      showLoginModal: false,
+
+      // Auth provider tracking per D-13
+      authProvider: null,
+
       // Actions
       setAuth: (data) =>
         set({
@@ -92,6 +106,7 @@ export const useLemonGridStore = create<LemonGridState>()(
           username: data.username,
           userRole: data.role,
           isConnected: true,
+          authProvider: 'password', // Default to password per D-13
         }),
 
       clearAuth: () =>
@@ -102,6 +117,7 @@ export const useLemonGridStore = create<LemonGridState>()(
           userRole: null,
           isConnected: false,
           encryptedPassword: null,
+          authProvider: null,
           tasks: {},
           clusterOutputImages: [],
         }),
@@ -153,10 +169,14 @@ export const useLemonGridStore = create<LemonGridState>()(
         })),
 
       clearClusterOutputImages: () => set({ clusterOutputImages: [] }),
+
+      setShowLoginModal: (show) => set({ showLoginModal: show }),
+
+      setAuthProvider: (provider) => set({ authProvider: provider }),
     }),
     {
       name: 'Ningleai-lemongrid',
-      version: 1,
+      version: 2,
       migrate: (persisted: Record<string, unknown>, version: number) => {
         if (version === 0) {
           return {
@@ -170,6 +190,12 @@ export const useLemonGridStore = create<LemonGridState>()(
             rememberMe: false,
           };
         }
+        if (version === 1) {
+          return {
+            ...persisted,
+            authProvider: persisted.encryptedPassword ? 'password' : null,
+          };
+        }
         return persisted;
       },
       partialize: (state) => ({
@@ -181,6 +207,7 @@ export const useLemonGridStore = create<LemonGridState>()(
         userRole: state.userRole,
         encryptedPassword: state.encryptedPassword,
         rememberMe: state.rememberMe,
+        authProvider: state.authProvider,
       }),
     }
   )
