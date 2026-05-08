@@ -24,16 +24,17 @@ export const Settings = () => {
   const lgServerUrl = useLemonGridStore((state) => state.serverUrl);
   const lgUsername = useLemonGridStore((state) => state.username);
   const lgUserRole = useLemonGridStore((state) => state.userRole);
+  const lgAuthProvider = useLemonGridStore((state) => state.authProvider);
   const lgSetServerUrl = useLemonGridStore((state) => state.setServerUrl);
   const lgClearAuth = useLemonGridStore((state) => state.clearAuth);
   const lgSetConnected = useLemonGridStore((state) => state.setConnected);
+  const showLoginModal = useLemonGridStore((state) => state.showLoginModal);
+  const setShowLoginModal = useLemonGridStore((state) => state.setShowLoginModal);
   const lgTasks = useLemonGridStore((state) => state.tasks);
 
   const [isProbing, setIsProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeResult, setProbeResult] = useState<ComfyUICapabilities | null>(null);
-
-  const [showLoginModal, setShowLoginModal] = useState(false);
 
   // Connection status indicator
   const getConnectionStatus = () => {
@@ -304,6 +305,11 @@ export const Settings = () => {
                   <div className="lg-user-info">
                     <span className="lg-username">{lgUsername}</span>
                     {lgUserRole && <span className="lg-role">{lgUserRole}</span>}
+                    {lgAuthProvider && (
+                      <span className="lg-auth-method">
+                        {lgAuthProvider === 'dingtalk' ? '钉钉登录' : '密码登录'}
+                      </span>
+                    )}
                   </div>
                   <button
                     onClick={handleLogout}
