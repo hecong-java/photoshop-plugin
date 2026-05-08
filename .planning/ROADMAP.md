@@ -93,6 +93,7 @@ Plans:
 | 5. 图片提示词反推功能 | 0/4 | Planning | - |
 | 05.1. Plugin Performance Fix | 3/3 | Complete   | 2026-04-17 |
 | 6. LemonGrid Integration | 3/3 | Complete | 2026-04-28 |
+| 7. DingTalk Auth Integration | 0/3 | Planning | - |
 
 ---
 
@@ -143,8 +144,9 @@ Plans:
 | PERF-05 | Phase 05.1 | Planned |
 | PERF-06 | Phase 05.1 | Planned |
 | PERF-07 | Phase 05.1 | Planned |
+| D-01..D-29 | Phase 7 | Planned |
 
-**Coverage:** 43/43 requirements mapped (100%)
+**Coverage:** requirements mapped (100%)
 
 ### Phase 4: 工作流参数预设功能
 
@@ -245,7 +247,32 @@ Plans:
 - [x] 06-02-PLAN.md — LemonGridClient service, template system, dynamic param UI, and preset integration
 - [x] 06-03-PLAN.md — Mini task list, WebSocket progress, polling fallback, retry/cancel, and history filter
 
+### Phase 7: DingTalk Auth Integration
+
+**Goal:** 在 Photoshop 插件中接入钉钉 OAuth 扫码登录，与现有用户名/密码登录共存。插件复用 LemonGrid 后端已有的钉钉 OAuth 基础设施，适配 UXP 环境的特殊限制。
+
+**Depends on:** Phase 6
+
+**Requirements:** D-01 through D-29 (decisions in 07-CONTEXT.md)
+
+**Success Criteria** (what must be TRUE):
+1. LoginModal 显示钉钉扫码登录按钮，用户可切换密码/扫码两种登录方式
+2. UXP 模式通过 qrcode.react 渲染 OAuth URL 二维码（iframe 尝试 + 回退）
+3. 浏览器模式使用标准 redirect OAuth 流程
+4. 扫码后轮询后端获取 JWT，自动完成登录
+5. authProvider 字段追踪登录方式，影响 token 刷新行为
+6. Settings 页显示当前登录方式（密码登录/钉钉登录）
+7. 钉钉用户 token 过期后自动弹出二维码视图
+8. 所有错误在二维码视图内显示，提供重试按钮
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 07-01-PLAN.md — Store authProvider field + DingTalk OAuth service functions + ensureValidToken routing
+- [ ] 07-02-PLAN.md — DingTalkQRView component (iframe + qrcode.react) + LoginModal integration + CSS
+- [ ] 07-03-PLAN.md — Settings login method display + smart modal on mode switch + integration verification
+
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-04-28 - Phase 6 complete (3/3 plans executed)*
+*Last updated: 2026-05-08 - Phase 7 planned (3 plans)*
