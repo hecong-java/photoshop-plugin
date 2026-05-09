@@ -19,7 +19,8 @@ export const History = () => {
   const navigate = useNavigate();
   const { items, clusterItems, deleteItem, isLoading, error, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads, addLocalDownload } = useHistoryStore();
   const { comfyUI } = useSettingsStore();
-  const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl } = useLemonGridStore();
+  const { accessToken: lemonGridAccessToken, serverUrl: lemonGridServerUrl } = useLemonGridStore();
+  const hasClusterAuth = !!(lemonGridAccessToken && lemonGridServerUrl);
   const [downloadSuccess, setDownloadSuccess] = useState<DownloadSuccess | null>(null);
 
   // Merge direct and cluster items, sorted by timestamp descending
@@ -37,14 +38,14 @@ export const History = () => {
         await fetchFromComfyUI();
       }
 
-      // Fetch cluster history if LemonGrid is connected
-      if (isLemonGridConnected && lemonGridServerUrl) {
+      // Fetch cluster history if LemonGrid has auth credentials
+      if (hasClusterAuth) {
         await fetchFromCluster(lemonGridServerUrl);
       }
     };
 
     loadHistory();
-  }, [comfyUI.baseUrl, comfyUI.isConnected, isLemonGridConnected, lemonGridServerUrl, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads]);
+  }, [comfyUI.baseUrl, comfyUI.isConnected, hasClusterAuth, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads]);
 
   // Auto-hide success message after 3 seconds
   useEffect(() => {
@@ -154,13 +155,13 @@ export const History = () => {
       setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
       await fetchFromComfyUI();
     }
-    if (isLemonGridConnected && lemonGridServerUrl) {
+    if (hasClusterAuth) {
       await fetchFromCluster(lemonGridServerUrl);
     }
   };
 
-  // Show configuration prompt if neither ComfyUI nor LemonGrid is connected
-  if ((!comfyUI.baseUrl || !comfyUI.isConnected) && !isLemonGridConnected) {
+  // Show configuration prompt if neither ComfyUI nor LemonGrid is available
+  if ((!comfyUI.baseUrl || !comfyUI.isConnected) && !hasClusterAuth) {
     return (
       <div className="history-page">
         <div className="history-not-configured">
