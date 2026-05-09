@@ -10,6 +10,8 @@ interface HistoryListProps {
   onReEdit: (item: HistoryItem) => void;
   onDelete: (id: string) => void;
   isLoading?: boolean;
+  directCount?: number;
+  clusterCount?: number;
 }
 
 const ITEMS_PER_PAGE = 10;
@@ -21,6 +23,8 @@ export const HistoryList: React.FC<HistoryListProps> = ({
   onReEdit,
   onDelete,
   isLoading = false,
+  directCount,
+  clusterCount,
 }) => {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -64,19 +68,25 @@ export const HistoryList: React.FC<HistoryListProps> = ({
       <div className="history-list-header">
         <span className="history-count">
           {items.length} {items.length !== 1 ? '条历史记录' : '条历史记录'}
+          {clusterCount !== undefined && clusterCount > 0 && (
+            <span className="history-source-breakdown">
+              {' '}({directCount ?? 0} 直连 + {clusterCount} 集群)
+            </span>
+          )}
         </span>
       </div>
 
       <div className="history-list-items">
         {paginatedItems.map((item) => (
-          <HistoryItemComponent
-            key={item.id}
-            item={item}
-            onView={onView}
-            onRerun={onRerun}
-            onReEdit={onReEdit}
-            onDelete={onDelete}
-          />
+          <div key={item.id} data-source={item.source || 'direct'} className="history-item-wrapper">
+            <HistoryItemComponent
+              item={item}
+              onView={onView}
+              onRerun={onRerun}
+              onReEdit={onReEdit}
+              onDelete={onDelete}
+            />
+          </div>
         ))}
       </div>
 

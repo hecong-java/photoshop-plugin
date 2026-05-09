@@ -4,6 +4,7 @@ import type { HistoryItem } from '../stores/historyStore';
 import { ComfyUIClient } from '../services/comfyui';
 import { useHistoryStore } from '../stores/historyStore';
 import { useSettingsStore } from '../stores/settingsStore';
+import { useLemonGridStore } from '../stores/lemongridStore';
 import { HistoryList } from '../components/history/HistoryList';
 import { downloadAndSaveZip, generateDownloadFilename } from '../services/download';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
@@ -16,11 +17,15 @@ interface DownloadSuccess {
 
 export const History = () => {
   const navigate = useNavigate();
-  const { items, deleteItem, isLoading, error, setClient, fetchFromComfyUI, loadLocalDownloads, addLocalDownload } = useHistoryStore();
+  const { items, clusterItems, deleteItem, isLoading, error, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads, addLocalDownload } = useHistoryStore();
   const { comfyUI } = useSettingsStore();
+  const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl } = useLemonGridStore();
   const [downloadSuccess, setDownloadSuccess] = useState<DownloadSuccess | null>(null);
 
-  // Load from ComfyUI on mount
+  // Merge direct and cluster items, sorted by timestamp descending
+  const allItems = [...items, ...clusterItems].sort((a, b) => b.timestamp - a.timestamp);
+
+  // Load from ComfyUI and LemonGrid on mount
   useEffect(() => {
     const loadHistory = async () => {
       // First load local downloads
@@ -31,10 +36,15 @@ export const History = () => {
         setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
         await fetchFromComfyUI();
       }
+
+      // Fetch cluster history if LemonGrid is connected
+      if (isLemonGridConnected && lemonGridServerUrl) {
+        await fetchFromCluster(lemonGridServerUrl);
+      }
     };
 
     loadHistory();
-  }, [comfyUI.baseUrl, comfyUI.isConnected, setClient, fetchFromComfyUI, loadLocalDownloads]);
+  }, [comfyUI.baseUrl, comfyUI.isConnected, isLemonGridConnected, lemonGridServerUrl, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads]);
 
   // Auto-hide success message after 3 seconds
   useEffect(() => {
@@ -52,6 +62,21 @@ export const History = () => {
       throw new Error('当前记录没有可下载图片');
     }
 
+    if (item.source === 'cluster') {
+      // Cluster items: download directly from LemonGrid asset URLs
+      const urls = item.images.map((image, index) => ({
+        url: image.imageUrl || image.thumbnailUrl || '',
+        filename: image.filename,
+        index,
+      }));
+      const filename = generateDownloadFilename(item.imageName || 'cluster', 0).replace(/\.png$/i, '.zip');
+      const result = await downloadAndSaveZip(urls, filename);
+      addLocalDownload(item.promptId, result.savedPath);
+      setDownloadSuccess({ path: result.savedPath, timestamp: Date.now() });
+      return;
+    }
+
+    // Direct mode: existing ComfyUI download logic
     const filename = generateDownloadFilename(item.imageName || 'comfyui', 0).replace(/\.png$/i, '.zip');
     const baseUrl = comfyUI.baseUrl;
     const client = new ComfyUIClient({ baseUrl });
@@ -110,8 +135,12 @@ export const History = () => {
   };
 
   const handleDelete = (id: string) => {
-    const target = items.find((item) => item.id === id);
+    const target = allItems.find((item) => item.id === id);
     if (!target) {
+      return;
+    }
+    if (target.source === 'cluster') {
+      // Cluster items cannot be deleted from here — they are managed server-side
       return;
     }
     if (!window.confirm(`确定要删除历史记录 "${target.imageName}" 吗？`)) {
@@ -125,15 +154,18 @@ export const History = () => {
       setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
       await fetchFromComfyUI();
     }
+    if (isLemonGridConnected && lemonGridServerUrl) {
+      await fetchFromCluster(lemonGridServerUrl);
+    }
   };
 
-  // Show configuration prompt if ComfyUI not connected
-  if (!comfyUI.baseUrl || !comfyUI.isConnected) {
+  // Show configuration prompt if neither ComfyUI nor LemonGrid is connected
+  if ((!comfyUI.baseUrl || !comfyUI.isConnected) && !isLemonGridConnected) {
     return (
       <div className="history-page">
         <div className="history-not-configured">
-          <h2>ComfyUI 未连接</h2>
-          <p>请在设置页面配置并连接 ComfyUI 以查看历史记录。</p>
+          <h2>未连接</h2>
+          <p>请在设置页面配置并连接 ComfyUI 或 LemonGrid 以查看历史记录。</p>
           <button onClick={() => navigate('/settings')} className="btn-primary">
             前往设置
           </button>
@@ -179,12 +211,14 @@ export const History = () => {
       )}
 
       <HistoryList
-        items={items}
+        items={allItems}
         onView={handleView}
         onRerun={handleRerun}
         onReEdit={handleReEdit}
         onDelete={handleDelete}
         isLoading={isLoading}
+        directCount={items.length}
+        clusterCount={clusterItems.length}
       />
       <PromptReverseFlow />
     </div>

@@ -28,6 +28,18 @@
   color: #cbd5e1;
 }
 
+.history-source-breakdown {
+  font-size: 0.85em;
+  color: #94a3b8;
+}
+
+.history-item-wrapper[data-source="cluster"] .history-item-name::after {
+  content: ' [集群]';
+  font-size: 0.75em;
+  color: #888;
+  font-weight: normal;
+}
+
 .history-list-items {
   margin-bottom: 10px;
 }
