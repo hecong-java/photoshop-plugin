@@ -786,7 +786,7 @@ export const Draw = () => {
       }
 
       const stringCandidate = typeof candidate === 'string' ? candidate : String(candidate);
-      if (input.type === 'select' && input.options && !input.options.includes(stringCandidate)) {
+      if (input.type === 'select' && input.options && !input.options.some(o => String(o.value) === stringCandidate)) {
         return;
       }
       restoredValues[input.name] = stringCandidate;

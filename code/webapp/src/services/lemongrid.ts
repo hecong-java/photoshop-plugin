@@ -132,7 +132,7 @@ interface RawParamSchemaField {
   default: unknown;
   group: string;
   node_id: string;
-  options?: Array<{ label: string; value: unknown }> | null;
+  options?: Array<{ label: string; value: unknown }> | string[] | null;
   visible?: boolean | null;
   min?: number | null;
   max?: number | null;
@@ -159,6 +159,27 @@ function isHidden(raw: RawParamSchemaField): boolean {
   return raw.visible === false || raw.visible === 0 || raw.visible === 'false' || raw.visible === 'False';
 }
 
+/**
+ * Normalize options to uniform {label, value} format.
+ * COMFYUI templates return [{label, value}] objects.
+ * THIRD_PARTY_API templates return plain string arrays like ["auto","1:1",...].
+ */
+function normalizeOptions(
+  raw: Array<{ label: string; value: unknown } | string> | null | undefined,
+): Array<{ label: string; value: unknown }> | undefined {
+  if (!raw || !Array.isArray(raw) || raw.length === 0) return undefined;
+  // Already in object format
+  if (typeof raw[0] === 'object' && raw[0] !== null && 'value' in raw[0]) {
+    return raw as Array<{ label: string; value: unknown }>;
+  }
+  // Plain string/number array — convert to {label, value}
+  return raw.map((item) => {
+    const val = typeof item === 'object' && item !== null && 'value' in item ? item.value : item;
+    const lbl = typeof item === 'object' && item !== null && 'label' in item ? item.label : String(val);
+    return { label: lbl, value: val };
+  });
+}
+
 /** Convert raw API param_schema field to ParamSchemaField interface */
 function normalizeParamField(raw: RawParamSchemaField): ParamSchemaField {
   // Infer boolean type from default value when API misreports type (e.g. log=true typed as INT)
@@ -171,7 +192,7 @@ function normalizeParamField(raw: RawParamSchemaField): ParamSchemaField {
     default: raw.default,
     required: false,
     hidden: isHidden(raw) || undefined,
-    options: raw.options ?? undefined,
+    options: normalizeOptions(raw.options as Array<{ label: string; value: unknown } | string> | null | undefined),
     min: raw.min ?? undefined,
     max: raw.max ?? undefined,
     step: raw.step ?? undefined,
