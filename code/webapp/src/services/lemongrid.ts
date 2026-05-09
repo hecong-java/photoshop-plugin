@@ -22,10 +22,12 @@ export interface LemonGridTemplateSummary {
 
 export interface ParamSchemaField {
   name: string;
+  node_id: string;
   type: 'text' | 'number' | 'image' | 'select' | 'boolean' | 'slider';
   label: string;
   default: unknown;
   required: boolean;
+  hidden?: boolean;
   options?: Array<{ label: string; value: unknown }>;
   min?: number;
   max?: number;
@@ -67,6 +69,30 @@ export interface LemonGridTaskStatus {
   completed_at: string | null;
 }
 
+export interface LemonGridTaskHistoryItem {
+  id: string;
+  status: string;
+  progress: number;
+  parameters: Record<string, unknown>;
+  created_at: string;
+  completed_at: string | null;
+  template_id: string;
+  template_category: string;
+  param_schema: unknown[];
+  output_file_ids: string[];
+  workflow_name: string;
+  error_code: string | null;
+  error_message: string | null;
+  duration_seconds: number | null;
+}
+
+export interface LemonGridTaskHistoryResponse {
+  items: LemonGridTaskHistoryItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
 // ---------------------------------------------------------------------------
 // Error suggestions per D-45
 // ---------------------------------------------------------------------------
@@ -85,11 +111,97 @@ export const LEMONGRID_ERROR_SUGGESTIONS: Record<string, string> = {
 // Utility functions
 // ---------------------------------------------------------------------------
 
+/** Raw param_schema field as returned by the LemonGrid API */
+interface RawParamSchemaField {
+  input_name: string;
+  type: string;       // "STRING", "INT", "FLOAT", "BOOLEAN", "IMAGEUPLOAD", "COMBO"
+  label: string;
+  default: unknown;
+  group: string;
+  node_id: string;
+  options?: Array<{ label: string; value: unknown }> | null;
+  visible?: boolean | null;
+  min?: number | null;
+  max?: number | null;
+  step?: number | null;
+  description?: string | null;
+  source_class_type?: string | null;
+}
+
+/** Map API type strings to ParamSchemaField type literals */
+function mapApiType(apiType: string): ParamSchemaField['type'] {
+  switch (apiType?.toUpperCase()) {
+    case 'STRING': return 'text';
+    case 'INT':
+    case 'FLOAT': return 'number';
+    case 'IMAGEUPLOAD': return 'image';
+    case 'COMBO': return 'select';
+    case 'BOOLEAN': return 'boolean';
+    default: return 'text';
+  }
+}
+
+/** Check if a raw field is marked invisible */
+function isHidden(raw: RawParamSchemaField): boolean {
+  return raw.visible === false || raw.visible === 0 || raw.visible === 'false' || raw.visible === 'False';
+}
+
+/** Convert raw API param_schema field to ParamSchemaField interface */
+function normalizeParamField(raw: RawParamSchemaField): ParamSchemaField {
+  // Infer boolean type from default value when API misreports type (e.g. log=true typed as INT)
+  const inferredType = typeof raw.default === 'boolean' ? 'boolean' : mapApiType(raw.type);
+  return {
+    name: raw.input_name,
+    node_id: String(raw.node_id),
+    type: inferredType,
+    label: raw.label || raw.input_name,
+    default: raw.default,
+    required: false,
+    hidden: isHidden(raw) || undefined,
+    options: raw.options ?? undefined,
+    min: raw.min ?? undefined,
+    max: raw.max ?? undefined,
+    step: raw.step ?? undefined,
+    description: raw.description ?? undefined,
+  };
+}
+
+/** Normalize param_schema array from API response — keeps all fields (hidden ones marked for UI skip) */
+function normalizeParamSchema(rawSchema: RawParamSchemaField[]): ParamSchemaField[] {
+  if (!Array.isArray(rawSchema)) return [];
+  const hiddenCount = rawSchema.filter(isHidden).length;
+  console.log('[LemonGrid] normalizeParamSchema:', rawSchema.length, 'total,', hiddenCount, 'hidden');
+  return rawSchema.map(normalizeParamField);
+}
+
 /**
  * Per D-19: Auto-detect image inputs from param_schema.
  */
 export function isImageParam(field: ParamSchemaField): boolean {
   return field.type === 'image';
+}
+
+/**
+ * Normalize a raw template object (from list API) into LemonGridTemplateDetail.
+ * The list API returns full template objects with param_schema already included,
+ * so we can skip the separate getTemplateDetail call.
+ */
+export function normalizeTemplateDetail(raw: Record<string, unknown>): LemonGridTemplateDetail {
+  const rawSchema = raw.param_schema;
+  if (!rawSchema) {
+    console.warn('[LemonGrid] normalizeTemplateDetail: param_schema missing for', raw.id, '- keys:', Object.keys(raw));
+  }
+  return {
+    id: raw.id as string,
+    name: raw.name as string,
+    description: raw.description as string,
+    category: raw.category as string,
+    thumbnail_url: (raw.thumbnail_url as string | null) ?? null,
+    help_text: (raw.help_text as string | null) ?? null,
+    param_schema: normalizeParamSchema((rawSchema as RawParamSchemaField[] | undefined) ?? []),
+    version: raw.version as number,
+    example_outputs: (raw.example_outputs as string[]) ?? [],
+  };
 }
 
 /**
@@ -171,15 +283,30 @@ export class LemonGridClient {
    * Per D-14: Server does role-based filtering, no client filtering needed.
    */
   async listTemplates(): Promise<LemonGridTemplateSummary[]> {
-    return this.fetchJson<LemonGridTemplateSummary[]>('/api/v1/templates');
+    const raw = await this.fetchJson<unknown>('/api/v1/templates');
+    // API may return a bare array or a wrapper like { data: [...] } / { templates: [...] }
+    if (Array.isArray(raw)) return raw;
+    if (raw && typeof raw === 'object') {
+      const obj = raw as Record<string, unknown>;
+      const arr = obj.data ?? obj.templates ?? obj.items ?? obj.results;
+      if (Array.isArray(arr)) return arr as LemonGridTemplateSummary[];
+    }
+    console.warn('[LemonGrid] Unexpected listTemplates response:', raw);
+    return [];
   }
 
   /**
-   * Get full template detail with param_schema.
-   * Per D-08: Fetch on demand when user selects a template.
+   * Get full detail for a single template, including complete param_schema with visible flags.
+   * Falls back to list data if detail endpoint is unavailable.
    */
   async getTemplateDetail(templateId: string): Promise<LemonGridTemplateDetail> {
-    return this.fetchJson<LemonGridTemplateDetail>(`/api/v1/templates/${templateId}`);
+    try {
+      const raw = await this.fetchJson<Record<string, unknown>>(`/api/v1/templates/${templateId}`);
+      return normalizeTemplateDetail(raw);
+    } catch (err) {
+      console.warn('[LemonGrid] getTemplateDetail failed, falling back to list data:', err);
+      throw err;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -193,12 +320,16 @@ export class LemonGridClient {
    */
   async submitTask(
     templateId: string,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    templateVersion: number = 1,
   ): Promise<LemonGridTaskSubmitResult> {
     return this.fetchJson<LemonGridTaskSubmitResult>('/api/v1/tasks/submit', {
       method: 'POST',
       body: JSON.stringify({
+        task_type: 'COMFYUI',
+        task_mode: 'SPLIT',
         template_id: templateId,
+        template_version: templateVersion,
         parameters: params,
       }),
     });
@@ -220,6 +351,17 @@ export class LemonGridClient {
     await this.fetchJson<unknown>(`/api/v1/tasks/${taskId}`, {
       method: 'DELETE',
     });
+  }
+
+  /**
+   * Get task history for the current user.
+   * Calls GET /api/v1/tasks?history_only=true with optional pagination.
+   */
+  async getTaskHistory(params?: { page?: number; pageSize?: number }): Promise<LemonGridTaskHistoryResponse> {
+    const query = new URLSearchParams({ history_only: 'true' });
+    if (params?.page) query.set('page', String(params.page));
+    if (params?.pageSize) query.set('page_size', String(params.pageSize));
+    return this.fetchJson<LemonGridTaskHistoryResponse>(`/api/v1/tasks?${query.toString()}`);
   }
 
   // -------------------------------------------------------------------------

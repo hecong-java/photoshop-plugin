@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ComfyUIClient, type ComfyUIHistoryEntry, type PrefixMode } from '../services/comfyui';
+import { LemonGridClient } from '../services/lemongrid';
 
 export interface HistoryItem {
   id: string;
@@ -21,6 +22,7 @@ export interface HistoryItem {
     thumbnailUrl?: string;
     imageUrl?: string;
   }>;
+  source?: 'direct' | 'cluster'; // defaults to 'direct' for backward compat
 }
 
 interface LocalDownload {
@@ -39,6 +41,8 @@ interface HistoryState {
 
   setClient: (baseUrl: string, prefixMode?: PrefixMode) => void;
   fetchFromComfyUI: () => Promise<void>;
+  clusterItems: HistoryItem[];
+  fetchFromCluster: (serverUrl: string) => Promise<void>;
   addLocalDownload: (promptId: string, filePath: string) => void;
   removeLocalDownload: (promptId: string, filePath: string) => void;
   deleteItem: (id: string) => void;
@@ -262,11 +266,13 @@ const convertEntryToItem = (
     timestamp: extractExecutionTimestamp(entry),
     status: 'completed',
     localDownloads,
+    source: 'direct' as const,
   };
 };
 
 export const useHistoryStore = create<HistoryState>((set, get) => ({
   items: [],
+  clusterItems: [],
   localDownloads: [],
   isLoading: false,
   error: null,
@@ -322,6 +328,47 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch history';
       set({ error: message, isLoading: false, items: [] });
+    }
+  },
+
+  fetchFromCluster: async (serverUrl: string) => {
+    set({ isLoading: true, error: null });
+    try {
+      const client = new LemonGridClient({ serverUrl });
+      const response = await client.getTaskHistory({ page: 1, pageSize: 50 });
+      const items: HistoryItem[] = response.items.map((task) => ({
+        id: `cluster-${task.id}`,
+        promptId: task.id,
+        workflow: task.template_id,
+        workflowName: task.workflow_name || task.template_category || 'Unknown',
+        imageName: task.workflow_name || task.template_id,
+        params: task.parameters || {},
+        outputs: {},
+        thumbnailUrl: task.output_file_ids?.[0]
+          ? `${serverUrl}/api/v1/assets/library/${task.output_file_ids[0]}/download`
+          : undefined,
+        imageUrl: task.output_file_ids?.[0]
+          ? `${serverUrl}/api/v1/assets/library/${task.output_file_ids[0]}/download`
+          : undefined,
+        timestamp: task.completed_at
+          ? new Date(task.completed_at).getTime()
+          : new Date(task.created_at).getTime(),
+        status: (task.status === 'COMPLETED' ? 'completed' : task.status === 'FAILED' ? 'failed' : 'completed') as HistoryItem['status'],
+        localDownloads: [],
+        images: (task.output_file_ids || []).map((fid) => ({
+          filename: fid,
+          type: 'output',
+          thumbnailUrl: `${serverUrl}/api/v1/assets/library/${fid}/download`,
+          imageUrl: `${serverUrl}/api/v1/assets/library/${fid}/download`,
+        })),
+        source: 'cluster' as const,
+      }));
+      set({ clusterItems: items, isLoading: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to fetch cluster history';
+      // Don't wipe ComfyUI items on cluster fetch failure — just log and keep existing
+      console.warn('[historyStore] Cluster history fetch failed:', message);
+      set({ isLoading: false });
     }
   },
 
