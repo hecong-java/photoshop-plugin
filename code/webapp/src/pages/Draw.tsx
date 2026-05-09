@@ -12,9 +12,10 @@ import { usePresetStore } from '../stores/presetStore';
 import type { PresetFile } from '../types/preset';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
-import { LemonGridClient, isImageParam, renderParamDefault, LEMONGRID_ERROR_SUGGESTIONS, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField } from '../services/lemongrid';
+import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField } from '../services/lemongrid';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { ensureValidToken } from '../services/lemongrid-auth';
+import { LoginModal } from '../components/LoginModal';
 import { MiniTaskList } from '../components/MiniTaskList';
 import './Draw.css';
 
@@ -256,7 +257,7 @@ export const Draw = () => {
   // Cluster Mode state per D-50, D-51
   const connectionMode = useSettingsStore((s) => s.connectionMode);
   const lemonGridStore = useLemonGridStore();
-  const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl } = lemonGridStore;
+  const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl, showLoginModal: lgShowLoginModal, setShowLoginModal: lgSetShowLoginModal } = lemonGridStore;
 
   // Template state (replaces workflow state in Cluster Mode)
   const [clusterTemplates, setClusterTemplates] = useState<LemonGridTemplateSummary[]>([]);
@@ -306,6 +307,8 @@ export const Draw = () => {
     promptId: null,
   });
   const [isGenerating, setIsGenerating] = useState(false);
+  const [clusterSubmitError, setClusterSubmitError] = useState<string | null>(null);
+  const [isSubmittingCluster, setIsSubmittingCluster] = useState(false);
   const [, setLatestGeneratedImageBlob] = useState<Blob | null>(null);
   const [outputImages, setOutputImages] = useState<OutputImageData[]>([]);
   const [activeOutputIndex, setActiveOutputIndex] = useState(0);
@@ -472,7 +475,7 @@ export const Draw = () => {
       setIsLoadingTemplates(true);
       try {
         const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
-        const templates = await client.listTemplates();
+        const templates = await client.listTemplates({ status_filter: 'ACTIVE', page_size: 100 });
         if (!cancelled) {
           setClusterTemplates(templates);
         }
@@ -545,7 +548,6 @@ export const Draw = () => {
               errorCode: wsData.error_code || 'UNKNOWN',
               errorMessage: wsData.error_message || '任务失败',
             });
-            setIsGenerating(false);
             break;
         }
       }
@@ -2526,6 +2528,25 @@ export const Draw = () => {
         inputs[inputName] = coerceInputByConfig(value, config);
       });
 
+      // Fill in missing required inputs from objectInfo defaults (e.g. SaveImage.filename_prefix)
+      if (requiredInfo) {
+        for (const [reqName, reqConfig] of Object.entries(requiredInfo)) {
+          if (inputs[reqName] !== undefined) continue;
+          if (!Array.isArray(reqConfig)) continue;
+          const meta = (reqConfig[1] as Record<string, unknown>) ?? {};
+          if (meta.default !== undefined) {
+            inputs[reqName] = meta.default;
+          } else if (Array.isArray(reqConfig[0]) && reqConfig[0].length > 0) {
+            inputs[reqName] = reqConfig[0][0];
+          } else if (typeof reqConfig[0] === 'string') {
+            const t = reqConfig[0].toUpperCase();
+            if (t === 'INT' || t === 'FLOAT') inputs[reqName] = 0;
+            else if (t === 'BOOLEAN') inputs[reqName] = false;
+            else inputs[reqName] = '';
+          }
+        }
+      }
+
       prompt[nodeId] = {
         inputs,
         class_type: classType,
@@ -2739,50 +2760,34 @@ export const Draw = () => {
   };
 
   // Cluster Mode: Handle template selection
-  // Per D-08: Fetch full template detail on demand when user selects a template
-  // Per D-12: Show template description and help_text
-  // Per D-16: Allow offline parameter editing using cached param_schema
-  const handleTemplateSelect = async (template: LemonGridTemplateSummary) => {
-    if (!lemonGridServerUrl) return;
+  // Synchronous — same pattern as direct mode's handleWorkflowSelect.
+  // Deep clone param_schema to prevent shared reference issues across templates.
+  const handleTemplateSelect = (template: LemonGridTemplateSummary) => {
+    const raw = template as unknown as Record<string, unknown>;
+    // Deep clone to break any shared references in the list API response
+    const cloned = {
+      ...raw,
+      param_schema: JSON.parse(JSON.stringify(raw.param_schema ?? [])),
+    };
+    const detail = normalizeTemplateDetail(cloned as Record<string, unknown>);
 
-    try {
-      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
-      const detail = await client.getTemplateDetail(template.id);
-
-      // Per D-17: Detect version change and notify user
-      if (selectedTemplate && selectedTemplate.id === detail.id && selectedTemplate.version !== detail.version) {
-        console.log('[Draw] Template version changed:', selectedTemplate.version, '->', detail.version);
-        // Drop old param values that no longer match the updated schema
-        const newFieldNames = new Set(detail.param_schema.map(f => f.name));
-        const cleanedParams: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(templateParams)) {
-          if (newFieldNames.has(key)) {
-            cleanedParams[key] = value;
-          }
-        }
-        setTemplateParams(cleanedParams);
-      } else {
-        // Per D-09: Initialize templateParams with defaults from param_schema
-        const defaults: Record<string, unknown> = {};
-        for (const field of detail.param_schema) {
-          defaults[field.name] = renderParamDefault(field);
-        }
-        setTemplateParams(defaults);
-      }
-
-      // Per D-19: Auto-detect image inputs
-      const imageInputs: Record<string, string> = {};
-      for (const field of detail.param_schema) {
-        if (isImageParam(field)) {
-          imageInputs[field.name] = '';
-        }
-      }
-      setTemplateImageInputs(imageInputs);
-      setSelectedTemplate(detail);
-      setUploadedImagePreviews({});
-    } catch (error) {
-      console.error('[Draw] Failed to load template detail:', error);
+    // Per D-09: Initialize templateParams with defaults from param_schema
+    const defaults: Record<string, unknown> = {};
+    for (const field of detail.param_schema) {
+      defaults[field.name] = renderParamDefault(field);
     }
+    setTemplateParams(defaults);
+
+    // Per D-19: Auto-detect image inputs (skip hidden fields)
+    const imageInputs: Record<string, string> = {};
+    for (const field of detail.param_schema) {
+      if (!field.hidden && isImageParam(field)) {
+        imageInputs[field.name] = '';
+      }
+    }
+    setTemplateImageInputs(imageInputs);
+    setSelectedTemplate(detail);
+    setUploadedImagePreviews({});
   };
 
   // Cluster Mode: Handle template parameter change
@@ -2819,30 +2824,29 @@ export const Draw = () => {
   // Per D-50: Same handleGenerate function with connectionMode branch
   // Per D-41: Snapshot parameter values at submit time
   // NOTE: Polling/WS progress tracking and result download are handled by Plan 06-03
+  // Per D-39: Support concurrent tasks — no isGenerating lock in Cluster Mode
   const handleClusterSubmit = async () => {
     if (!isLemonGridConnected || !selectedTemplate || !lemonGridServerUrl) return;
+    if (isSubmittingCluster) return;
 
-    setIsGenerating(true);
-    setProgress({
-      status: 'generating',
-      percentage: 0,
-      currentNode: '提交任务中...',
-      previewImage: null,
-      error: null,
-      promptId: null,
-    });
-
+    setIsSubmittingCluster(true);
     try {
       const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
       // Per D-41: Snapshot parameter values at submit time
-      const snapshotParams = { ...templateParams };
-      const result = await client.submitTask(selectedTemplate.id, snapshotParams);
+      // Build params with node_id.name keys (e.g. "100.upload") as required by API
+      const snapshotParams: Record<string, unknown> = {};
+      for (const field of selectedTemplate.param_schema) {
+        const value = templateParams[field.name] ?? renderParamDefault(field);
+        snapshotParams[`${field.node_id}.${field.name}`] = value;
+      }
+      const result = await client.submitTask(selectedTemplate.id, snapshotParams, selectedTemplate.version, selectedTemplate.template_type || 'COMFYUI');
 
       // Add task to lemongridStore for tracking
       useLemonGridStore.getState().updateTask(result.id, {
         taskId: result.id,
         templateId: selectedTemplate.id,
         templateName: selectedTemplate.name,
+        templateType: selectedTemplate.template_type || 'COMFYUI',
         status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
         progress: 0,
         progressDetail: null,
@@ -2857,39 +2861,25 @@ export const Draw = () => {
         thumbnail: null,
       });
 
-      setProgress(prev => ({
-        ...prev,
-        status: 'generating',
-        currentNode: '任务已提交，等待处理...',
-        promptId: result.id,
-      }));
-
       // Per D-22, D-37: Start WebSocket progress tracking through Bridge
+      setClusterSubmitError(null);
       startClusterWebSocket(result.id);
     } catch (error) {
-      // Per D-69: Show concurrent limit message
       const errMsg = error instanceof Error ? error.message : '任务提交失败';
-      if (errMsg.includes('concurrent') || errMsg.includes('limit') || errMsg.includes('429')) {
-        setProgress(prev => ({
-          ...prev,
-          status: 'error',
-          error: '已达到同时任务上限，请等待当前任务完成后再提交新任务',
-        }));
+
+      // AUTH_EXPIRED: ensureValidToken already triggered showLoginModal in store
+      if (errMsg === 'AUTH_EXPIRED' || errMsg === 'Not authenticated') {
+        setClusterSubmitError('登录已过期，请重新登录');
+      } else if (errMsg.includes('concurrent') || errMsg.includes('limit') || errMsg.includes('429')) {
+        // Per D-69: Show concurrent limit message
+        setClusterSubmitError('已达到同时任务上限，请等待当前任务完成后再提交新任务');
       } else {
         // Per D-45: Show user-friendly error
         const suggestion = LEMONGRID_ERROR_SUGGESTIONS[errMsg] || LEMONGRID_ERROR_SUGGESTIONS.UNKNOWN;
-        setProgress(prev => ({
-          ...prev,
-          status: 'error',
-          error: `${suggestion}`,
-        }));
+        setClusterSubmitError(`${suggestion}`);
       }
-      setProgress(prev => ({
-        ...prev,
-        status: 'error',
-        error: `${suggestion}`,
-      }));
-      setIsGenerating(false);
+    } finally {
+      setIsSubmittingCluster(false);
     }
   };
 
@@ -2979,10 +2969,14 @@ export const Draw = () => {
           if (status.status === 'COMPLETED') {
             await handleTaskCompletion(taskId);
           }
-          setIsGenerating(false);
         }
       } catch (_error) {
-        // Per D-31: Keep polling on error, Per D-32: No client timeout
+        // Per D-42: Stop polling on auth expiry — ensureValidToken already set showLoginModal
+        const errMsg = _error instanceof Error ? _error.message : String(_error);
+        if (errMsg === 'AUTH_EXPIRED' || errMsg === 'Not authenticated') {
+          return; // Stop polling
+        }
+        // Per D-31: Keep polling on other errors, Per D-32: No client timeout
         setTimeout(poll, 2000);
       }
     };
@@ -2990,15 +2984,35 @@ export const Draw = () => {
   };
 
   // Per D-34, D-35, D-44, D-47: Download all outputs and auto-import to PS
+  const completingTaskIds = useRef<Set<string>>(new Set());
   const handleTaskCompletion = async (taskId: string) => {
-    const task = useLemonGridStore.getState().tasks[taskId];
-    if (!task || !task.outputAssetIds.length) {
-      setIsGenerating(false);
-      return;
-    }
+    // Idempotency guard: prevent duplicate downloads from WS + polling races
+    if (completingTaskIds.current.has(taskId)) return;
+    completingTaskIds.current.add(taskId);
 
     const serverUrl = useLemonGridStore.getState().serverUrl;
     const client = new LemonGridClient({ serverUrl });
+
+    let task = useLemonGridStore.getState().tasks[taskId];
+    // If outputAssetIds is empty (e.g. WebSocket completion without file IDs),
+    // fetch latest status from API to get output_file_ids
+    if (task && !task.outputAssetIds.length) {
+      try {
+        const status = await client.getTaskStatus(taskId);
+        if (status.output_file_ids?.length) {
+          useLemonGridStore.getState().updateTask(taskId, {
+            outputAssetIds: status.output_file_ids,
+          });
+          task = useLemonGridStore.getState().tasks[taskId];
+        }
+      } catch (e) {
+        console.error('[Draw] Failed to fetch task status for output files:', e);
+      }
+    }
+
+    if (!task || !task.outputAssetIds.length) {
+      return;
+    }
 
     for (const assetId of task.outputAssetIds) {
       try {
@@ -3018,7 +3032,6 @@ export const Draw = () => {
       }
     }
     // Per D-47: Auto-display results
-    setIsGenerating(false);
     closeTaskWebSocket(taskId);
   };
 
@@ -3035,12 +3048,13 @@ export const Draw = () => {
     try {
       const serverUrl = useLemonGridStore.getState().serverUrl;
       const client = new LemonGridClient({ serverUrl });
-      const result = await client.submitTask(task.templateId, task.params);
+      const result = await client.submitTask(task.templateId, task.params, 1, task.templateType || 'COMFYUI');
 
       useLemonGridStore.getState().updateTask(result.id, {
         taskId: result.id,
         templateId: task.templateId,
         templateName: task.templateName,
+        templateType: task.templateType || 'COMFYUI',
         status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
         progress: 0,
         progressDetail: null,
@@ -3057,7 +3071,6 @@ export const Draw = () => {
 
       startClusterWebSocket(result.id);
     } catch (error) {
-      setIsGenerating(false);
       console.error('[Draw] Retry failed:', error);
     }
   };
@@ -3793,8 +3806,20 @@ export const Draw = () => {
               })()}
             </div>
           )}
-          {isGenerating && (
-            <span className="generating-badge">生成中...</span>
+          {/* Per D-39: Cluster Mode shows active task count; Direct Mode uses isGenerating */}
+          {connectionMode === 'cluster' ? (
+            (() => {
+              const activeCount = Object.values(lemonGridStore.tasks).filter(
+                (t) => ['PENDING', 'QUEUED', 'SYNCING', 'RUNNING'].includes(t.status)
+              ).length;
+              return activeCount > 0 ? (
+                <span className="generating-badge">{activeCount} 任务处理中</span>
+              ) : null;
+            })()
+          ) : (
+            isGenerating && (
+              <span className="generating-badge">生成中...</span>
+            )
           )}
           {/* Per D-36: History source filter for Direct/Cluster/All */}
           {connectionMode === 'cluster' && (
@@ -3994,18 +4019,38 @@ export const Draw = () => {
                       <option value="">
                         {isLoadingTemplates ? '加载模板中...' : '选择模板'}
                       </option>
-                      {/* Per D-07: Group by category from metadata */}
-                      {Array.from(new Set(clusterTemplates.map(t => t.category || '未分类'))).map(category => (
-                        <optgroup key={category} label={category}>
-                          {clusterTemplates
-                            .filter(t => (t.category || '未分类') === category)
-                            .map(template => (
-                              <option key={template.id} value={template.id}>
-                                {template.name}
-                              </option>
-                            ))}
-                        </optgroup>
-                      ))}
+                      {/* Group by template_type first, then by category — flat optgroups */}
+                      {(['COMFYUI', 'THIRD_PARTY_API'] as const).filter(
+                        type => clusterTemplates.some(t => (t.template_type || 'COMFYUI') === type)
+                      ).flatMap(type => {
+                        const typeLabel = type === 'COMFYUI' ? '工作流模板' : '云端模型';
+                        const typeTemplates = clusterTemplates.filter(t => (t.template_type || 'COMFYUI') === type);
+                        const categories = Array.from(new Set(typeTemplates.map(t => t.category || '未分类')));
+                        // Single category: use type label directly
+                        if (categories.length <= 1) {
+                          return [(
+                            <optgroup key={type} label={typeLabel}>
+                              {typeTemplates.map(template => (
+                                <option key={template.id} value={template.id}>
+                                  {template.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          )];
+                        }
+                        // Multiple categories: one optgroup per category with type prefix
+                        return categories.map(category => (
+                          <optgroup key={`${type}-${category}`} label={`${typeLabel} - ${category}`}>
+                            {typeTemplates
+                              .filter(t => (t.category || '未分类') === category)
+                              .map(template => (
+                                <option key={template.id} value={template.id}>
+                                  {template.name}
+                                </option>
+                              ))}
+                          </optgroup>
+                        ));
+                      })}
                     </select>
                     <button
                       type="button"
@@ -4015,7 +4060,7 @@ export const Draw = () => {
                         setIsLoadingTemplates(true);
                         try {
                           const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
-                          const templates = await client.listTemplates();
+                          const templates = await client.listTemplates({ status_filter: 'ACTIVE', page_size: 100 });
                           setClusterTemplates(templates);
                         } catch (error) {
                           console.error('[Draw] Failed to refresh templates:', error);
@@ -4130,14 +4175,14 @@ export const Draw = () => {
                   <span className="placeholder-icon">📝</span>
                   <p>请先选择一个模板</p>
                 </div>
-              ) : selectedTemplate.param_schema.length === 0 ? (
+              ) : selectedTemplate.param_schema.filter(f => !f.hidden).length === 0 ? (
                 <div className="form-placeholder">
                   <span className="placeholder-icon">✓</span>
                   <p>此模板无需配置参数</p>
                 </div>
               ) : (
-                <div className="form-fields">
-                  {selectedTemplate.param_schema.map((field) => {
+                <div className="form-fields" key={selectedTemplate.id}>
+                  {selectedTemplate.param_schema.filter(f => !f.hidden).map((field) => {
                     const value = templateParams[field.name] ?? renderParamDefault(field);
 
                     // Per D-09: Render inputs based on param_schema type
@@ -4387,15 +4432,27 @@ export const Draw = () => {
 
           <div className="action-buttons">
             <button
-              className={`generate-btn ${isGenerating ? 'generating' : ''}`}
+              className={`generate-btn ${connectionMode === 'cluster' ? (isSubmittingCluster ? 'generating' : '') : isGenerating ? 'generating' : ''}`}
               onClick={handleGenerate}
               disabled={
                 connectionMode === 'cluster'
-                  ? !selectedTemplate || isGenerating || !isLemonGridConnected
+                  ? !selectedTemplate || !isLemonGridConnected || isSubmittingCluster
                   : !selectedWorkflow || isGenerating || !comfyUISettings.isConnected
               }
             >
-              {isGenerating ? (
+              {connectionMode === 'cluster' ? (
+                isSubmittingCluster ? (
+                  <>
+                    <span className="spinner"></span>
+                    提交中...
+                  </>
+                ) : (
+                  <>
+                    <span className="btn-icon">✨</span>
+                    开始生成
+                  </>
+                )
+              ) : isGenerating ? (
                 <>
                   <span className="spinner"></span>
                   生成中...
@@ -4427,14 +4484,29 @@ export const Draw = () => {
 
           {/* Per D-40, D-55: Mini task list below Generate button in Cluster Mode */}
           {connectionMode === 'cluster' && (
-            <MiniTaskList
-              onRetry={handleRetryTask}
-              onImportResult={handleImportClusterResult}
-            />
+            <>
+              {clusterSubmitError && (
+                <div className="connection-notice" style={{ marginTop: '8px' }}>
+                  <span className="notice-icon">⚠️</span>
+                  <p>{clusterSubmitError}</p>
+                </div>
+              )}
+              <MiniTaskList
+                onRetry={handleRetryTask}
+                onImportResult={handleImportClusterResult}
+              />
+            </>
           )}
         </div>
       </div>
       <PromptReverseFlow onFillPrompt={handleFillPrompt} />
+      {connectionMode === 'cluster' && (
+        <LoginModal
+          isOpen={lgShowLoginModal}
+          onClose={() => lgSetShowLoginModal(false)}
+          onLoginSuccess={() => lgSetShowLoginModal(false)}
+        />
+      )}
     </div>
   );
 };

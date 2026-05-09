@@ -9,6 +9,8 @@ import { sendBridgeMessage, isUXPWebView, fileToBase64 } from './upload';
 // Type definitions
 // ---------------------------------------------------------------------------
 
+export type TemplateType = 'COMFYUI' | 'THIRD_PARTY_API';
+
 export interface LemonGridTemplateSummary {
   id: string;
   name: string;
@@ -18,6 +20,16 @@ export interface LemonGridTemplateSummary {
   tags: string[];
   version: number;
   updated_at: string;
+  template_type?: TemplateType;
+  param_schema?: unknown[];
+}
+
+export interface TemplateListParams {
+  status_filter?: string;
+  template_type?: TemplateType;
+  page_size?: number;
+  category?: string;
+  search?: string;
 }
 
 export interface ParamSchemaField {
@@ -45,6 +57,7 @@ export interface LemonGridTemplateDetail {
   param_schema: ParamSchemaField[];
   version: number;
   example_outputs: string[];
+  template_type?: TemplateType;
 }
 
 export interface LemonGridTaskSubmitResult {
@@ -201,6 +214,7 @@ export function normalizeTemplateDetail(raw: Record<string, unknown>): LemonGrid
     param_schema: normalizeParamSchema((rawSchema as RawParamSchemaField[] | undefined) ?? []),
     version: raw.version as number,
     example_outputs: (raw.example_outputs as string[]) ?? [],
+    template_type: (raw.template_type as TemplateType | undefined) ?? undefined,
   };
 }
 
@@ -278,13 +292,22 @@ export class LemonGridClient {
   // -------------------------------------------------------------------------
 
   /**
-   * List all available templates.
+   * List available templates with optional filtering.
    * Per D-01, D-07, D-20: Full template list with categories from metadata.
    * Per D-14: Server does role-based filtering, no client filtering needed.
+   * Supports LemonGrid template_type filtering (COMFYUI / THIRD_PARTY_API).
    */
-  async listTemplates(): Promise<LemonGridTemplateSummary[]> {
-    const raw = await this.fetchJson<unknown>('/api/v1/templates');
-    // API may return a bare array or a wrapper like { data: [...] } / { templates: [...] }
+  async listTemplates(params?: TemplateListParams): Promise<LemonGridTemplateSummary[]> {
+    const query = new URLSearchParams();
+    if (params?.status_filter) query.set('status_filter', params.status_filter);
+    if (params?.template_type) query.set('template_type', params.template_type);
+    if (params?.page_size) query.set('page_size', String(params.page_size));
+    if (params?.category) query.set('category', params.category);
+    if (params?.search) query.set('search', params.search);
+    const qs = query.toString();
+    const path = `/api/v1/templates${qs ? `?${qs}` : ''}`;
+    const raw = await this.fetchJson<unknown>(path);
+    // API may return a bare array or a wrapper like { data: [...] } / { templates: [...] } / { items: [...] }
     if (Array.isArray(raw)) return raw;
     if (raw && typeof raw === 'object') {
       const obj = raw as Record<string, unknown>;
@@ -317,16 +340,18 @@ export class LemonGridClient {
    * Submit a new task.
    * Per D-03: Sends template_id + params only, not full workflow JSON.
    * Per D-41: Parameter values are snapshot at submit time.
+   * taskType: 'COMFYUI' (default) or 'THIRD_PARTY_API' based on template_type.
    */
   async submitTask(
     templateId: string,
     params: Record<string, unknown>,
     templateVersion: number = 1,
+    taskType: TemplateType = 'COMFYUI',
   ): Promise<LemonGridTaskSubmitResult> {
     return this.fetchJson<LemonGridTaskSubmitResult>('/api/v1/tasks/submit', {
       method: 'POST',
       body: JSON.stringify({
-        task_type: 'COMFYUI',
+        task_type: taskType,
         task_mode: 'SPLIT',
         template_id: templateId,
         template_version: templateVersion,

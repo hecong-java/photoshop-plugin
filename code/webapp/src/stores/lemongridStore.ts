@@ -1,10 +1,12 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { TemplateType } from '../services/lemongrid';
 
 export interface LemonGridTaskState {
   taskId: string;
   templateId: string;
   templateName: string;
+  templateType: TemplateType;
   status: 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   progress: number;
   progressDetail: string | null;
@@ -135,6 +137,7 @@ export const useLemonGridStore = create<LemonGridState>()(
                 taskId,
                 templateId: '',
                 templateName: '',
+                templateType: 'COMFYUI' as const,
                 status: 'PENDING' as const,
                 progress: 0,
                 progressDetail: null,
