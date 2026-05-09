@@ -18,34 +18,35 @@ interface DownloadSuccess {
 export const History = () => {
   const navigate = useNavigate();
   const { items, clusterItems, deleteItem, isLoading, error, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads, addLocalDownload } = useHistoryStore();
-  const { comfyUI } = useSettingsStore();
+  const { comfyUI, connectionMode } = useSettingsStore();
   const { accessToken: lemonGridAccessToken, serverUrl: lemonGridServerUrl } = useLemonGridStore();
   const hasClusterAuth = !!(lemonGridAccessToken && lemonGridServerUrl);
   const [downloadSuccess, setDownloadSuccess] = useState<DownloadSuccess | null>(null);
 
-  // Merge direct and cluster items, sorted by timestamp descending
-  const allItems = [...items, ...clusterItems].sort((a, b) => b.timestamp - a.timestamp);
+  // Show items based on connection mode
+  const displayItems = connectionMode === 'cluster' ? clusterItems : items;
 
-  // Load from ComfyUI and LemonGrid on mount
+  // Load history based on connection mode on mount
   useEffect(() => {
     const loadHistory = async () => {
-      // First load local downloads
       loadLocalDownloads();
 
-      // Then fetch from ComfyUI if configured
-      if (comfyUI.baseUrl && comfyUI.isConnected) {
-        setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
-        await fetchFromComfyUI();
-      }
-
-      // Fetch cluster history if LemonGrid has auth credentials
-      if (hasClusterAuth) {
-        await fetchFromCluster(lemonGridServerUrl);
+      if (connectionMode === 'direct') {
+        // Direct mode: fetch from ComfyUI only
+        if (comfyUI.baseUrl && comfyUI.isConnected) {
+          setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
+          await fetchFromComfyUI();
+        }
+      } else {
+        // Cluster mode: fetch from LemonGrid only
+        if (hasClusterAuth) {
+          await fetchFromCluster(lemonGridServerUrl);
+        }
       }
     };
 
     loadHistory();
-  }, [comfyUI.baseUrl, comfyUI.isConnected, hasClusterAuth, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads]);
+  }, [connectionMode, comfyUI.baseUrl, comfyUI.isConnected, hasClusterAuth, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads]);
 
   // Auto-hide success message after 3 seconds
   useEffect(() => {
@@ -136,7 +137,7 @@ export const History = () => {
   };
 
   const handleDelete = (id: string) => {
-    const target = allItems.find((item) => item.id === id);
+    const target = displayItems.find((item) => item.id === id);
     if (!target) {
       return;
     }
@@ -151,22 +152,39 @@ export const History = () => {
   };
 
   const handleRefresh = async () => {
-    if (comfyUI.baseUrl) {
-      setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
-      await fetchFromComfyUI();
-    }
-    if (hasClusterAuth) {
-      await fetchFromCluster(lemonGridServerUrl);
+    if (connectionMode === 'direct') {
+      if (comfyUI.baseUrl) {
+        setClient(comfyUI.baseUrl, comfyUI.prefixMode ?? undefined);
+        await fetchFromComfyUI();
+      }
+    } else {
+      if (hasClusterAuth) {
+        await fetchFromCluster(lemonGridServerUrl);
+      }
     }
   };
 
-  // Show configuration prompt if neither ComfyUI nor LemonGrid is available
-  if ((!comfyUI.baseUrl || !comfyUI.isConnected) && !hasClusterAuth) {
+  // Show configuration prompt if current mode is not connected
+  const isDirectConfigured = !!(comfyUI.baseUrl && comfyUI.isConnected);
+  if (connectionMode === 'direct' && !isDirectConfigured) {
     return (
       <div className="history-page">
         <div className="history-not-configured">
-          <h2>未连接</h2>
-          <p>请在设置页面配置并连接 ComfyUI 或 LemonGrid 以查看历史记录。</p>
+          <h2>ComfyUI 未连接</h2>
+          <p>请在设置页面配置并连接 ComfyUI 以查看历史记录。</p>
+          <button onClick={() => navigate('/settings')} className="btn-primary">
+            前往设置
+          </button>
+        </div>
+      </div>
+    );
+  }
+  if (connectionMode === 'cluster' && !hasClusterAuth) {
+    return (
+      <div className="history-page">
+        <div className="history-not-configured">
+          <h2>LemonGrid 未连接</h2>
+          <p>请在设置页面登录 LemonGrid 以查看集群历史记录。</p>
           <button onClick={() => navigate('/settings')} className="btn-primary">
             前往设置
           </button>
@@ -178,7 +196,7 @@ export const History = () => {
   return (
     <div className="history-page">
       <div className="history-header">
-        <h2>生成历史</h2>
+        <h2>生成历史{connectionMode === 'cluster' ? '（集群）' : ''}</h2>
         <button onClick={handleRefresh} className="btn-refresh" disabled={isLoading}>
           {isLoading ? '加载中...' : '刷新'}
         </button>
@@ -212,14 +230,12 @@ export const History = () => {
       )}
 
       <HistoryList
-        items={allItems}
+        items={displayItems}
         onView={handleView}
         onRerun={handleRerun}
         onReEdit={handleReEdit}
         onDelete={handleDelete}
         isLoading={isLoading}
-        directCount={items.length}
-        clusterCount={clusterItems.length}
       />
       <PromptReverseFlow />
     </div>
