@@ -53,8 +53,9 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
         setAuthUrl(result.auth_url);
         setAuthState(result.state);
 
-        // Per D-04: Try iframe first
-        setPhase('iframe');
+        // Skip iframe — DingTalk blocks iframe embedding (X-Frame-Options).
+        // Go straight to QR code rendering via qrcode.react.
+        setPhase('qrcode');
 
         // Start polling in background regardless of iframe vs QR display
         pollDingTalkAuth(serverUrl, result.state, {
