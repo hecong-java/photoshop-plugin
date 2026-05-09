@@ -383,7 +383,15 @@ export async function pollDingTalkAuth(
     }
     // result.status === 'pending' -- continue polling
 
-    await new Promise((resolve) => setTimeout(resolve, interval));
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(resolve, interval);
+      if (options.signal) {
+        options.signal.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('POLL_CANCELLED'));
+        }, { once: true });
+      }
+    });
   }
 
   throw new Error('POLL_TIMEOUT');
