@@ -57,7 +57,7 @@ interface LemonGridState {
     expiresIn: number;
     username: string;
     role: string;
-  }) => void;
+  }, provider?: 'password' | 'dingtalk') => void;
   clearAuth: () => void;
   setConnected: (connected: boolean) => void;
   setServerUrl: (url: string) => void;
@@ -98,7 +98,7 @@ export const useLemonGridStore = create<LemonGridState>()(
       authProvider: null,
 
       // Actions
-      setAuth: (data) =>
+      setAuth: (data, provider) =>
         set({
           accessToken: data.accessToken,
           refreshToken: data.refreshToken ?? null,
@@ -106,7 +106,7 @@ export const useLemonGridStore = create<LemonGridState>()(
           username: data.username,
           userRole: data.role,
           isConnected: true,
-          authProvider: 'password', // Default to password per D-13
+          authProvider: provider ?? 'password', // Default to password per D-13
         }),
 
       clearAuth: () =>

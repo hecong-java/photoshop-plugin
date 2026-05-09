@@ -410,10 +410,9 @@ export async function loginWithDingTalk(
     expiresIn: pollData.expires_in,
     username: displayName,
     role: pollData.user.role,
-  });
+  }, 'dingtalk');
 
-  // Per D-13: Set auth provider to dingtalk
-  store.setAuthProvider('dingtalk');
+  // Per D-13: Auth provider already set to dingtalk via setAuth parameter
 
   // DingTalk users don't need stored passwords
   store.setEncryptedPassword(null);
