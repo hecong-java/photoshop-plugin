@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-09T09:00:00Z"
+last_updated: "2026-05-09T02:39:47.234Z"
 progress:
-  total_phases: 7
-  completed_phases: 3
-  total_plans: 18
-  completed_plans: 18
-  percent: 100
+  total_phases: 8
+  completed_phases: 4
+  total_plans: 21
+  completed_plans: 19
+  percent: 90
 ---
 
 # STATE: Photoshop ComfyUI Plugin
@@ -129,6 +129,7 @@ Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
 | 6 | Fix random seed display in PS plugin webview | 2026-03-16 | 606fff5 | [6-web-ps](./quick/6-web-ps/) |
 | 7 | Fix PS layer/selection export bounds | 2026-03-17 | 90fe508 | [260317-fii-ps](./quick/260317-fii-ps/) |
 | 8 | Filter error entries from ComfyUI history | 2026-03-17 | 3c85916 | [260317-n67-status-str-error](./quick/260317-n67-status-str-error/) |
+| 9 | 集群模式历史记录通过LemonGrid接口返回 | 2026-05-09 | 1d68b6e | [260509-cluster-history-lemongrid-api](./quick/260509-cluster-history-lemongrid-api/) |
 
 ### Recent Completions
 
@@ -145,9 +146,9 @@ Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
 
 ### Last Session
 
-- **Date:** 2026-05-08
-- **Action:** Completed Phase 07 Plan 03 (Settings login method display and smart modal on mode switch)
-- **Outcome:** Settings.tsx reads authProvider from store and displays "密码登录" or "钉钉登录" badge; smart modal on mode switch works via existing ensureValidToken + LoginModal flow; showLoginModal moved to lemongridStore for global access
+- **Date:** 2026-05-09
+- **Action:** Quick task 260509 — 集群模式历史记录通过LemonGrid接口返回
+- **Outcome:** LemonGridClient.getTaskHistory() added, historyStore.fetchFromCluster() fetches completed tasks from LemonGrid API, History.tsx merges both sources with "[集群]" badge on cluster items
 
 ### Next Action
 
