@@ -9,6 +9,7 @@ interface HistoryListProps {
   onRerun: (item: HistoryItem) => void;
   onReEdit: (item: HistoryItem) => void;
   onDelete: (id: string) => void;
+  onSyncToPS?: (item: HistoryItem) => Promise<void>;
   isLoading?: boolean;
   directCount?: number;
   clusterCount?: number;
@@ -22,6 +23,7 @@ export const HistoryList: React.FC<HistoryListProps> = ({
   onRerun,
   onReEdit,
   onDelete,
+  onSyncToPS,
   isLoading = false,
   directCount,
   clusterCount,
@@ -85,6 +87,7 @@ export const HistoryList: React.FC<HistoryListProps> = ({
               onRerun={onRerun}
               onReEdit={onReEdit}
               onDelete={onDelete}
+              onSyncToPS={onSyncToPS}
             />
           </div>
         ))}

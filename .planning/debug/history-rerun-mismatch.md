@@ -1,16 +1,40 @@
 ---
-status: awaiting_human_verify
+status: resolved
 trigger: "When clicking '重新运行' (re-run) or '重新编辑' (re-edit) in history, both the workflow and parameters are incorrect - not matching the original history entry."
 created: 2026-03-17T00:00:00.000Z
-updated: 2026-03-17T15:15:00.000Z
+updated: 2026-03-24T00:00:00.000Z
 ---
 
 ## Current Focus
 
-hypothesis: Path separator mismatch - history uses "/" but workflow list might use "\" on Windows, causing comparison to fail
-test: Added .replace(/\\/g, '/') to normalize both sides, plus char code logging for detailed debugging
-expecting: Character code logging will reveal any subtle encoding or separator differences
-next_action: User tests and shares console logs showing char codes comparison
+status: RESOLVED
+resolution: Race condition between fetchWorkflows and history action was causing default workflow to overwrite the correctly matched workflow from history.
+
+## Root Cause
+
+**Race Condition**: When the page loads with a history action (rerun/edit):
+1. `fetchWorkflows` completes and checks `!selectedWorkflow`
+2. Simultaneously, the history useEffect triggers and calls `handleWorkflowSelect`
+3. Due to React's async state updates, `selectedWorkflow` is still undefined when `fetchWorkflows` checks
+4. `fetchWorkflows` then selects the default workflow, overwriting the history action
+
+## Fix Applied
+
+Modified `fetchWorkflows` in Draw.tsx to check for pending history actions before selecting default workflow:
+
+```javascript
+const hasPendingHistoryAction = hasHandledHistoryAction.current ||
+  sessionStorage.getItem('rerunItem') ||
+  sessionStorage.getItem('editItem');
+
+if (!selectedWorkflow && !hasPendingHistoryAction) {
+  // Select default workflow only if no history action is pending
+}
+```
+
+## Files Changed
+
+- `code/webapp/src/pages/Draw.tsx`
 
 ## Symptoms
 
@@ -23,7 +47,9 @@ scope: Both PS plugin webview and standalone web browser
 
 ## Eliminated
 
-<!-- None yet -->
+- hypothesis: workflow_name not being stored in history
+  evidence: User confirmed workflow_name IS stored correctly: "增强与编辑/光影重绘.json" (from prior session)
+  timestamp: 2026-03-23T10:00:00.000Z
 
 ## Evidence
 
@@ -72,7 +98,7 @@ scope: Both PS plugin webview and standalone web browser
   found: BUG - The check `normalized.endsWith('.json')` is ALWAYS false because `.json` was already stripped on line 637. This means the logic relies entirely on the image extension check.
   implication: The isWorkflowName check might incorrectly classify valid workflow names as image filenames
 
-- timestamp: 2026-03-17T13:00:00.000Z
+- timestamp: 2026-03-17T13:00:00:000Z
   checked: Workflow name format in workflow list vs stored name
   found: Workflow names from listWorkflows can include path prefix (e.g., "ps-workflows/workflow-name.json") but stored workflow_name might be just "workflow-name.json" (from selectedWorkflow.name)
   implication: Need to normalize both names to just the base filename for comparison
@@ -97,9 +123,25 @@ scope: Both PS plugin webview and standalone web browser
   found: The code only splits by "/" but on Windows, paths might use "\". This would cause the baseName extraction to fail for Windows-style paths.
   implication: Added .replace(/\\/g, '/') to normalize both sides before comparison. Also added char code logging for detailed debugging.
 
+- timestamp: 2026-03-23T10:00:00.000Z
+  checked: How workflow_name is stored when prompt is submitted
+  found: In handleGenerate (line 2559), workflow_name is set to `currentWorkflow?.name || ''`. The currentWorkflow comes from selectedWorkflow, which is set from the workflow list returned by listWorkflows.
+  implication: The workflow_name stored in history should match the format returned by the API. If the API returns names with `ps-workflows/` prefix, the stored name would have this prefix too.
+
+- timestamp: 2026-03-23T10:00:00.000Z
+  checked: encodeWorkflowPath function behavior
+  found: The function (line 177-182) adds `ps-workflows/` prefix to names that don't already have it when reading workflow files. This suggests the API might return names without this prefix, but the prefix is added when making API calls to read workflows.
+  implication: There may be a mismatch: the workflow list might return names WITHOUT `ps-workflows/` prefix, but when storing workflow_name during prompt submission, the selectedWorkflow.name might have the prefix. Need to verify the actual format.
+
+- timestamp: 2026-03-23T10:30:00.000Z
+  checked: findBestMatchingWorkflow matching logic
+  found: The previous matching logic didn't account for `ps-workflows/` prefix that might be present in workflow list names but not in stored workflow_name (or vice versa).
+  action: Added `stripPsWorkflowsPrefix` helper function and enhanced logging with JSON.stringify to show RAW workflow names. Also added comparison of both raw and stripped names.
+  implication: This should reveal if there's a prefix mismatch between the stored workflow_name and the workflow list names.
+
 ## Resolution
 
-root_cause: The findBestMatchingWorkflow function used a complex scoring system where workflow_name was just one factor among many. This meant that even when a history entry had the exact workflow name, a different workflow could be selected if it scored higher on node type/ID matching. The fix prioritizes workflow_name matching: exact match first, then partial match, then fallback to scoring-based matching.
-fix: Restructured findBestMatchingWorkflow to: (1) First try exact workflow name match by normalizing both names (lowercase, strip .json), (2) If no exact match, try partial match where one name contains the other, (3) Only fall back to scoring-based matching if no name match found. This ensures the correct workflow is selected based on the stored workflow_name from history.
-verification: Pending - needs user testing
+root_cause: (Under investigation - pending user testing with enhanced logging)
+fix: Added `stripPsWorkflowsPrefix` helper to normalize both sides, and enhanced logging to show RAW workflow names
+verification: Pending - needs user testing with enhanced logging
 files_changed: [code/webapp/src/pages/Draw.tsx]

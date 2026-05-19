@@ -335,8 +335,18 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const client = new LemonGridClient({ serverUrl });
-      const response = await client.getTaskHistory({ page: 1, pageSize: 50 });
-      const items: HistoryItem[] = response.items.map((task) => ({
+
+      // Fetch all pages
+      const PAGE_SIZE = 50;
+      const firstPage = await client.getTaskHistory({ page: 1, pageSize: PAGE_SIZE });
+      const allTasks = [...firstPage.items];
+      const totalPages = Math.ceil(firstPage.total / PAGE_SIZE);
+      for (let page = 2; page <= totalPages; page++) {
+        const pageResp = await client.getTaskHistory({ page, pageSize: PAGE_SIZE });
+        allTasks.push(...pageResp.items);
+      }
+
+      const items: HistoryItem[] = allTasks.map((task) => ({
         id: `cluster-${task.id}`,
         promptId: task.id,
         workflow: task.template_id,
@@ -344,12 +354,9 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
         imageName: task.workflow_name || task.template_id,
         params: task.parameters || {},
         outputs: {},
-        thumbnailUrl: task.output_file_ids?.[0]
-          ? `${serverUrl}/api/v1/assets/library/${task.output_file_ids[0]}/download`
-          : undefined,
-        imageUrl: task.output_file_ids?.[0]
-          ? `${serverUrl}/api/v1/assets/library/${task.output_file_ids[0]}/download`
-          : undefined,
+        // Placeholder URLs — will be replaced with blob URLs below
+        thumbnailUrl: undefined,
+        imageUrl: undefined,
         timestamp: task.completed_at
           ? new Date(task.completed_at).getTime()
           : new Date(task.created_at).getTime(),
@@ -358,15 +365,44 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
         images: (task.output_file_ids || []).map((fid) => ({
           filename: fid,
           type: 'output',
-          thumbnailUrl: `${serverUrl}/api/v1/assets/library/${fid}/download`,
-          imageUrl: `${serverUrl}/api/v1/assets/library/${fid}/download`,
+          thumbnailUrl: undefined,
+          imageUrl: undefined,
         })),
         source: 'cluster' as const,
       }));
       set({ clusterItems: items, isLoading: false });
+
+      // Download thumbnails as blobs in background (first image per item only)
+      // This is needed because asset URLs require Bearer auth — <img> tags can't send auth headers
+      const clusterItems = [...items];
+      let dirtyCount = 0;
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < clusterItems.length; i++) {
+        const task = allTasks[i];
+        const firstAssetId = (task.output_file_ids || [])[0];
+        if (!firstAssetId) continue;
+        try {
+          const blob = await client.downloadAsset(firstAssetId);
+          const objectUrl = URL.createObjectURL(blob);
+          clusterItems[i] = {
+            ...clusterItems[i],
+            thumbnailUrl: objectUrl,
+            imageUrl: objectUrl,
+            images: clusterItems[i].images.map((img, idx) =>
+              idx === 0 ? { ...img, thumbnailUrl: objectUrl, imageUrl: objectUrl } : img
+            ),
+          };
+          dirtyCount++;
+          if (dirtyCount >= BATCH_SIZE || i === clusterItems.length - 1) {
+            set({ clusterItems: [...clusterItems] });
+            dirtyCount = 0;
+          }
+        } catch (e) {
+          console.warn(`[historyStore] Thumbnail download failed for task ${task.id}:`, e);
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch cluster history';
-      // Don't wipe ComfyUI items on cluster fetch failure — just log and keep existing
       console.warn('[historyStore] Cluster history fetch failed:', message);
       set({ isLoading: false });
     }

@@ -5,9 +5,11 @@ import { ComfyUIClient } from '../services/comfyui';
 import { useHistoryStore } from '../stores/historyStore';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useLemonGridStore } from '../stores/lemongridStore';
+import { LemonGridClient } from '../services/lemongrid';
 import { HistoryList } from '../components/history/HistoryList';
 import { downloadAndSaveZip, generateDownloadFilename } from '../services/download';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
+import { usePSBridge } from '../hooks/usePSBridge';
 import './History.css';
 
 interface DownloadSuccess {
@@ -21,6 +23,7 @@ export const History = () => {
   const { comfyUI, connectionMode } = useSettingsStore();
   const { accessToken: lemonGridAccessToken, serverUrl: lemonGridServerUrl } = useLemonGridStore();
   const hasClusterAuth = !!(lemonGridAccessToken && lemonGridServerUrl);
+  const { importBase64AsLayer } = usePSBridge();
   const [downloadSuccess, setDownloadSuccess] = useState<DownloadSuccess | null>(null);
 
   // Show items based on connection mode
@@ -59,22 +62,84 @@ export const History = () => {
     return undefined;
   }, [downloadSuccess]);
 
+  const handleSyncToPS = async (item: HistoryItem) => {
+    if (!item.images || item.images.length === 0) {
+      throw new Error('当前记录没有可同步的图片');
+    }
+
+    // Use the first image
+    const image = item.images[0];
+    let blob: Blob;
+
+    if (item.source === 'cluster') {
+      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+      const assetId = image.filename;
+      if (!assetId) throw new Error('集群图片缺少资源ID');
+      blob = await client.downloadAsset(assetId);
+    } else {
+      const baseUrl = comfyUI.baseUrl;
+      const client = new ComfyUIClient({ baseUrl });
+      const url = client.getViewUrl({
+        filename: image.filename,
+        subfolder: image.subfolder || '',
+        type: (image.type as 'output' | 'input' | 'temp') || 'output',
+        preview: false,
+      });
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`下载图片失败: ${resp.status}`);
+      blob = await resp.blob();
+    }
+
+    // Convert blob to base64
+    const base64Data = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        // Strip data URL prefix (e.g. "data:image/png;base64,")
+        const base64 = result.split(',')[1];
+        if (!base64) {
+          reject(new Error('Failed to convert image to base64'));
+          return;
+        }
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error('Failed to read image blob'));
+      reader.readAsDataURL(blob);
+    });
+
+    await importBase64AsLayer({
+      base64Data,
+      layerName: item.imageName || undefined,
+      mode: 'pixel',
+      workflowName: item.imageName || undefined,
+    });
+  };
+
   const handleDownload = async (item: HistoryItem) => {
     if (!item.images || item.images.length === 0) {
       throw new Error('当前记录没有可下载图片');
     }
 
     if (item.source === 'cluster') {
-      // Cluster items: download directly from LemonGrid asset URLs
-      const urls = item.images.map((image, index) => ({
-        url: image.imageUrl || image.thumbnailUrl || '',
-        filename: image.filename,
-        index,
-      }));
-      const filename = generateDownloadFilename(item.imageName || 'cluster', 0).replace(/\.png$/i, '.zip');
-      const result = await downloadAndSaveZip(urls, filename);
-      addLocalDownload(item.promptId, result.savedPath);
-      setDownloadSuccess({ path: result.savedPath, timestamp: Date.now() });
+      // Cluster items: download assets via authenticated LemonGridClient
+      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+      const objectUrls: string[] = [];
+      try {
+        const urls = await Promise.all(item.images.map(async (image, index) => {
+          const assetId = image.filename; // filename stores the asset ID for cluster items
+          if (!assetId) return { url: '', filename: `image-${index + 1}.png`, index };
+          const blob = await client.downloadAsset(assetId);
+          const objectUrl = URL.createObjectURL(blob);
+          objectUrls.push(objectUrl);
+          return { url: objectUrl, filename: `${item.imageName || 'cluster'}-${index + 1}.png`, index };
+        }));
+        const filename = generateDownloadFilename(item.imageName || 'cluster', 0).replace(/\.png$/i, '.zip');
+        const result = await downloadAndSaveZip(urls, filename);
+        addLocalDownload(item.promptId, result.savedPath);
+        setDownloadSuccess({ path: result.savedPath, timestamp: Date.now() });
+      } finally {
+        objectUrls.forEach(URL.revokeObjectURL);
+      }
       return;
     }
 
@@ -235,6 +300,7 @@ export const History = () => {
         onRerun={handleRerun}
         onReEdit={handleReEdit}
         onDelete={handleDelete}
+        onSyncToPS={handleSyncToPS}
         isLoading={isLoading}
       />
       <PromptReverseFlow />

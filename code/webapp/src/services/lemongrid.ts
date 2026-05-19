@@ -45,6 +45,7 @@ export interface ParamSchemaField {
   max?: number;
   step?: number;
   description?: string;
+  source_class_type?: string | null;
 }
 
 export interface LemonGridTemplateDetail {
@@ -197,6 +198,7 @@ function normalizeParamField(raw: RawParamSchemaField): ParamSchemaField {
     max: raw.max ?? undefined,
     step: raw.step ?? undefined,
     description: raw.description ?? undefined,
+    source_class_type: raw.source_class_type ?? undefined,
   };
 }
 

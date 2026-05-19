@@ -93,6 +93,15 @@ export const useWorkflowCacheStore = create<WorkflowCacheState>()(
     }),
     {
       name: 'Ningleai-workflow-cache',
+      version: 1,
+      migrate: (persisted: any, version: number) => {
+        // version 0 → 1: clear old caches that may contain dimension values (width/height: 1024)
+        if (version === 0) {
+          console.log('[workflowCacheStore] Migrating from v0 → v1: clearing old caches');
+          return { caches: {} };
+        }
+        return persisted;
+      },
       partialize: (state) => ({
         caches: state.caches,
       }),

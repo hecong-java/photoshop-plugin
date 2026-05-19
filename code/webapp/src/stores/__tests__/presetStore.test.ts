@@ -68,7 +68,7 @@ describe('presetStore', () => {
 
   it('loadPresets sets isLoading true during load, false after', async () => {
     let resolveLoad: () => void;
-    const loadPromise = new Promise<void>((resolve) => { resolveLoad = resolve; });
+    new Promise<void>((resolve) => { resolveLoad = resolve; });
     mockListPresets.mockImplementation(() => new Promise((r) => {
       // Resolve on next tick so we can check isLoading
       setTimeout(() => { r(samplePresets); resolveLoad(); }, 10);

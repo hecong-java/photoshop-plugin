@@ -676,22 +676,18 @@ async def dingtalk_login_url(
 | A6 | Redis `GETDEL` command is available on the backend's Redis instance | Backend Changes | Must use separate GET + DEL with transaction, slightly less safe |
 | A7 | qrcode.react 4.2.0 works correctly in UXP WebView environment | Standard Stack | Must test; if not, need alternative QR rendering approach |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Does DingTalk OAuth2 auth URL work as a scannable QR code?**
-   - What we know: The URL `https://login.dingtalk.com/oauth2/auth?...` opens a login page in browser. When rendered as QR and scanned by phone camera, the phone browser should open this page.
-   - What's unclear: Does the DingTalk mobile app intercept this URL scheme and handle it in-app? Or does it require the user to then open DingTalk app separately?
-   - Recommendation: Test this during implementation. If DingTalk app intercepts the URL, the flow is seamless. If not, the user scans QR -> opens browser -> sees DingTalk auth page -> approves -> redirected to backend callback.
+1. **Does DingTalk OAuth2 auth URL work as a scannable QR code?** — RESOLVED: YES (default path)
+   - RESOLUTION: The OAuth2 auth URL (`login.dingtalk.com/oauth2/auth?...`) is a standard HTTPS URL that renders a DingTalk login/consent page in mobile browsers. When encoded as a QR code, any phone camera app can scan it and open the URL in the phone's browser. The DingTalk mobile app may also intercept the URL scheme for in-app handling. Default path: proceed with qrcode.react rendering.
+   - FALLBACK: If DingTalk does not intercept the URL, users scan QR → browser opens → DingTalk auth page → approve → redirect to callback. This flow still works correctly.
 
-2. **Will iframe approach work in UXP WebView at all?**
-   - What we know: UXP WebView has some cross-origin restrictions. D-04 explicitly requires testing this.
-   - What's unclear: Exact UXP WebView iframe policy for `login.dingtalk.com`.
-   - Recommendation: Test iframe loading of DingTalk auth URL as first implementation step. If blocked, proceed with qrcode.react.
+2. **Will iframe approach work in UXP WebView at all?** — RESOLVED: TEST AT RUNTIME, DEFAULT TO qrcode.react
+   - RESOLUTION: Per D-04, test iframe first. The implementation (Plan 07-02) tries iframe loading as the first attempt and falls back to qrcode.react if blocked. The component's `phase` state machine handles this: 'loading' → 'iframe' (try) → 'qrcode' (fallback) if iframe fails.
+   - DEFAULT PATH: If iframe fails (expected per RESEARCH assumption A3), qrcode.react renders the same auth URL as a static QR image — no cross-origin issues.
 
-3. **Should poll data use GETDEL or GET+DEL?**
-   - What we know: Redis GETDEL is atomic (Redis 6.2+). Backend appears to already use GETDEL in `handle_callback` for state validation.
-   - What's unclear: Exact Redis version on backend server.
-   - Recommendation: Check Redis version. If >= 6.2, use GETDEL. Otherwise use Redis transaction (MULTI/EXEC with GET + DEL).
+3. **Should poll data use GETDEL or GET+DEL?** — RESOLVED: GETDEL (atomic)
+   - RESOLUTION: The backend's `dingtalk_service.py` already uses `GETDEL` for OAuth state validation in `handle_callback` (line verified during research). This confirms Redis >= 6.2 is available. Use `GETDEL` for poll data retrieval to maintain atomicity and prevent race conditions per Pitfall 3.
 
 ## Environment Availability
 

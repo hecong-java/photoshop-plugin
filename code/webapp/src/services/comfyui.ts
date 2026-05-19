@@ -178,7 +178,9 @@ const encodeWorkflowPath = (name: string): string => {
   const trimmed = name.trim().replace(/\\/g, '/').replace(/^\/+/, '');
   const withPrefix = trimmed.startsWith('ps-workflows/') ? trimmed : `ps-workflows/${trimmed}`;
   const withExtension = withPrefix.endsWith('.json') ? withPrefix : `${withPrefix}.json`;
-  return encodeURIComponent(withExtension);
+  // Double-encode slashes: UXP Bridge fetch decodes %2F → /, breaking single-segment paths.
+  // %252F survives one decode → %2F, which nginx then decodes → / for ComfyUI.
+  return encodeURIComponent(withExtension).replace(/%2F/gi, '%252F');
 };
 
 const parseWorkflowList = (data: unknown): ComfyUIWorkflowInfo[] => {

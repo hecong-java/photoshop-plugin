@@ -1,10 +1,11 @@
+/* ========================================
+   Login Modal — Tech-Utility Redesign
+   ======================================== */
+
 .login-modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
+  inset: 0;
+  background: rgba(8, 8, 12, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -12,54 +13,63 @@
 }
 
 .login-modal-card {
-  background: var(--color-surface, #2a2a2a);
-  border-radius: 12px;
-  padding: 24px;
-  width: 360px;
-  max-width: 90vw;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--r-3);
+  overflow: hidden;
+  width: calc(100% - 24px);
+  max-width: 360px;
 }
 
 .login-modal-title {
-  margin: 0 0 20px 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--color-text, #e0e0e0);
+  margin: 0;
+  padding: var(--sp-3);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
 }
 
 .login-modal-form {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
 }
 
 .login-modal-form .form-group {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--sp-1);
 }
 
 .login-modal-form .form-group label {
   font-size: 12px;
-  color: var(--color-text-secondary, #999);
+  font-weight: 500;
+  color: var(--fg2);
 }
 
 .login-modal-form .text-input {
-  padding: 8px 10px;
-  border: 1px solid var(--color-border, #444);
-  border-radius: 6px;
-  background: var(--color-background, #1e1e1e);
-  color: var(--color-text, #e0e0e0);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface2);
+  color: var(--fg);
   font-size: 13px;
   outline: none;
+  transition: border-color 0.15s;
 }
 
 .login-modal-form .text-input:focus {
-  border-color: var(--color-primary, #5b9bd5);
+  border-color: var(--accent);
 }
 
 .login-modal-form .text-input:disabled {
   opacity: 0.5;
+}
+
+.login-modal-form .text-input::placeholder {
+  color: var(--fg3);
 }
 
 .remember-me-group {
@@ -72,7 +82,7 @@
   align-items: center;
   gap: 6px;
   font-size: 12px;
-  color: var(--color-text-secondary, #999);
+  color: var(--fg2);
   cursor: pointer;
 }
 
@@ -80,121 +90,115 @@
   width: 14px;
   height: 14px;
   cursor: pointer;
+  accent-color: var(--accent);
 }
 
 .login-modal-error {
-  color: #e74c3c;
+  color: var(--danger);
   font-size: 12px;
-  padding: 6px 8px;
-  background: rgba(231, 76, 60, 0.1);
-  border-radius: 4px;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--danger-bg);
+  border: 1px solid #6e2222;
+  border-radius: var(--r-1);
 }
 
 .login-modal-actions {
   display: flex;
-  gap: 8px;
-  margin-top: 4px;
+  gap: var(--sp-2);
 }
 
 .login-modal-btn {
   flex: 1;
-  padding: 8px 16px;
+  padding: var(--sp-2) var(--sp-3);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--r-2);
   font-size: 13px;
-  cursor: pointer;
+  font-weight: 600;
   transition: opacity 0.15s;
 }
 
 .login-modal-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
 .login-btn {
-  background: var(--color-primary, #5b9bd5);
-  color: #fff;
+  background: var(--accent);
+  color: #111118;
 }
-
-.login-btn:hover:not(:disabled) {
-  opacity: 0.9;
-}
+.login-btn:hover:not(:disabled) { opacity: 0.9; }
 
 .cancel-btn {
-  background: var(--color-border, #444);
-  color: var(--color-text, #e0e0e0);
+  background: var(--surface2);
+  color: var(--fg2);
+  border: 1px solid var(--border);
 }
-
 .cancel-btn:hover:not(:disabled) {
-  opacity: 0.9;
+  background: var(--surface3);
+  border-color: var(--border2);
+  color: var(--fg);
 }
 
-/* DingTalk login styles */
-
+/* DingTalk divider */
 .dingtalk-divider {
   display: flex;
   align-items: center;
-  margin: 12px 0;
-  color: var(--color-text-secondary, #999);
-  font-size: 12px;
+  color: var(--fg3);
+  font-size: 11px;
 }
 
 .dingtalk-divider::before,
 .dingtalk-divider::after {
   content: '';
   flex: 1;
-  border-bottom: 1px solid var(--color-border, #444);
+  height: 1px;
+  background: var(--border);
 }
 
 .dingtalk-divider span {
-  padding: 0 12px;
+  padding: 0 var(--sp-3);
 }
 
 .dingtalk-btn {
   width: 100%;
-  padding: 10px 16px;
-  border: none;
-  border-radius: 6px;
-  background: #0089FF;
-  color: #fff;
-  font-size: 14px;
-  cursor: pointer;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid #3a4a6e;
+  border-radius: var(--r-2);
+  background: var(--surface2);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  transition: opacity 0.15s;
+  gap: var(--sp-2);
+  transition: all 0.15s;
 }
-
 .dingtalk-btn:hover:not(:disabled) {
-  opacity: 0.9;
+  background: var(--surface3);
+  border-color: var(--border2);
 }
-
 .dingtalk-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
-.dingtalk-icon {
-  flex-shrink: 0;
-}
+.dingtalk-icon { flex-shrink: 0; }
 
 .dingtalk-qrcode-view {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 12px;
-  padding-top: 4px;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
 }
 
 .dingtalk-back-link {
   align-self: flex-start;
-  color: var(--color-primary, #5b9bd5);
+  color: var(--accent);
   font-size: 12px;
   text-decoration: none;
-  cursor: pointer;
 }
-
 .dingtalk-back-link:hover {
   text-decoration: underline;
 }

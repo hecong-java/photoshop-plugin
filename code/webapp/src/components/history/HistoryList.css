@@ -1,3 +1,7 @@
+/* ========================================
+   History List — Tech-Utility Redesign
+   ======================================== */
+
 .history-list {
   width: 100%;
   max-width: 100%;
@@ -8,122 +12,111 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  margin-bottom: var(--sp-2);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
 }
 
 .history-list-header h2 {
   margin: 0;
-  font-size: 14px;
-  font-weight: 700;
-  color: #f8fafc;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
 .history-count {
-  padding: 4px 8px;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 16px;
-  font-size: 12px;
-  color: #cbd5e1;
+  padding: 2px 8px;
+  background: var(--surface2);
+  border-radius: 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
 }
 
 .history-source-breakdown {
   font-size: 0.85em;
-  color: #94a3b8;
+  color: var(--fg3);
 }
 
 .history-item-wrapper[data-source="cluster"] .history-item-name::after {
   content: ' [集群]';
   font-size: 0.75em;
-  color: #888;
+  color: var(--fg3);
   font-weight: normal;
+  font-family: var(--font-mono);
 }
 
-.history-list-items {
-  margin-bottom: 10px;
-}
+.history-list-items { margin-bottom: var(--sp-2); }
 
 .history-list-empty {
   text-align: center;
-  padding: 28px 14px;
-  background: rgba(20, 20, 35, 0.5);
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: var(--sp-4);
+  background: var(--surface);
+  border-radius: var(--r-2);
+  border: 1px dashed var(--border);
 }
 
 .history-list-empty p {
-  font-size: 13px;
-  color: #94a3b8;
+  font-size: 12px;
+  color: var(--fg3);
   margin: 0;
 }
 
 .history-list-loading {
   text-align: center;
-  padding: 28px 14px;
-  background: rgba(20, 20, 35, 0.5);
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: var(--sp-4);
+  background: var(--surface);
+  border-radius: var(--r-2);
+  border: 1px solid var(--border);
 }
 
 .history-list-loading p {
-  font-size: 13px;
-  color: #94a3b8;
+  font-size: 12px;
+  color: var(--fg3);
   margin: 0;
+  font-family: var(--font-mono);
 }
 
+/* Pagination */
 .history-list-pagination {
   display: flex;
   justify-content: center;
   align-items: center;
-  gap: 10px;
-  padding: 10px;
-  background: rgba(20, 20, 35, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 10px;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
 }
 
 .pagination-btn {
-  padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: linear-gradient(180deg, #343a43 0%, #2b3038 100%);
-  border-radius: 8px;
-  color: #e2e8f0;
-  cursor: pointer;
-  font-size: 12px;
-  font-weight: 600;
-  transition: all 0.2s;
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--border);
+  background: var(--surface2);
+  border-radius: var(--r-1);
+  color: var(--fg2);
+  font-size: 11px;
+  font-weight: 500;
+  transition: all 0.15s;
 }
 
 .pagination-btn:hover:not(:disabled) {
-  border-color: rgba(99, 102, 241, 0.56);
-  background: linear-gradient(180deg, #3d4450 0%, #323844 100%);
+  background: var(--surface3);
+  border-color: var(--border2);
+  color: var(--fg);
 }
 
 .pagination-btn:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
 .pagination-info {
-  font-size: 12px;
-  color: #94a3b8;
-  font-weight: 500;
-}
-
-@media (max-width: 768px) {
-  .history-list-header {
-    flex-direction: column;
-    gap: 12px;
-    align-items: flex-start;
-  }
-
-  .history-item-actions {
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .btn {
-    width: 100%;
-  }
+  font-size: 11px;
+  color: var(--fg3);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }

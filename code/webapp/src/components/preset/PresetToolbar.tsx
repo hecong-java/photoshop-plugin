@@ -321,7 +321,7 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
             onClick={handleImportPreset}
             disabled={isPresetLoading || !workflowName}
           >
-            &#x1F4E5;
+            &#x2193;
           </button>
           <button
             className="preset-toolbar-btn"
@@ -329,7 +329,7 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
             onClick={handleExportPreset}
             disabled={!selectedPresetName || isPresetLoading}
           >
-            &#x1F4E4;
+            &#x2191;
           </button>
         </>
       )}

@@ -8,6 +8,7 @@ interface HistoryItemProps {
   onRerun: (item: HistoryItem) => void;
   onReEdit: (item: HistoryItem) => void;
   onDelete: (id: string) => void;
+  onSyncToPS?: (item: HistoryItem) => Promise<void>;
 }
 
 export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
@@ -16,9 +17,11 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
   onRerun,
   onReEdit,
   onDelete: _onDelete,
+  onSyncToPS,
 }) => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [isSyncingPS, setIsSyncingPS] = useState(false);
   const [activePreviewIndex, setActivePreviewIndex] = useState(0);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
 
@@ -49,6 +52,20 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
       setDownloadError(msg);
     } finally {
       setIsDownloading(false);
+    }
+  };
+
+  const handleSyncToPS = async () => {
+    if (!onSyncToPS) return;
+    setDownloadError(null);
+    setIsSyncingPS(true);
+    try {
+      await onSyncToPS(item);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setDownloadError(msg);
+    } finally {
+      setIsSyncingPS(false);
     }
   };
 
@@ -124,6 +141,11 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
         <button onClick={handleDownload} className="btn btn-primary" disabled={isDownloading}>
           {isDownloading ? '下载中...' : '下载'}
         </button>
+        {onSyncToPS && (
+          <button onClick={handleSyncToPS} className="btn btn-success" disabled={isSyncingPS}>
+            {isSyncingPS ? '同步中...' : '同步到PS'}
+          </button>
+        )}
         <button onClick={() => onRerun(item)} className="btn btn-info">
           重新运行
         </button>

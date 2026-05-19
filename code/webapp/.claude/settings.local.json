@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(gsd-quick)",
+      "Bash(npx tsc:*)",
+      "Skill(gsd-debug)",
+      "Bash(python:*)",
+      "Skill(gsd-add-phase)"
+    ]
+  }
+}

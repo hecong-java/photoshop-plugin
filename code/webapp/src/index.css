@@ -1,60 +1,91 @@
+/* ========================================
+   NingleAI — Tech-Utility Design System
+   ======================================== */
+
 :root {
-  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  /* Core palette — tech-utility direction (hex for PS embedded browser compat) */
+  --bg:           #1a1a22;
+  --bg-deep:      #15151c;
+  --surface:      #1e1e28;
+  --surface2:     #252530;
+  --surface3:     #2c2c38;
+  --fg:           #f0f0f4;
+  --fg2:          #c8c8d2;
+  --fg3:          #9898a6;
+  --border:       #3a3a48;
+  --border2:      #4a4a5a;
+  --accent:       #2dd4a8;
+  --accent-dim:   #1a8a6e;
+  --accent-bg:    #122a24;
+  --success:      #34d399;
+  --success-bg:   #122a24;
+  --warning:      #fbbf24;
+  --warning-bg:   #2a2510;
+  --danger:       #ef4444;
+  --danger-bg:    #2a1212;
+  --info:         #60a5fa;
+  --info-bg:      #12202a;
+
+  /* Typography */
+  --font:         -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono:    'JetBrains Mono', 'Cascadia Code', 'SF Mono', ui-monospace, Menlo, monospace;
+
+  /* Spacing scale */
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px;  --sp-4: 16px;  --sp-5: 20px;
+
+  /* Radii */
+  --r-1: 4px;  --r-2: 6px;  --r-3: 8px;
+
+  /* Font family */
+  font-family: var(--font);
   line-height: 1.5;
   font-weight: 400;
-
-  color: #e2e8f0;
-  background-color: #101317;
-
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Base colors */
+  color: var(--fg);
+  background-color: var(--bg);
 }
 
-html,
-body,
-#root {
+html, body, #root {
   width: 100%;
   height: 100%;
   margin: 0;
   overflow: hidden;
 }
 
+body {
+  min-width: 300px;
+  background: var(--bg);
+}
+
 a {
   font-weight: 500;
-  color: inherit;
-  text-decoration: inherit;
+  color: var(--accent);
+  text-decoration: none;
 }
 a:hover {
-  color: inherit;
+  color: var(--accent);
 }
 
-body {
-  min-width: 320px;
-  background: #101317;
-}
-
-h1 {
-  font-size: 3.2em;
-  line-height: 1.1;
-}
-
+/* Reset button defaults — each component styles its own buttons */
 button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #2b3038;
+  font-family: var(--font);
   cursor: pointer;
-  transition: border-color 0.25s;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, opacity 0.15s;
 }
-button:hover {
-  border-color: #646cff;
-}
-button:focus,
-button:focus-visible {
-  outline: 4px auto -webkit-focus-ring-color;
+
+/* Scrollbar — thin, minimal */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border2); }
+
+/* Selection */
+::selection {
+  background: var(--accent-dim);
+  color: var(--fg);
 }

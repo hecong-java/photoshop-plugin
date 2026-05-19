@@ -239,7 +239,7 @@ export const Draw = () => {
   const { shouldDisplayNode, getAllowedInputs, loadConfig, config } = useConfigStore();
 
   // ComfyUI queue store
-  const { queueRunning, queuePending, fetchQueue, setBaseUrl: setComfyUIBaseUrl } = useComfyUIStore();
+  const { fetchQueue, setBaseUrl: setComfyUIBaseUrl, queueRunning, queuePending } = useComfyUIStore();
 
   // Workflows
   const [workflows, setWorkflows] = useState<ComfyUIWorkflowInfo[]>([]);
@@ -247,12 +247,14 @@ export const Draw = () => {
   const selectedWorkflowRef = useRef<ComfyUIWorkflowInfo | null>(null);
   const [workflowInputs, setWorkflowInputs] = useState<WorkflowInput[]>([]);
   const [inputValues, setInputValues] = useState<Record<string, string | number | boolean>>({});
+  const [seedModes, setSeedModes] = useState<Record<string, 'fixed' | 'increment' | 'decrement' | 'randomize'>>({});
+  const [openSeedDropdown, setOpenSeedDropdown] = useState<string | null>(null);
   const [isLoadingWorkflows, setIsLoadingWorkflows] = useState(false);
   const [objectInfo, setObjectInfo] = useState<Record<string, unknown> | null>(null);
   const [experimentModels, setExperimentModels] = useState<ExperimentModelCatalog>({});
   const [isWorkflowPickerOpen, setIsWorkflowPickerOpen] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
-  const [uploadedImagePreviews, setUploadedImagePreviews] = useState<Record<string, string>>({});
+  const [uploadedImagePreviews, setUploadedImagePreviews] = useState<Record<string, string | string[]>>({});
 
   // Cluster Mode state per D-50, D-51
   const connectionMode = useSettingsStore((s) => s.connectionMode);
@@ -264,9 +266,7 @@ export const Draw = () => {
   const [selectedTemplate, setSelectedTemplate] = useState<LemonGridTemplateDetail | null>(null);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [templateParams, setTemplateParams] = useState<Record<string, unknown>>({});
-  const [templateImageInputs, setTemplateImageInputs] = useState<Record<string, string>>({});
-  // Per D-36: History source filter for Direct/Cluster/All
-  const [historySourceFilter, setHistorySourceFilter] = useState<'all' | 'direct' | 'cluster'>('all');
+  const [templateImageInputs, setTemplateImageInputs] = useState<Record<string, string | string[]>>({});
   // Per D-24: WebSocket connection refs for per-task connections
   const wsConnectionRefs = useRef<Record<string, string>>({});
   const latestInputValuesRef = useRef<Record<string, string | number | boolean>>({});
@@ -1215,14 +1215,15 @@ export const Draw = () => {
 
     try {
       const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
-      const workflowList = await client.listWorkflows();
+      const prefixMode = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
+      const workflowList = await client.listWorkflows(prefixMode);
       setWorkflows(workflowList);
 
       let loadedObjectInfo: Record<string, unknown> | null = objectInfo;
 
       if (!objectInfo) {
         try {
-          const info = await client.getObjectInfo();
+          const info = await client.getObjectInfo(prefixMode);
           if (info && typeof info === 'object') {
             loadedObjectInfo = info as Record<string, unknown>;
             setObjectInfo(loadedObjectInfo);
@@ -1260,7 +1261,7 @@ export const Draw = () => {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to load workflows';
-      setWorkflowError(message);
+      setWorkflowError(`加载工作流列表失败: ${message} (baseUrl=${comfyUISettings.baseUrl})`);
     } finally {
       setIsLoadingWorkflows(false);
     }
@@ -1324,21 +1325,99 @@ export const Draw = () => {
     try {
       const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
       const prefixMode = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
-      const workflowData = await client.readWorkflow(workflow.path || workflow.name, prefixMode);
+      setWorkflowError(null);
 
-      console.log('[Draw] Workflow data loaded, parsing inputs...');
+      let workflowData: unknown;
+      try {
+        workflowData = await client.readWorkflow(workflow.path || workflow.name, prefixMode);
+      } catch (readErr) {
+        const msg = readErr instanceof Error ? readErr.message : String(readErr);
+        setWorkflowError(`读取工作流失败: ${msg}`);
+        return [];
+      }
+
+      if (!workflowData || typeof workflowData !== 'object') {
+        setWorkflowError(`工作流数据无效 (type=${typeof workflowData})`);
+        return [];
+      }
+      const hasNodes = !!((workflowData as Record<string, unknown>).nodes);
+      if (!hasNodes) {
+        const keys = Object.keys(workflowData as Record<string, unknown>).join(',');
+        setWorkflowError(`${diagStep} 返回数据缺少 nodes 字段, keys=${keys}`);
+        return [];
+      }
+
+      // Try fetching objectInfo if not yet available (needed for COMBO option lists)
+      let effectiveObjectInfo = objectInfoOverride ?? objectInfo;
+      if (!effectiveObjectInfo) {
+        try {
+          const info = await client.getObjectInfo(prefixMode);
+          if (info && typeof info === 'object') {
+            effectiveObjectInfo = info as Record<string, unknown>;
+            setObjectInfo(effectiveObjectInfo);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setWorkflowError(`获取 object_info 失败: ${msg}`);
+          return [];
+        }
+      }
 
       // Parse workflow inputs
-      const inputs = parseWorkflowInputs(
+      let inputs = parseWorkflowInputs(
         workflowData,
-        objectInfoOverride ?? objectInfo,
+        effectiveObjectInfo,
         modelCatalogOverride ?? experimentModels
       );
 
-      console.log('[Draw] Parsed inputs:', inputs.length);
-      inputs.forEach(input => {
-        console.log(`[Draw]   - Input: ${input.name}, type: ${input.type}, classType: ${input.classType}`);
-      });
+      // Post-parse enrichment: for text inputs that should be selects,
+      // resolve options from objectInfo using classType
+      if (effectiveObjectInfo && typeof effectiveObjectInfo === 'object') {
+        const oi = effectiveObjectInfo as Record<string, unknown>;
+        inputs = inputs.map(input => {
+          // Only enrich text inputs without options
+          if (input.type !== 'text' || (input.options && input.options.length > 0)) {
+            return input;
+          }
+          // Extract the original input name (strip _nodeId suffix)
+          const splitIdx = input.name.lastIndexOf('_');
+          const originalInputName = splitIdx > 0 ? input.name.slice(0, splitIdx) : input.name;
+          const classType = input.classType;
+          if (!classType || !originalInputName) return input;
+
+          // Look up this node type in objectInfo
+          const nodeInfo = oi[classType];
+          if (!nodeInfo || typeof nodeInfo !== 'object') return input;
+          const nodeInput = (nodeInfo as Record<string, unknown>).input;
+          if (!nodeInput || typeof nodeInput !== 'object') return input;
+
+          const required = (nodeInput as Record<string, unknown>).required;
+          const optional = (nodeInput as Record<string, unknown>).optional;
+          const config = (required && typeof required === 'object')
+            ? (required as Record<string, unknown>)[originalInputName]
+            : undefined;
+          const configAlt = (!config && optional && typeof optional === 'object')
+            ? (optional as Record<string, unknown>)[originalInputName]
+            : undefined;
+          const effectiveConfig = config ?? configAlt;
+          if (!effectiveConfig || !Array.isArray(effectiveConfig as unknown[])) return input;
+
+          const cfgArr = effectiveConfig as unknown[];
+          // Check if config[0] is an array of string options (COMBO type)
+          if (Array.isArray(cfgArr[0]) && (cfgArr[0] as unknown[]).length > 0) {
+            const options = (cfgArr[0] as unknown[]).map(v => String(v));
+            return {
+              ...input,
+              type: 'select' as const,
+              options,
+              default: typeof input.default === 'string' && options.includes(input.default)
+                ? input.default
+                : options[0],
+            };
+          }
+          return input;
+        });
+      }
 
       setWorkflowInputs(inputs);
 
@@ -1391,7 +1470,8 @@ export const Draw = () => {
 
       return inputs;
     } catch (error) {
-      console.error('[Draw] Failed to load workflow details:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      setWorkflowError(`加载工作流详情失败: ${msg}`);
       return [];
     }
   };
@@ -1896,10 +1976,34 @@ export const Draw = () => {
               if (inputs.some((item) => item.name === generatedName)) return;
 
               const config = getInputConfig(inputName);
-              const configOptions = extractOptions(config);
+              let configOptions = extractOptions(config);
               const modelOptions = resolveModelOptions(inputName);
               const numericMeta = extractNumericMeta(config);
               const inputTypeTag = extractInputTypeTag(config);
+              const isComboInput = typeof inputRecord.type === 'string' && inputRecord.type.toUpperCase() === 'COMBO';
+
+              // COMBO fallback: if input type is COMBO but objectInfo lookup failed,
+              // try a direct lookup in objectInfo for this node's class_type
+              if (isComboInput && !configOptions && !modelOptions && workflowObjectInfo) {
+                for (const candidate of nodeTypeCandidates) {
+                  const nodeObjInfo = (workflowObjectInfo as Record<string, unknown>)[candidate];
+                  if (nodeObjInfo && typeof nodeObjInfo === 'object') {
+                    const nodeInput = (nodeObjInfo as Record<string, unknown>).input;
+                    if (nodeInput && typeof nodeInput === 'object') {
+                      const req = (nodeInput as Record<string, unknown>).required;
+                      if (req && typeof req === 'object' && (req as Record<string, unknown>)[inputName]) {
+                        configOptions = extractOptions((req as Record<string, unknown>)[inputName] as ComfyInputConfig);
+                        if (configOptions) break;
+                      }
+                      const opt = (nodeInput as Record<string, unknown>).optional;
+                      if (!configOptions && opt && typeof opt === 'object' && (opt as Record<string, unknown>)[inputName]) {
+                        configOptions = extractOptions((opt as Record<string, unknown>)[inputName] as ComfyInputConfig);
+                        if (configOptions) break;
+                      }
+                    }
+                  }
+                }
+              }
 
               const widgetDefault = widgetName ? widgetValueByName.get(widgetName) : undefined;
 
@@ -2737,6 +2841,7 @@ export const Draw = () => {
       });
       return uploadedName;
     } catch (error) {
+      console.error('[Draw] Image upload failed:', error instanceof Error ? error.message : error);
       setUploadedImagePreviews((prev) => {
         const next = { ...prev };
         delete next[inputName];
@@ -2771,6 +2876,51 @@ export const Draw = () => {
     };
     const detail = normalizeTemplateDetail(cloned as Record<string, unknown>);
 
+    // Enrich param_schema: convert COMBO fields that API mis-typed as STRING/text to select
+    // Uses objectInfo to look up actual options for each field
+    const oi = objectInfo as Record<string, unknown> | null;
+    if (oi) {
+      for (const field of detail.param_schema) {
+        if (field.type === 'text' && !field.hidden) {
+          const classType = field.source_class_type;
+          const inputName = field.name;
+          // Try to find options from objectInfo using source_class_type
+          if (classType && oi[classType]) {
+            const nodeInfo = oi[classType] as Record<string, unknown>;
+            const nodeInput = nodeInfo.input as Record<string, unknown> | undefined;
+            if (nodeInput) {
+              const required = nodeInput.required as Record<string, unknown> | undefined;
+              const optional = nodeInput.optional as Record<string, unknown> | undefined;
+              const config = required?.[inputName] ?? optional?.[inputName];
+              if (config && Array.isArray(config as unknown[]) && Array.isArray((config as unknown[])[0])) {
+                const opts = (config as unknown[])[0] as unknown[];
+                field.type = 'select';
+                field.options = opts.map(v => ({ label: String(v), value: v }));
+              }
+            }
+          }
+        }
+        // Also fix select fields that have no options — enrich from objectInfo
+        if (field.type === 'select' && (!field.options || field.options.length === 0)) {
+          const classType = field.source_class_type;
+          const inputName = field.name;
+          if (classType && oi[classType]) {
+            const nodeInfo = oi[classType] as Record<string, unknown>;
+            const nodeInput = nodeInfo.input as Record<string, unknown> | undefined;
+            if (nodeInput) {
+              const required = nodeInput.required as Record<string, unknown> | undefined;
+              const optional = nodeInput.optional as Record<string, unknown> | undefined;
+              const config = required?.[inputName] ?? optional?.[inputName];
+              if (config && Array.isArray(config as unknown[]) && Array.isArray((config as unknown[])[0])) {
+                const opts = (config as unknown[])[0] as unknown[];
+                field.options = opts.map(v => ({ label: String(v), value: v }));
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Per D-09: Initialize templateParams with defaults from param_schema
     const defaults: Record<string, unknown> = {};
     for (const field of detail.param_schema) {
@@ -2795,27 +2945,40 @@ export const Draw = () => {
     setTemplateParams(prev => ({ ...prev, [paramName]: value }));
   };
 
-  // Cluster Mode: Handle image upload for a template image param
+  // Cluster Mode: Handle image upload for a template image param (supports multi-image)
   // Per D-18, D-19: Same image input UI, upload target is LemonGrid asset API
   const handleTemplateImageUpload = async (file: File, paramName: string) => {
     if (!lemonGridServerUrl) return;
 
-    // Show preview immediately
+    // Show preview immediately — append to array
     const previewUrl = URL.createObjectURL(file);
-    setUploadedImagePreviews(prev => ({ ...prev, [paramName]: previewUrl }));
+    setUploadedImagePreviews(prev => {
+      const existing = prev[paramName];
+      const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
+      return { ...prev, [paramName]: [...arr, previewUrl] };
+    });
 
     try {
       const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
       const result = await client.uploadAsset(file);
-      // Store asset_id as param value
-      handleTemplateParamChange(paramName, result.id);
-      setTemplateImageInputs(prev => ({ ...prev, [paramName]: result.filename }));
+      // Store asset_id array as param value
+      setTemplateParams(prev => {
+        const existing = prev[paramName];
+        const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
+        return { ...prev, [paramName]: [...arr, result.id] };
+      });
+      setTemplateImageInputs(prev => {
+        const existing = prev[paramName];
+        const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
+        return { ...prev, [paramName]: [...arr, result.filename] };
+      });
     } catch (error) {
       console.error('[Draw] Failed to upload image to LemonGrid:', error);
+      // Remove the failed preview
       setUploadedImagePreviews(prev => {
-        const next = { ...prev };
-        delete next[paramName];
-        return next;
+        const existing = prev[paramName];
+        const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
+        return { ...prev, [paramName]: arr.slice(0, -1) };
       });
     }
   };
@@ -2831,6 +2994,29 @@ export const Draw = () => {
 
     setIsSubmittingCluster(true);
     try {
+      // Apply seed modes before submitting
+      const seedModeUpdates: Record<string, number> = {};
+      Object.entries(seedModes).forEach(([fieldName, mode]) => {
+        const currentValue = templateParams[fieldName];
+        if (typeof currentValue !== 'number') return;
+        switch (mode) {
+          case 'fixed':
+            break;
+          case 'increment':
+            seedModeUpdates[fieldName] = currentValue + 1;
+            break;
+          case 'decrement':
+            seedModeUpdates[fieldName] = currentValue - 1;
+            break;
+          case 'randomize':
+            seedModeUpdates[fieldName] = Math.floor(Math.random() * 1000000000000000);
+            break;
+        }
+      });
+      if (Object.keys(seedModeUpdates).length > 0) {
+        setTemplateParams(prev => ({ ...prev, ...seedModeUpdates }));
+      }
+
       const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
       // Per D-41: Snapshot parameter values at submit time
       // Build params with node_id.name keys (e.g. "100.upload") as required by API
@@ -3160,6 +3346,14 @@ export const Draw = () => {
 
       const workflowData = await client.readWorkflow(currentWorkflow.path || currentWorkflow.name, prefixMode);
 
+      // Save original seed values before applying workflow's control_after_generate
+      const originalSeedValues: Record<string, number> = {};
+      Object.entries(latestInputValuesRef.current).forEach(([key, value]) => {
+        if (key.toLowerCase().includes('seed') && typeof value === 'number') {
+          originalSeedValues[key] = value;
+        }
+      });
+
       // Generate random seeds for nodes with "randomize" mode BEFORE compiling
       const workflowDataTyped = workflowData as { nodes?: any[] } | null | undefined;
       if (workflowDataTyped?.nodes && Array.isArray(workflowDataTyped.nodes)) {
@@ -3203,6 +3397,37 @@ export const Draw = () => {
             return next;
           });
         }
+      }
+
+      // Apply seed modes (override workflow's control_after_generate)
+      const seedModeUpdates: Record<string, number> = {};
+      Object.entries(seedModes).forEach(([fieldName, mode]) => {
+        const original = originalSeedValues[fieldName];
+        if (typeof original !== 'number') return;
+        switch (mode) {
+          case 'fixed':
+            seedModeUpdates[fieldName] = original;
+            break;
+          case 'increment':
+            seedModeUpdates[fieldName] = original + 1;
+            break;
+          case 'decrement':
+            seedModeUpdates[fieldName] = original - 1;
+            break;
+          case 'randomize':
+            // If workflow's randomize didn't fire, generate one ourselves
+            if (latestInputValuesRef.current[fieldName] === original) {
+              seedModeUpdates[fieldName] = Math.floor(Math.random() * 1000000000000000);
+            }
+            break;
+        }
+      });
+      if (Object.keys(seedModeUpdates).length > 0) {
+        setInputValues(prev => {
+          const next = { ...prev, ...seedModeUpdates };
+          latestInputValuesRef.current = next;
+          return next;
+        });
       }
 
       const historyPrompt = pendingRerunPromptRef.current;
@@ -3588,22 +3813,130 @@ export const Draw = () => {
     const value = inputValues[input.name] ?? input.default ?? '';
 
     switch (input.type) {
-      case 'text':
+      case 'text': {
+        // If field has options, render as select dropdown
+        if (input.options && input.options.length > 0) {
+          return (
+            <div key={input.name} className="form-field">
+              <div className="field-label">{input.label}</div>
+              <select
+                className="workflow-select"
+                value={String(value)}
+                onChange={(e) => handleInputChange(input.name, e.target.value)}
+              >
+                {input.options.map((opt) => (
+                  <option key={String(opt)} value={String(opt)}>{String(opt)}</option>
+                ))}
+              </select>
+            </div>
+          );
+        }
+        // Long-text (prompt) → textarea; short-text → input
+        const isLongText = /prompt|提示词|description|描述/i.test(input.label);
+        if (isLongText) {
+          return (
+            <div key={input.name} className="form-field">
+              <div className="field-label">{input.label}</div>
+              <textarea
+                className="text-input"
+                value={value as string}
+                onChange={(e) => handleInputChange(input.name, e.target.value)}
+                rows={2}
+                placeholder={`输入${input.label}...`}
+              />
+            </div>
+          );
+        }
         return (
           <div key={input.name} className="form-field">
-            <label>{input.label}</label>
-            <textarea
+            <div className="field-label">{input.label}</div>
+            <input
+              type="text"
+              className="text-input"
               value={value as string}
               onChange={(e) => handleInputChange(input.name, e.target.value)}
-              rows={4}
               placeholder={`输入${input.label}...`}
             />
           </div>
         );
+      }
 
       case 'number':
         {
           const numericValue = typeof value === 'number' ? value : Number(value || 0);
+          const isSeedField = input.name.toLowerCase().includes('seed');
+
+          if (isSeedField) {
+            const currentSeedMode = seedModes[input.name] || 'randomize';
+            return (
+              <div key={input.name} className="form-field seed-field">
+                <div className="field-label">
+                  <span>{input.label}</span>
+                  <div className="seed-control">
+                    <div className="seed-mode-dropdown">
+                      <button
+                        type="button"
+                        className="seed-mode-btn"
+                        title={{
+                          fixed: '固定值',
+                          increment: '递增值',
+                          decrement: '递减值',
+                          randomize: '随机值',
+                        }[currentSeedMode]}
+                        onClick={() => setOpenSeedDropdown(openSeedDropdown === input.name ? null : input.name)}
+                      >
+                        {currentSeedMode === 'fixed' && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                        )}
+                        {currentSeedMode === 'increment' && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
+                        )}
+                        {currentSeedMode === 'decrement' && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
+                        )}
+                        {currentSeedMode === 'randomize' && (
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                        )}
+                        <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                      </button>
+                      {openSeedDropdown === input.name && (
+                        <div className="seed-mode-menu" onClick={() => setOpenSeedDropdown(null)}>
+                          <button type="button" className={`seed-mode-option ${currentSeedMode === 'fixed' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [input.name]: 'fixed' })); }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                            <span>固定值</span>
+                          </button>
+                          <button type="button" className={`seed-mode-option ${currentSeedMode === 'increment' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [input.name]: 'increment' })); }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
+                            <span>递增值</span>
+                          </button>
+                          <button type="button" className={`seed-mode-option ${currentSeedMode === 'decrement' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [input.name]: 'decrement' })); }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
+                            <span>递减值</span>
+                          </button>
+                          <button type="button" className={`seed-mode-option ${currentSeedMode === 'randomize' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [input.name]: 'randomize' })); }}>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                            <span>随机值</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      className="seed-input"
+                      value={numericValue}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        if (raw === '' || raw === '-') return;
+                        const v = Number(raw);
+                        if (!Number.isNaN(v)) handleInputChange(input.name, v);
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
           const min = typeof input.min === 'number' ? input.min : 0;
           const step = typeof input.step === 'number' && input.step > 0 ? input.step : 1;
           const max = typeof input.max === 'number'
@@ -3613,30 +3946,55 @@ export const Draw = () => {
 
         return (
             <div key={input.name} className="form-field slider-field">
-              <div className="slider-header">
-                <label>{input.label}</label>
-                <span className="slider-badge">{sliderValue}</span>
+              <div className="field-label">
+                <span>{input.label}</span>
+                <div className="number-stepper">
+                  <button
+                    type="button"
+                    className="stepper-btn stepper-minus"
+                    onClick={() => {
+                      const next = Math.max(min, sliderValue - step);
+                      handleInputChange(input.name, next);
+                    }}
+                    disabled={sliderValue <= min}
+                  >−</button>
+                  <input
+                    type="number"
+                    className="stepper-input"
+                    value={sliderValue}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      if (raw === '' || raw === '-') return;
+                      const v = Number(raw);
+                      if (!Number.isNaN(v)) handleInputChange(input.name, v);
+                    }}
+                    onBlur={(e) => {
+                      const v = Number(e.target.value);
+                      const clamped = Number.isNaN(v) ? min : Math.min(max, Math.max(min, v));
+                      handleInputChange(input.name, clamped);
+                    }}
+                    step={step}
+                  />
+                  <button
+                    type="button"
+                    className="stepper-btn stepper-plus"
+                    onClick={() => {
+                      const next = Math.min(max, sliderValue + step);
+                      handleInputChange(input.name, next);
+                    }}
+                    disabled={sliderValue >= max}
+                  >+</button>
+                </div>
               </div>
               <input
                 type="range"
+                className="range-track"
                 value={sliderValue}
                 onChange={(e) => handleInputChange(input.name, Number(e.target.value))}
                 min={min}
                 max={max}
                 step={step}
               />
-              <div className="slider-meta">
-                <span>{min}</span>
-                <input
-                  type="number"
-                  value={sliderValue}
-                  onChange={(e) => handleInputChange(input.name, Number(e.target.value))}
-                  min={min}
-                  max={max}
-                  step={step}
-                />
-                <span>{max}</span>
-              </div>
             </div>
           );
         }
@@ -3660,16 +4018,13 @@ export const Draw = () => {
 
       case 'boolean':
         return (
-          <div key={input.name} className="form-field boolean-field">
-            <label>{input.label}</label>
-            <label className="boolean-toggle">
-              <input
-                type="checkbox"
-                checked={Boolean(value)}
-                onChange={(e) => handleInputChange(input.name, e.target.checked)}
-              />
-              <span>{Boolean(value) ? '开启' : '关闭'}</span>
-            </label>
+          <div key={input.name} className="toggle-wrap">
+            <span className="toggle-label">{input.label}</span>
+            <button
+              type="button"
+              className={`toggle ${Boolean(value) ? 'on' : ''}`}
+              onClick={() => handleInputChange(input.name, !Boolean(value))}
+            />
           </div>
         );
 
@@ -3770,76 +4125,17 @@ export const Draw = () => {
     <div className="draw-page">
       {/* Upper Section: Preview Area */}
       <div className="preview-section">
-        <div className="preview-header">
-          <h2>预览</h2>
-          {/* Queue Status Display - always show when connected */}
-          {comfyUISettings.isConnected && (
-            <div className="queue-status">
-              {(() => {
-                // Find current task position in queue
-                const runningIndex = queueRunning.findIndex(item => item.promptId === progress.promptId);
-                const pendingIndex = queuePending.findIndex(item => item.promptId === progress.promptId);
-                const isInRunning = runningIndex !== -1;
-                const isInPending = pendingIndex !== -1;
-                const isExecuting = isInRunning && runningIndex === 0; // First in running queue = executing
-
-                return (
-                  <>
-                    <span
-                      className={`queue-badge ${isExecuting ? 'queue-current' : 'queue-running'}`}
-                      title={`正在运行: ${queueRunning.length} 个任务${isInRunning ? ` (当前任务 #${runningIndex + 1})` : ''}`}
-                    >
-                      <span className="queue-icon">{isExecuting ? '⚡' : '⚙'}</span>
-                      {isExecuting ? '执行中' : queueRunning.length}
-                      {isInRunning && !isExecuting && <span className="queue-position"> (#{runningIndex + 1})</span>}
-                    </span>
-                    <span
-                      className="queue-badge queue-pending"
-                      title={`等待中: ${queuePending.length} 个任务${isInPending ? ` (当前任务 #${pendingIndex + 1})` : ''}`}
-                    >
-                      <span className="queue-icon">⏳</span>
-                      {queuePending.length}
-                      {isInPending && <span className="queue-position"> (#{pendingIndex + 1})</span>}
-                    </span>
-                  </>
-                );
-              })()}
-            </div>
-          )}
-          {/* Per D-39: Cluster Mode shows active task count; Direct Mode uses isGenerating */}
-          {connectionMode === 'cluster' ? (
-            (() => {
-              const activeCount = Object.values(lemonGridStore.tasks).filter(
-                (t) => ['PENDING', 'QUEUED', 'SYNCING', 'RUNNING'].includes(t.status)
-              ).length;
-              return activeCount > 0 ? (
-                <span className="generating-badge">{activeCount} 任务处理中</span>
-              ) : null;
-            })()
-          ) : (
-            isGenerating && (
-              <span className="generating-badge">生成中...</span>
-            )
-          )}
-          {/* Per D-36: History source filter for Direct/Cluster/All */}
-          {connectionMode === 'cluster' && (
-            <div className="history-source-filter">
-              <button
-                className={historySourceFilter === 'all' ? 'active' : ''}
-                onClick={() => setHistorySourceFilter('all')}
-              >全部</button>
-              <button
-                className={historySourceFilter === 'direct' ? 'active' : ''}
-                onClick={() => setHistorySourceFilter('direct')}
-              >直连</button>
-              <button
-                className={historySourceFilter === 'cluster' ? 'active' : ''}
-                onClick={() => setHistorySourceFilter('cluster')}
-              >集群</button>
-            </div>
-          )}
-        </div>
-
+        {/* Queue status badge */}
+        {connectionMode !== 'cluster' && comfyUISettings.isConnected && (queueRunning.length > 0 || queuePending.length > 0) && (
+          <div className="queue-status-badge">
+            <span className="queue-dot"></span>
+            <span className="queue-text">
+              {queueRunning.length > 0 && `${queueRunning.length} 运行中`}
+              {queueRunning.length > 0 && queuePending.length > 0 && ' · '}
+              {queuePending.length > 0 && `${queuePending.length} 排队中`}
+            </span>
+          </div>
+        )}
         <div className="preview-content">
           {progress.previewImage ? (
             <img
@@ -3850,8 +4146,8 @@ export const Draw = () => {
             />
           ) : (
             <div className="preview-placeholder">
-              <div className="placeholder-icon">🖼️</div>
-              <p>生成结果将在此显示</p>
+              <div className="placeholder-icon"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></div>
+              <p>选择工作流并生成图像</p>
             </div>
           )}
         </div>
@@ -3972,28 +4268,11 @@ export const Draw = () => {
 
       {/* Lower Section: Control Panel */}
       <div className="control-panel">
-        {/* Left: Workflow/Template Selector */}
+        {/* Workflow/Template Selector */}
         <div className="control-section workflow-selector">
-          <h3>
-            {/* Per D-95: Small mode label in Draw page header */}
-            {connectionMode === 'cluster' ? (
-              <>
-                模板
-                <span className="mode-indicator cluster-mode" title="集群模式">
-                  <span className={`mode-dot ${isLemonGridConnected ? 'connected' : 'disconnected'}`}></span>
-                  集群
-                </span>
-              </>
-            ) : (
-              <>
-                工作流
-                <span className="mode-indicator direct-mode" title="直连模式">
-                  <span className={`mode-dot ${comfyUISettings.isConnected ? 'connected' : 'disconnected'}`}></span>
-                  直连
-                </span>
-              </>
-            )}
-          </h3>
+          <div className="section-label">
+            {connectionMode === 'cluster' ? '模板' : '工作流'}
+          </div>
 
           {connectionMode === 'cluster' ? (
             // Cluster Mode: Template selector per D-04, D-05
@@ -4145,9 +4424,9 @@ export const Draw = () => {
           )}
         </div>
 
-        {/* Middle: Dynamic Form */}
+        {/* Dynamic Form + Generate */}
         <div className="control-section dynamic-form">
-          <h3>参数设置</h3>
+          <div className="section-label">参数</div>
 
           {connectionMode === 'cluster' ? (
             // Cluster Mode: Dynamic parameter UI from param_schema per D-02, D-09
@@ -4182,35 +4461,192 @@ export const Draw = () => {
                 </div>
               ) : (
                 <div className="form-fields" key={selectedTemplate.id}>
-                  {selectedTemplate.param_schema.filter(f => !f.hidden).map((field) => {
+                  {selectedTemplate.param_schema
+                    .filter(f => !f.hidden)
+                    .filter((field, idx, arr) => arr.findIndex(f => f.label === field.label) === idx)
+                    .map((field) => {
                     const value = templateParams[field.name] ?? renderParamDefault(field);
 
                     // Per D-09: Render inputs based on param_schema type
                     switch (field.type) {
-                      case 'text':
+                      case 'text': {
+                        // If field has options, render as select dropdown
+                        if (field.options && field.options.length > 0) {
+                          return (
+                            <div key={field.name} className="form-field">
+                              <div className="field-label">{field.label}{field.required && <span className="required-mark">*</span>}</div>
+                              <select
+                                className="workflow-select"
+                                value={String(value)}
+                                onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
+                              >
+                                {field.options.map((opt) => (
+                                  <option key={String(opt.value)} value={String(opt.value)}>
+                                    {opt.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          );
+                        }
+                        // Determine if this is a long-text (prompt) field or short-text field
+                        const isLongText = /prompt|提示词|description|描述/i.test(field.label + (field.description || ''));
+                        if (isLongText) {
+                          return (
+                            <div key={field.name} className="form-field">
+                              <div className="field-label">{field.label}{field.required && <span className="required-mark">*</span>}</div>
+                              <textarea
+                                className="text-input"
+                                value={String(value)}
+                                onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
+                                rows={2}
+                                placeholder={field.description || `输入${field.label}...`}
+                              />
+                            </div>
+                          );
+                        }
+                        // Short text: model names, paths, etc. → single-line input
                         return (
                           <div key={field.name} className="form-field">
-                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
-                            <textarea
+                            <div className="field-label">{field.label}{field.required && <span className="required-mark">*</span>}</div>
+                            <input
+                              type="text"
+                              className="text-input"
                               value={String(value)}
                               onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
-                              rows={4}
-                              placeholder={field.description || `输入${field.label}...`}
+                              placeholder={field.description || ''}
                             />
                           </div>
                         );
+                      }
 
                       case 'number': {
                         const numericValue = typeof value === 'number' ? value : Number(value || 0);
+                        const isSeedField = field.name.toLowerCase().includes('seed');
+
+                        if (isSeedField) {
+                          const currentSeedMode = seedModes[field.name] || 'randomize';
+                          return (
+                            <div key={field.name} className="form-field seed-field">
+                              <div className="field-label">
+                                <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
+                                <div className="seed-control">
+                                  <div className="seed-mode-dropdown">
+                                    <button
+                                      type="button"
+                                      className="seed-mode-btn"
+                                      title={{
+                                        fixed: '固定值',
+                                        increment: '递增值',
+                                        decrement: '递减值',
+                                        randomize: '随机值',
+                                      }[currentSeedMode]}
+                                      onClick={() => setOpenSeedDropdown(openSeedDropdown === field.name ? null : field.name)}
+                                    >
+                                      {currentSeedMode === 'fixed' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                      )}
+                                      {currentSeedMode === 'increment' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
+                                      )}
+                                      {currentSeedMode === 'decrement' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
+                                      )}
+                                      {currentSeedMode === 'randomize' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                                      )}
+                                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                                    </button>
+                                    {openSeedDropdown === field.name && (
+                                      <div className="seed-mode-menu" onClick={() => setOpenSeedDropdown(null)}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'fixed' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'fixed' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                          <span>固定值</span>
+                                        </button>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'increment' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'increment' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
+                                          <span>递增值</span>
+                                        </button>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'decrement' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'decrement' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
+                                          <span>递减值</span>
+                                        </button>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'randomize' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'randomize' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                                          <span>随机值</span>
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  <input
+                                    type="number"
+                                    className="seed-input"
+                                    value={numericValue}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      if (raw === '' || raw === '-') return;
+                                      const v = Number(raw);
+                                      if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         const min = typeof field.min === 'number' ? field.min : 0;
-                        const max = typeof field.max === 'number' ? field.max : 100;
                         const step = typeof field.step === 'number' && field.step > 0 ? field.step : 1;
+                        const max = typeof field.max === 'number'
+                          ? field.max
+                          : Math.max(min + step * 100, numericValue + step * 10);
+                        const sliderValue = Math.min(max, Math.max(min, numericValue));
                         return (
-                          <div key={field.name} className="form-field">
-                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
+                          <div key={field.name} className="form-field slider-field">
+                            <div className="field-label">
+                              <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
+                              <div className="number-stepper">
+                                <button
+                                  type="button"
+                                  className="stepper-btn stepper-minus"
+                                  onClick={() => {
+                                    const next = Math.max(min, sliderValue - step);
+                                    handleTemplateParamChange(field.name, next);
+                                  }}
+                                  disabled={sliderValue <= min}
+                                >−</button>
+                                <input
+                                  type="number"
+                                  className="stepper-input"
+                                  value={sliderValue}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '' || raw === '-') return;
+                                    const v = Number(raw);
+                                    if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                  }}
+                                  onBlur={(e) => {
+                                    const v = Number(e.target.value);
+                                    const clamped = Number.isNaN(v) ? min : Math.min(max, Math.max(min, v));
+                                    handleTemplateParamChange(field.name, clamped);
+                                  }}
+                                  step={step}
+                                />
+                                <button
+                                  type="button"
+                                  className="stepper-btn stepper-plus"
+                                  onClick={() => {
+                                    const next = Math.min(max, sliderValue + step);
+                                    handleTemplateParamChange(field.name, next);
+                                  }}
+                                  disabled={sliderValue >= max}
+                                >+</button>
+                              </div>
+                            </div>
                             <input
-                              type="number"
-                              value={numericValue}
+                              type="range"
+                              className="range-track"
+                              value={sliderValue}
                               onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
                               min={min}
                               max={max}
@@ -4222,35 +4658,136 @@ export const Draw = () => {
 
                       case 'slider': {
                         const sliderValue = typeof value === 'number' ? value : Number(value || 0);
+                        const isSeedField = field.name.toLowerCase().includes('seed');
+
+                        if (isSeedField) {
+                          const currentSeedMode = seedModes[field.name] || 'randomize';
+                          return (
+                            <div key={field.name} className="form-field seed-field">
+                              <div className="field-label">
+                                <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
+                                <div className="seed-control">
+                                  <div className="seed-mode-dropdown">
+                                    <button
+                                      type="button"
+                                      className="seed-mode-btn"
+                                      title={{
+                                        fixed: '固定值',
+                                        increment: '递增值',
+                                        decrement: '递减值',
+                                        randomize: '随机值',
+                                      }[currentSeedMode]}
+                                      onClick={() => setOpenSeedDropdown(openSeedDropdown === field.name ? null : field.name)}
+                                    >
+                                      {currentSeedMode === 'fixed' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                      )}
+                                      {currentSeedMode === 'increment' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
+                                      )}
+                                      {currentSeedMode === 'decrement' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
+                                      )}
+                                      {currentSeedMode === 'randomize' && (
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                                      )}
+                                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                                    </button>
+                                    {openSeedDropdown === field.name && (
+                                      <div className="seed-mode-menu" onClick={() => setOpenSeedDropdown(null)}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'fixed' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'fixed' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                                          <span>固定值</span>
+                                        </button>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'increment' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'increment' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
+                                          <span>递增值</span>
+                                        </button>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'decrement' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'decrement' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
+                                          <span>递减值</span>
+                                        </button>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'randomize' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'randomize' })); }}>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
+                                          <span>随机值</span>
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  <input
+                                    type="number"
+                                    className="seed-input"
+                                    value={sliderValue}
+                                    onChange={(e) => {
+                                      const raw = e.target.value;
+                                      if (raw === '' || raw === '-') return;
+                                      const v = Number(raw);
+                                      if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        }
+
                         const min = typeof field.min === 'number' ? field.min : 0;
-                        const max = typeof field.max === 'number' ? field.max : 100;
                         const step = typeof field.step === 'number' && field.step > 0 ? field.step : 1;
+                        const max = typeof field.max === 'number'
+                          ? field.max
+                          : Math.max(min + step * 100, sliderValue + step * 10);
+                        const clampedValue = Math.min(max, Math.max(min, sliderValue));
                         return (
                           <div key={field.name} className="form-field slider-field">
-                            <div className="slider-header">
-                              <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
-                              <span className="slider-badge">{sliderValue}</span>
+                            <div className="field-label">
+                              <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
+                              <div className="number-stepper">
+                                <button
+                                  type="button"
+                                  className="stepper-btn stepper-minus"
+                                  onClick={() => {
+                                    const next = Math.max(min, clampedValue - step);
+                                    handleTemplateParamChange(field.name, next);
+                                  }}
+                                  disabled={clampedValue <= min}
+                                >−</button>
+                                <input
+                                  type="number"
+                                  className="stepper-input"
+                                  value={clampedValue}
+                                  onChange={(e) => {
+                                    const raw = e.target.value;
+                                    if (raw === '' || raw === '-') return;
+                                    const v = Number(raw);
+                                    if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                  }}
+                                  onBlur={(e) => {
+                                    const v = Number(e.target.value);
+                                    const clamped = Number.isNaN(v) ? min : Math.min(max, Math.max(min, v));
+                                    handleTemplateParamChange(field.name, clamped);
+                                  }}
+                                  step={step}
+                                />
+                                <button
+                                  type="button"
+                                  className="stepper-btn stepper-plus"
+                                  onClick={() => {
+                                    const next = Math.min(max, clampedValue + step);
+                                    handleTemplateParamChange(field.name, next);
+                                  }}
+                                  disabled={clampedValue >= max}
+                                >+</button>
+                              </div>
                             </div>
                             <input
                               type="range"
-                              value={sliderValue}
+                              className="range-track"
+                              value={clampedValue}
                               onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
                               min={min}
                               max={max}
                               step={step}
                             />
-                            <div className="slider-meta">
-                              <span>{min}</span>
-                              <input
-                                type="number"
-                                value={sliderValue}
-                                onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
-                                min={min}
-                                max={max}
-                                step={step}
-                              />
-                              <span>{max}</span>
-                            </div>
                           </div>
                         );
                       }
@@ -4274,21 +4811,22 @@ export const Draw = () => {
 
                       case 'boolean':
                         return (
-                          <div key={field.name} className="form-field boolean-field">
-                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
-                            <label className="boolean-toggle">
-                              <input
-                                type="checkbox"
-                                checked={Boolean(value)}
-                                onChange={(e) => handleTemplateParamChange(field.name, e.target.checked)}
-                              />
-                              <span>{Boolean(value) ? '开启' : '关闭'}</span>
-                            </label>
+                          <div key={field.name} className="toggle-wrap">
+                            <span className="toggle-label">{field.label}{field.required && <span className="required-mark">*</span>}</span>
+                            <button
+                              type="button"
+                              className={`toggle ${Boolean(value) ? 'on' : ''}`}
+                              onClick={() => handleTemplateParamChange(field.name, !Boolean(value))}
+                            />
                           </div>
                         );
 
-                      case 'image':
-                        // Per D-18, D-19: Same image upload UI, target is LemonGrid asset API
+                      case 'image': {
+                        // Per D-18, D-19: Multi-image upload UI, target is LemonGrid asset API
+                        const previews = uploadedImagePreviews[field.name];
+                        const previewArr: string[] = Array.isArray(previews) ? previews : previews ? [previews] : [];
+                        const filenames = templateImageInputs[field.name];
+                        const filenameArr: string[] = Array.isArray(filenames) ? filenames : filenames ? [filenames] : [];
                         return (
                           <div key={field.name} className="form-field image-field">
                             <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
@@ -4324,59 +4862,72 @@ export const Draw = () => {
                                 </div>
                               </div>
                             )}
-                            <div className="image-upload-area">
-                              {uploadedImagePreviews[field.name] ? (
-                                <div className="image-preview-container">
-                                  <img
-                                    src={uploadedImagePreviews[field.name]}
-                                    alt="上传预览"
-                                    className="image-preview"
-                                  />
-                                  <div className="image-preview-info">
-                                    <span className="image-filename">{templateImageInputs[field.name] || '已上传'}</span>
-                                    <button
-                                      type="button"
-                                      className="remove-image-btn"
-                                      onClick={() => {
-                                        handleTemplateParamChange(field.name, '');
-                                        setUploadedImagePreviews(prev => {
-                                          const next = { ...prev };
-                                          delete next[field.name];
-                                          return next;
-                                        });
-                                        setTemplateImageInputs(prev => {
-                                          const next = { ...prev };
-                                          next[field.name] = '';
-                                          return next;
-                                        });
-                                      }}
-                                    >
-                                      移除
-                                    </button>
-                                  </div>
+                            <div className="image-upload-area multi-image-area">
+                              {previewArr.length > 0 && (
+                                <div className="multi-image-list">
+                                  {previewArr.map((previewUrl, idx) => (
+                                    <div key={idx} className="multi-image-item">
+                                      <img src={previewUrl} alt={`图片 ${idx + 1}`} className="multi-image-preview" />
+                                      <button
+                                        type="button"
+                                        className="multi-image-remove"
+                                        onClick={() => {
+                                          setUploadedImagePreviews(prev => {
+                                            const arr = Array.isArray(prev[field.name]) ? [...(prev[field.name] as string[])] : [];
+                                            arr.splice(idx, 1);
+                                            return { ...prev, [field.name]: arr };
+                                          });
+                                          setTemplateImageInputs(prev => {
+                                            const arr = Array.isArray(prev[field.name]) ? [...(prev[field.name] as string[])] : [];
+                                            arr.splice(idx, 1);
+                                            return { ...prev, [field.name]: arr };
+                                          });
+                                          setTemplateParams(prev => {
+                                            const arr = Array.isArray(prev[field.name]) ? [...(prev[field.name] as string[])] : [];
+                                            arr.splice(idx, 1);
+                                            return { ...prev, [field.name]: arr };
+                                          });
+                                        }}
+                                        title="移除"
+                                      >
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                          <line x1="18" y1="6" x2="6" y2="18" />
+                                          <line x1="6" y1="6" x2="18" y2="18" />
+                                        </svg>
+                                      </button>
+                                      <span className="multi-image-name">{filenameArr[idx] || `图片 ${idx + 1}`}</span>
+                                    </div>
+                                  ))}
                                 </div>
-                              ) : (
-                                <>
-                                  <input
-                                    type="file"
-                                    accept="image/*"
-                                    onChange={async (e) => {
-                                      const file = e.target.files?.[0];
-                                      if (file) {
-                                        try {
-                                          await handleTemplateImageUpload(file, field.name);
-                                        } catch (error) {
-                                          console.error('[Draw] 上传图片到 LemonGrid 失败:', error);
-                                        }
-                                      }
-                                    }}
-                                  />
-                                  <span className="upload-hint">点击或拖拽上传图片</span>
-                                </>
                               )}
+                              <label className="multi-image-add">
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  onChange={async (e) => {
+                                    const file = e.target.files?.[0];
+                                    if (file) {
+                                      try {
+                                        await handleTemplateImageUpload(file, field.name);
+                                      } catch (error) {
+                                        console.error('[Draw] 上传图片到 LemonGrid 失败:', error);
+                                      }
+                                    }
+                                    // Reset so same file can be re-selected
+                                    e.target.value = '';
+                                  }}
+                                />
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                                  <rect x="3" y="3" width="18" height="18" rx="3" />
+                                  <line x1="12" y1="8" x2="12" y2="16" />
+                                  <line x1="8" y1="12" x2="16" y2="12" />
+                                </svg>
+                                <span>添加图片</span>
+                              </label>
                             </div>
                           </div>
                         );
+                      }
 
                       default:
                         return null;
@@ -4409,27 +4960,13 @@ export const Draw = () => {
                 </div>
               ) : (
                 <div className="form-fields">
-                  {filteredInputGroups.map((group) => (
-                    <section key={group.key} className="form-group-card">
-                      <header className="form-group-header">
-                        <h4>{group.label}</h4>
-                        <span>{group.items.length} 项</span>
-                      </header>
-                      <div className="form-group-fields">
-                        {group.items.map((input) => renderInput(input))}
-                      </div>
-                    </section>
-                  ))}
+                  {filteredInputGroups.flatMap((group) =>
+                    group.items.map((input) => renderInput(input))
+                  )}
                 </div>
               )}
             </>
           )}
-        </div>
-
-        {/* Right: Generate Button + PS Operations */}
-        <div className="control-section action-panel">
-          <h3>操作</h3>
-
           <div className="action-buttons">
             <button
               className={`generate-btn ${connectionMode === 'cluster' ? (isSubmittingCluster ? 'generating' : '') : isGenerating ? 'generating' : ''}`}
@@ -4448,8 +4985,8 @@ export const Draw = () => {
                   </>
                 ) : (
                   <>
-                    <span className="btn-icon">✨</span>
-                    开始生成
+                    <span className="btn-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
+                    生成图像
                   </>
                 )
               ) : isGenerating ? (
@@ -4459,8 +4996,8 @@ export const Draw = () => {
                 </>
               ) : (
                 <>
-                  <span className="btn-icon">✨</span>
-                  开始生成
+                  <span className="btn-icon"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg></span>
+                  生成图像
                 </>
               )}
             </button>

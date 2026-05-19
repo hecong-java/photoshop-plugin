@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NingleAI — PS Plugin Redesign Prototype</title>
+<style>
+/* ========================================
+   Design System: tech-utility
+   Palette: Datadog / GitHub inspired
+   ======================================== */
+:root {
+  /* Surface layers */
+  --bg:      oklch(15% 0.015 250);
+  --surface: oklch(18% 0.015 250);
+  --surface2:oklch(22% 0.012 250);
+  --surface3:oklch(26% 0.012 250);
+
+  /* Text */
+  --fg:      oklch(92% 0.005 250);
+  --fg2:     oklch(70% 0.010 250);
+  --fg3:     oklch(50% 0.010 250);
+
+  /* Borders */
+  --border:  oklch(30% 0.010 250);
+  --border2: oklch(38% 0.010 250);
+
+  /* Accent — teal/green */
+  --accent:  oklch(65% 0.16 160);
+  --accent-dim: oklch(65% 0.08 160);
+  --accent-bg:  oklch(65% 0.04 160);
+
+  /* Status */
+  --success: oklch(70% 0.15 150);
+  --warning: oklch(75% 0.15 85);
+  --danger:  oklch(65% 0.18 25);
+
+  /* Typography */
+  --font:      -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'SF Mono', ui-monospace, Menlo, monospace;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+
+  /* Radius */
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 8px;
+
+  /* Panel width — simulating PS plugin */
+  --panel-w: 380px;
+}
+
+/* ========================================
+   Reset & Base
+   ======================================== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family: var(--font);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg);
+  background: oklch(10% 0.010 250);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+/* ========================================
+   Panel Shell
+   ======================================== */
+.panel {
+  width: var(--panel-w);
+  height: 100vh;
+  max-height: 820px;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  position: relative;
+}
+
+/* ========================================
+   Top Bar — minimal, identity only
+   ======================================== */
+.topbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.topbar-brand {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+
+.topbar-brand span {
+  color: var(--accent);
+}
+
+.topbar-mode {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg3);
+}
+
+.topbar-mode .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+}
+
+.topbar-mode .dot.off {
+  background: var(--danger);
+}
+
+/* ========================================
+   Main Content Area
+   ======================================== */
+.main {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+
+.main::-webkit-scrollbar { width: 4px; }
+.main::-webkit-scrollbar-track { background: transparent; }
+.main::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ========================================
+   Bottom Tab Bar
+   ======================================== */
+.tabbar {
+  flex-shrink: 0;
+  display: flex;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.tab-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: var(--sp-2) 0;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg3);
+  cursor: pointer;
+  border: none;
+  background: none;
+  transition: color 0.15s, background 0.15s;
+  font-family: var(--font);
+}
+
+.tab-item:hover {
+  color: var(--fg2);
+  background: oklch(20% 0.010 250);
+}
+
+.tab-item.active {
+  color: var(--accent);
+}
+
+.tab-item.active::after {
+  content: '';
+  width: 16px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  margin-top: 1px;
+}
+
+.tab-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* ========================================
+   Page: DRAW
+   ======================================== */
+.page { display: none; height: 100%; flex-direction: column; }
+.page.active { display: flex; }
+
+/* Preview */
+.preview-area {
+  flex: 0 0 180px;
+  background: oklch(12% 0.012 250);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+}
+
+.preview-empty {
+  text-align: center;
+  color: var(--fg3);
+}
+
+.preview-empty svg {
+  width: 40px;
+  height: 40px;
+  margin-bottom: var(--sp-2);
+  opacity: 0.4;
+}
+
+.preview-empty p {
+  font-size: 12px;
+}
+
+.preview-img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+/* Preview strip thumbnails */
+.preview-strip {
+  position: absolute;
+  bottom: var(--sp-2);
+  left: var(--sp-2);
+  right: var(--sp-2);
+  display: flex;
+  gap: var(--sp-1);
+  overflow-x: auto;
+}
+
+.preview-strip::-webkit-scrollbar { height: 0; }
+
+.thumb {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.thumb.active, .thumb:hover {
+  opacity: 1;
+  border-color: var(--accent);
+}
+
+.thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Progress */
+.progress-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: oklch(20% 0.010 250);
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+  border-radius: 0 2px 2px 0;
+}
+
+/* Controls section */
+.controls {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  gap: var(--sp-3);
+}
+
+.controls::-webkit-scrollbar { width: 4px; }
+.controls::-webkit-scrollbar-track { background: transparent; }
+.controls::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* Section header */
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg3);
+  margin-bottom: var(--sp-2);
+}
+
+/* Workflow selector */
+.workflow-select {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  padding-right: 28px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  color: var(--fg);
+  font-size: 13px;
+  font-family: var(--font);
+  font-weight: 500;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='%236b7280' stroke-width='2'%3E%3Cpath d='M3 5l3 3 3-3'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.workflow-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.workflow-select optgroup {
+  background: var(--surface);
+  color: var(--fg2);
+  font-weight: 600;
+}
+
+.workflow-select option {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+/* Form fields */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.field-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.field-value {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+}
+
+.text-input {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  color: var(--fg);
+  font-size: 13px;
+  font-family: var(--font);
+  transition: border-color 0.15s;
+}
+
+.text-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.text-input::placeholder {
+  color: var(--fg3);
+}
+
+textarea.text-input {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.5;
+}
+
+/* Range slider */
+.range-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.range-track {
+  width: 100%;
+  height: 4px;
+  appearance: none;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+}
+
+.range-track::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  cursor: pointer;
+  border: 2px solid var(--bg);
+}
+
+.range-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--fg3);
+  font-family: var(--font-mono);
+}
+
+/* Toggle switch */
+.toggle-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.toggle-label {
+  font-size: 12px;
+  color: var(--fg2);
+}
+
+.toggle {
+  width: 32px;
+  height: 18px;
+  background: var(--border);
+  border-radius: 9px;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  border: none;
+  padding: 0;
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--fg3);
+  transition: transform 0.2s, background 0.2s;
+}
+
+.toggle.on {
+  background: var(--accent-dim);
+}
+
+.toggle.on::after {
+  transform: translateX(14px);
+  background: var(--accent);
+}
+
+/* Image upload */
+.upload-zone {
+  border: 1px dashed var(--border2);
+  border-radius: var(--r-2);
+  padding: var(--sp-4);
+  text-align: center;
+  color: var(--fg3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.upload-zone:hover {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.upload-zone svg {
+  width: 24px;
+  height: 24px;
+  margin-bottom: var(--sp-1);
+  opacity: 0.5;
+}
+
+/* Generate button */
+.gen-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  background: var(--accent);
+  color: oklch(10% 0.010 250);
+  border: none;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.gen-btn:hover { opacity: 0.9; }
+.gen-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.gen-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ========================================
+   Page: HISTORY
+   ======================================== */
+.history-list {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.history-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  padding: var(--sp-3);
+  display: flex;
+  gap: var(--sp-3);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.history-item:hover {
+  border-color: var(--border2);
+}
+
+.history-thumb {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-1);
+  background: var(--surface2);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.history-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.history-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-meta {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg3);
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-actions {
+  display: flex;
+  gap: var(--sp-1);
+  margin-top: var(--sp-2);
+}
+
+.history-actions button {
+  padding: var(--sp-1) var(--sp-2);
+  font-size: 11px;
+  font-family: var(--font);
+  font-weight: 500;
+  color: var(--fg2);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.history-actions button:hover {
+  color: var(--fg);
+  border-color: var(--border2);
+  background: var(--surface3);
+}
+
+/* Filter tabs */
+.filter-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 0 var(--sp-3);
+}
+
+.filter-tab {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg3);
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  font-family: var(--font);
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.filter-tab:hover { color: var(--fg2); }
+.filter-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ========================================
+   Page: SETTINGS
+   ======================================== */
+.settings-list {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.setting-section {
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+
+.setting-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.setting-header h3 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.setting-body {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+/* Status pill */
+.status-pill {
+  font-size: 10px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.status-pill.on {
+  background: oklch(65% 0.06 160);
+  color: var(--success);
+}
+
+.status-pill.off {
+  background: oklch(35% 0.04 25);
+  color: var(--danger);
+}
+
+.status-pill.pending {
+  background: oklch(50% 0.06 85);
+  color: var(--warning);
+}
+
+/* Mode toggle */
+.mode-toggle {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  overflow: hidden;
+}
+
+.mode-opt {
+  flex: 1;
+  padding: var(--sp-2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font);
+  color: var(--fg3);
+  text-align: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.mode-opt.active {
+  background: var(--accent);
+  color: oklch(10% 0.010 250);
+  font-weight: 700;
+}
+
+/* Capabilities grid */
+.cap-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-2);
+}
+
+.cap-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  font-size: 11px;
+  color: var(--fg2);
+  padding: var(--sp-1) 0;
+}
+
+.cap-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cap-dot.ok { background: var(--success); }
+.cap-dot.no { background: var(--danger); }
+
+/* ========================================
+   Login Modal
+   ======================================== */
+.modal-overlay {
+  position: absolute;
+  inset: 0;
+  background: oklch(5% 0.010 250 / 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-card {
+  width: calc(100% - 24px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-3);
+  overflow: hidden;
+}
+
+.modal-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--sp-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-top h2 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+.modal-close {
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  color: var(--fg3);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+}
+
+.modal-close:hover {
+  color: var(--fg);
+  border-color: var(--border2);
+}
+
+.modal-body {
+  padding: var(--sp-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.btn-primary {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--accent);
+  color: oklch(10% 0.010 250);
+  border: none;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.btn-primary:hover { opacity: 0.9; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.btn-secondary {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--surface2);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: var(--font);
+  cursor: pointer;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+}
+
+.btn-secondary:hover {
+  border-color: var(--border2);
+  background: var(--surface3);
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--fg3);
+  font-size: 11px;
+}
+
+.divider::before, .divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* Error */
+.error-msg {
+  padding: var(--sp-2) var(--sp-3);
+  background: oklch(35% 0.04 25);
+  border: 1px solid oklch(45% 0.06 25);
+  border-radius: var(--r-2);
+  color: oklch(70% 0.15 25);
+  font-size: 12px;
+}
+
+/* Queue badge */
+.queue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: oklch(50% 0.06 85);
+  color: var(--warning);
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-badge.running {
+  background: oklch(65% 0.06 160);
+  color: var(--success);
+}
+
+/* ========================================
+   Scroll area edge fades
+   ======================================== */
+.main::after {
+  content: '';
+  position: sticky;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 12px;
+  background: linear-gradient(transparent, var(--bg));
+  pointer-events: none;
+}
+
+/* ========================================
+   Toast notification
+   ======================================== */
+.toast {
+  position: absolute;
+  top: var(--sp-3);
+  left: var(--sp-3);
+  right: var(--sp-3);
+  padding: var(--sp-3);
+  background: oklch(20% 0.04 160);
+  border: 1px solid oklch(45% 0.06 160);
+  border-radius: var(--r-2);
+  color: var(--success);
+  font-size: 12px;
+  font-weight: 500;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  animation: toast-in 0.2s ease;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Empty state */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--sp-5) var(--sp-4);
+  text-align: center;
+  color: var(--fg3);
+}
+
+.empty-state svg {
+  width: 32px;
+  height: 32px;
+  margin-bottom: var(--sp-2);
+  opacity: 0.3;
+}
+
+.empty-state p { font-size: 12px; }
+</style>
+</head>
+<body>
+
+<!-- ==========================================
+     Panel Shell
+     ========================================== -->
+<div class="panel" id="app">
+
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="topbar-brand">Ningle<span>AI</span></div>
+    <div class="topbar-mode">
+      <span class="dot"></span>
+      <span>direct</span>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main" id="main">
+
+    <!-- ============================
+         PAGE: DRAW
+         ============================ -->
+    <div class="page active" id="page-draw">
+      <!-- Preview -->
+      <div class="preview-area">
+        <div class="preview-empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="9" cy="9" r="1.5"/>
+            <path d="M21 15l-5-5L5 21"/>
+          </svg>
+          <p>选择工作流并生成图像</p>
+        </div>
+        <!-- Progress bar -->
+        <div class="progress-bar" style="display:none">
+          <div class="progress-bar-fill" style="width:62%"></div>
+        </div>
+        <!-- Thumbnail strip -->
+        <div class="preview-strip" style="display:none">
+          <div class="thumb active"><img src="" alt=""></div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls">
+        <!-- Workflow selector -->
+        <div>
+          <div class="section-label">工作流</div>
+          <select class="workflow-select">
+            <optgroup label="生成与风格">
+              <option>Seedream 4.5</option>
+              <option>Nano Banana 2</option>
+              <option>Nano Banana Pro</option>
+              <option>GPT Image2 文生图</option>
+              <option>GPT Image2 图生图</option>
+              <option>扩图</option>
+            </optgroup>
+            <optgroup label="增强与编辑">
+              <option>2K超清</option>
+              <option>4K超清</option>
+              <option>精修产品</option>
+              <option>光影重绘</option>
+              <option>去水印</option>
+              <option>抠图</option>
+            </optgroup>
+            <optgroup label="操作与变换">
+              <option>单图编辑</option>
+              <option>双图编辑</option>
+              <option>移除物品</option>
+              <option>洗图</option>
+            </optgroup>
+          </select>
+        </div>
+
+        <!-- Parameters -->
+        <div>
+          <div class="section-label">参数</div>
+
+          <div style="display:flex;flex-direction:column;gap:var(--sp-3)">
+            <!-- Text input: prompt -->
+            <div class="field">
+              <div class="field-label">正向提示词</div>
+              <textarea class="text-input" placeholder="描述你想要的图像效果..." rows="2"></textarea>
+            </div>
+
+            <!-- Image upload -->
+            <div class="field">
+              <div class="field-label">参考图像</div>
+              <div class="upload-zone">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <path d="M12 5v14M5 12h14"/>
+                </svg>
+                <p>点击上传或拖拽图像</p>
+              </div>
+            </div>
+
+            <!-- Range slider -->
+            <div class="field">
+              <div class="field-label">
+                <span>引导强度</span>
+                <span class="field-value" id="cfg-val">7.0</span>
+              </div>
+              <input type="range" class="range-track" min="1" max="20" step="0.5" value="7">
+              <div class="range-meta"><span>1.0</span><span>20.0</span></div>
+            </div>
+
+            <!-- Range slider 2 -->
+            <div class="field">
+              <div class="field-label">
+                <span>采样步数</span>
+                <span class="field-value" id="steps-val">20</span>
+              </div>
+              <input type="range" class="range-track" min="1" max="50" step="1" value="20">
+              <div class="range-meta"><span>1</span><span>50</span></div>
+            </div>
+
+            <!-- Toggle -->
+            <div class="toggle-wrap">
+              <span class="toggle-label">随机种子</span>
+              <button class="toggle on" onclick="this.classList.toggle('on')"></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Generate button -->
+        <button class="gen-btn" id="gen-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          生成图像
+        </button>
+      </div>
+    </div>
+
+    <!-- ============================
+         PAGE: HISTORY
+         ============================ -->
+    <div class="page" id="page-history">
+      <div class="filter-tabs">
+        <button class="filter-tab active">全部</button>
+        <button class="filter-tab">本地</button>
+        <button class="filter-tab">集群</button>
+      </div>
+
+      <div class="history-list">
+        <!-- History item 1 -->
+        <div class="history-item">
+          <div class="history-thumb">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--fg3)" stroke-width="1" opacity="0.3" style="width:100%;height:100%;padding:12px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </div>
+          <div class="history-info">
+            <div class="history-name">Seedream 4.5 — 产品精修</div>
+            <div class="history-meta">2026-05-11 14:32 &middot; 4 images</div>
+            <div class="history-actions">
+              <button>同步到PS</button>
+              <button>下载</button>
+              <button>重跑</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- History item 2 -->
+        <div class="history-item">
+          <div class="history-thumb">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--fg3)" stroke-width="1" opacity="0.3" style="width:100%;height:100%;padding:12px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </div>
+          <div class="history-info">
+            <div class="history-name">Nano Banana Pro — 风格转换</div>
+            <div class="history-meta">2026-05-11 13:15 &middot; 1 image</div>
+            <div class="history-actions">
+              <button>同步到PS</button>
+              <button>下载</button>
+              <button>重跑</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- History item 3 -->
+        <div class="history-item">
+          <div class="history-thumb">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--fg3)" stroke-width="1" opacity="0.3" style="width:100%;height:100%;padding:12px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </div>
+          <div class="history-info">
+            <div class="history-name">2K超清 — 图像增强</div>
+            <div class="history-meta">2026-05-10 17:45 &middot; 1 image</div>
+            <div class="history-actions">
+              <button>同步到PS</button>
+              <button>下载</button>
+              <button>重跑</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- History item 4 -->
+        <div class="history-item">
+          <div class="history-thumb">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--fg3)" stroke-width="1" opacity="0.3" style="width:100%;height:100%;padding:12px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </div>
+          <div class="history-info">
+            <div class="history-name">抠图 — 背景移除</div>
+            <div class="history-meta">2026-05-10 11:22 &middot; 1 image</div>
+            <div class="history-actions">
+              <button>同步到PS</button>
+              <button>下载</button>
+              <button>重跑</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- History item 5 -->
+        <div class="history-item">
+          <div class="history-thumb">
+            <svg viewBox="0 0 24 24" fill="none" stroke="var(--fg3)" stroke-width="1" opacity="0.3" style="width:100%;height:100%;padding:12px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </div>
+          <div class="history-info">
+            <div class="history-name">移除物品 — 内容擦除</div>
+            <div class="history-meta">2026-05-09 09:10 &middot; 1 image</div>
+            <div class="history-actions">
+              <button>同步到PS</button>
+              <button>下载</button>
+              <button>重跑</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============================
+         PAGE: SETTINGS
+         ============================ -->
+    <div class="page" id="page-settings">
+      <div class="settings-list">
+        <!-- Connection Mode -->
+        <div class="setting-section">
+          <div class="setting-header">
+            <h3>连接模式</h3>
+          </div>
+          <div class="setting-body">
+            <div class="mode-toggle">
+              <button class="mode-opt active" onclick="switchMode(this)">直连 ComfyUI</button>
+              <button class="mode-opt" onclick="switchMode(this)">集群 LemonGrid</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ComfyUI Connection -->
+        <div class="setting-section">
+          <div class="setting-header">
+            <h3>ComfyUI 连接</h3>
+            <span class="status-pill on">connected</span>
+          </div>
+          <div class="setting-body">
+            <div class="field">
+              <div class="field-label">服务器地址</div>
+              <input type="text" class="text-input" value="http://192.168.0.105:8188" placeholder="http://localhost:8188">
+            </div>
+            <button class="btn-primary" style="background:var(--surface2);color:var(--fg);border:1px solid var(--border)">
+              测试连接
+            </button>
+
+            <!-- Capabilities -->
+            <div>
+              <div class="section-label" style="margin-bottom:var(--sp-2)">能力检测</div>
+              <div class="cap-grid">
+                <div class="cap-item"><span class="cap-dot ok"></span>节点信息</div>
+                <div class="cap-item"><span class="cap-dot ok"></span>列出工作流</div>
+                <div class="cap-item"><span class="cap-dot ok"></span>读取工作流</div>
+                <div class="cap-item"><span class="cap-dot ok"></span>生成图像</div>
+                <div class="cap-item"><span class="cap-dot ok"></span>历史记录</div>
+                <div class="cap-item"><span class="cap-dot ok"></span>查看图片</div>
+                <div class="cap-item"><span class="cap-dot ok"></span>上传图片</div>
+                <div class="cap-item"><span class="cap-dot no"></span>WebSocket</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DashScope -->
+        <div class="setting-section">
+          <div class="setting-header">
+            <h3>提示词反推</h3>
+            <span class="status-pill on">configured</span>
+          </div>
+          <div class="setting-body">
+            <div class="field">
+              <div class="field-label">API Key</div>
+              <input type="password" class="text-input" value="sk-xxxx...xxxx" placeholder="sk-...">
+            </div>
+            <div class="field">
+              <div class="field-label">模型</div>
+              <select class="workflow-select" style="background-position:right 10px center">
+                <option>qwen-vl-max-latest</option>
+                <option>qwen-vl-plus</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- About -->
+        <div style="text-align:center;padding:var(--sp-4) 0;color:var(--fg3);font-size:11px;font-family:var(--font-mono)">
+          NingleAI v1.2.0 &middot; PS Plugin
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+
+  <!-- Bottom Tab Bar -->
+  <div class="tabbar">
+    <button class="tab-item active" onclick="switchTab('draw', this)">
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 19l7-7 3 3-7 7-3-3z"/>
+        <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/>
+        <path d="M2 2l7.586 7.586"/>
+        <circle cx="11" cy="11" r="2"/>
+      </svg>
+      绘图
+    </button>
+    <button class="tab-item" onclick="switchTab('history', this)">
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/>
+        <polyline points="12 6 12 12 16 14"/>
+      </svg>
+      历史
+    </button>
+    <button class="tab-item" onclick="switchTab('settings', this)">
+      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/>
+      </svg>
+      设置
+    </button>
+  </div>
+
+</div><!-- /panel -->
+
+<!-- ==========================================
+     Login Modal (hidden by default)
+     ========================================== -->
+<div class="modal-overlay" id="login-modal" style="display:none">
+  <div class="modal-card">
+    <div class="modal-top">
+      <h2>LemonGrid 登录</h2>
+      <button class="modal-close">&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <div class="field-label">服务器地址</div>
+        <input type="text" class="text-input" placeholder="https://lemongrid.example.com">
+      </div>
+      <div class="field">
+        <div class="field-label">用户名</div>
+        <input type="text" class="text-input" placeholder="请输入用户名">
+      </div>
+      <div class="field">
+        <div class="field-label">密码</div>
+        <input type="password" class="text-input" placeholder="请输入密码">
+      </div>
+      <div class="toggle-wrap">
+        <span class="toggle-label">记住密码</span>
+        <button class="toggle" onclick="this.classList.toggle('on')"></button>
+      </div>
+      <button class="btn-primary">登录</button>
+      <div class="divider">或</div>
+      <button class="btn-secondary">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-6h2v6zm4 0h-2v-6h2v6z"/></svg>
+        钉钉扫码登录
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Tab switching
+function switchTab(name, el) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-item').forEach(t => t.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  el.classList.add('active');
+}
+
+// Mode toggle
+function switchMode(el) {
+  el.parentElement.querySelectorAll('.mode-opt').forEach(o => o.classList.remove('active'));
+  el.classList.add('active');
+}
+
+// Range slider value display
+document.querySelectorAll('.range-track').forEach(slider => {
+  slider.addEventListener('input', () => {
+    const val = slider.parentElement.querySelector('.field-value');
+    if (val) val.textContent = slider.value;
+  });
+});
+
+// Generate button demo
+document.getElementById('gen-btn').addEventListener('click', function() {
+  const preview = document.querySelector('.preview-empty');
+  const progress = document.querySelector('.progress-bar');
+  const strip = document.querySelector('.preview-strip');
+
+  if (preview) {
+    preview.style.display = 'none';
+    progress.style.display = 'block';
+    const fill = progress.querySelector('.progress-bar-fill');
+    let w = 0;
+    const iv = setInterval(() => {
+      w += Math.random() * 15;
+      if (w >= 100) {
+        w = 100;
+        clearInterval(iv);
+        progress.style.display = 'none';
+        // Show "completed" state
+        const area = document.querySelector('.preview-area');
+        area.innerHTML = '<div style="color:var(--success);font-family:var(--font-mono);font-size:12px;text-align:center"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-bottom:8px"><path d="M20 6L9 17l-5-5"/></svg><p>生成完成</p></div>' + progress.outerHTML;
+        // Show toast
+        const toast = document.createElement('div');
+        toast.className = 'toast';
+        toast.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg> 4 张图像已生成';
+        document.getElementById('app').appendChild(toast);
+        setTimeout(() => toast.remove(), 2500);
+      }
+      fill.style.width = w + '%';
+    }, 200);
+  }
+});
+
+// Filter tabs
+document.querySelectorAll('.filter-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    tab.parentElement.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+  });
+});
+
+// Login modal demo: show when switching to cluster mode
+document.querySelectorAll('.mode-opt')[1].addEventListener('click', () => {
+  setTimeout(() => {
+    document.getElementById('login-modal').style.display = 'flex';
+  }, 300);
+});
+
+document.querySelector('.modal-close').addEventListener('click', () => {
+  document.getElementById('login-modal').style.display = 'none';
+});
+
+document.querySelector('.modal-overlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    document.getElementById('login-modal').style.display = 'none';
+  }
+});
+</script>
+
+</body>
+</html>
