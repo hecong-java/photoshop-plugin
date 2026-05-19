@@ -13,6 +13,7 @@
 - [ ] **Phase 3: Integration & Testing** - Full integration testing and refinement
 - [ ] **Phase 4: 工作流参数预设功能** - 参数预设的保存、管理、导入导出
 - [ ] **Phase 5: 图片提示词反推功能** - 通过图片反推生成提示词
+- [ ] **Phase 8: LemonGrid 预设与反推提示词集成** - 将预设和反推提示词功能接入 LemonGrid 已有基础设施
 
 ---
 
@@ -82,6 +83,30 @@ Plans:
 
 ---
 
+### Phase 8: LemonGrid 预设与反推提示词集成
+
+**Goal:** 将已有的工作流参数预设功能（Phase 4）和图片提示词反推功能（Phase 5）接入 LemonGrid 集群模式，复用 LemonGrid 已有的预设和图片分析基础设施，使这两个功能在 Cluster Mode 下完整可用。
+
+**Depends on:** Phase 4, Phase 5, Phase 6, Phase 7
+
+**Requirements:** SC-1, SC-2, SC-3, SC-4, SC-5
+
+**Success Criteria** (what must be TRUE):
+1. Cluster Mode 下用户可以保存、管理模板参数预设
+2. 预设数据通过 LemonGrid API 持久化（而非仅本地存储）
+3. Cluster Mode 下用户可以右键图片反推提示词
+4. 反推提示词复用 LemonGrid 已有的图片分析能力
+5. Direct Mode 和 Cluster Mode 的预设与反推功能各自独立工作
+
+**Plans:** 3 plans
+
+Plans:
+- [ ] 08-01-PLAN.md — Cluster preset service and cluster prompt reverse service (with tests)
+- [ ] 08-02-PLAN.md — PresetToolbar and PromptReverseFlow cluster mode branching
+- [ ] 08-03-PLAN.md — Draw.tsx data-asset-id wiring and mode switch cleanup
+
+---
+
 ## Progress
 
 | Phase | Plans Complete | Status | Completed |
@@ -95,6 +120,7 @@ Plans:
 | 6. LemonGrid Integration | 3/3 | Complete | 2026-04-28 |
 | 7. DingTalk Auth Integration | 3/3 | Complete | 07-01, 07-02, 07-03 |
 | 7. DingTalk Auth Integration | 3/3 | Complete | 2026-05-08 |
+| 8. LemonGrid 预设与反推提示词集成 | 0/3 | Planning | - |
 
 ---
 
@@ -276,4 +302,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-05-08 - Phase 7 planned (3 plans)*
+*Last updated: 2026-05-19 - Phase 8 planned (3 plans)*
