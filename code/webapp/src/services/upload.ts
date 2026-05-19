@@ -84,11 +84,12 @@ export async function sendBridgeMessage(action: string, payload?: unknown): Prom
   const promise = new Promise((resolve, reject) => {
     pendingRequests.set(uuid, { resolve, reject });
     
-    // Timeout after 30s
+    // Timeout: 90s for upload actions, 30s for others
+    const timeoutMs = action === 'comfyui.uploadImage' ? 90000 : 30000;
     const timeout = setTimeout(() => {
       pendingRequests.delete(uuid);
       reject(new Error(`Bridge timeout for action: ${action}`));
-    }, 30000);
+    }, timeoutMs);
     
     // Store timeout ID for cleanup
     const oldResolve = resolve;
@@ -161,12 +162,19 @@ export async function bridgeFetch(
     data: unknown;
   };
 
+  // Sanitize headers: strip non-ISO-8859-1 characters (e.g. Chinese locale in Last-Modified)
+  // The Headers constructor rejects any string with code points outside ISO-8859-1 range.
+  const safeHeaders: Record<string, string> = {};
+  for (const [key, value] of Object.entries(result.headers)) {
+    safeHeaders[key] = value.replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
+  }
+
   // Convert bridge response back to fetch Response object
   return {
     ok: result.ok,
     status: result.status,
     statusText: result.statusText,
-    headers: new Headers(result.headers),
+    headers: new Headers(safeHeaders),
     json: async () => {
       if (isBridgeBinaryPayload(result.data)) {
         throw new Error('Response is binary, not JSON');
@@ -286,56 +294,94 @@ export async function importBase64ToPsLayer(payload: {
   return result;
 }
 
-// Upload image to ComfyUI
+// Upload image to ComfyUI with automatic fallback and retry
 export async function uploadToComfyUI(
   file: File,
   comfyuiUrl = 'http://127.0.0.1:8188',
   prefixMode: 'api' | 'oss' = 'oss'
 ): Promise<string> {
-  try {
-    const uploadPath = prefixMode === 'api' ? '/api/upload/image' : '/upload/image';
-    const uploadUrl = `${comfyuiUrl}${uploadPath}`;
+  const primaryPath = prefixMode === 'api' ? '/api/upload/image' : '/upload/image';
+  const fallbackPath = prefixMode === 'api' ? '/upload/image' : '/api/upload/image';
+  const MAX_RETRIES = 1;
 
-    if (isUXPWebView()) {
-      // 在 UXP 环境中使用 Bridge 代理上传
-      console.log('[Upload] Using Bridge proxy for ComfyUI upload');
-      
-      // 将文件转换为 base64
-      const base64Data = await fileToBase64(file);
-      
-      // 通过 Bridge 发送上传请求
+  const attemptWithRetry = async (path: string, retries: number): Promise<string> => {
+    try {
+      return await attemptUpload(file, comfyuiUrl, path);
+    } catch (error) {
+      if (retries > 0) {
+        console.warn(`[Upload] Path ${path} failed, retrying... (${retries} left)`, error instanceof Error ? error.message : error);
+        return attemptWithRetry(path, retries - 1);
+      }
+      throw error;
+    }
+  };
+
+  try {
+    return await attemptWithRetry(primaryPath, MAX_RETRIES);
+  } catch (primaryError) {
+    console.warn(`[Upload] Primary path ${primaryPath} failed, trying fallback ${fallbackPath}`);
+    try {
+      const result = await attemptWithRetry(fallbackPath, MAX_RETRIES);
+      console.log(`[Upload] Fallback path ${fallbackPath} succeeded, prefix mode may need update`);
+      return result;
+    } catch (fallbackError) {
+      console.error(`[Upload] All attempts failed. Primary: ${primaryPath}, Fallback: ${fallbackPath}`);
+      throw fallbackError;
+    }
+  }
+}
+
+async function attemptUpload(
+  file: File,
+  comfyuiUrl: string,
+  uploadPath: string
+): Promise<string> {
+  const uploadUrl = `${comfyuiUrl.replace(/\/+$/, '')}${uploadPath}`;
+
+  if (isUXPWebView()) {
+    console.log(`[Upload] Bridge proxy: ${file.name} (${(file.size / 1024).toFixed(1)}KB) -> ${uploadUrl}`);
+
+    let base64Data: string;
+    try {
+      base64Data = await fileToBase64(file);
+    } catch (b64Err) {
+      throw new Error(`Failed to read file for upload: ${b64Err instanceof Error ? b64Err.message : b64Err}`);
+    }
+
+    try {
       const result = await sendBridgeMessage('comfyui.uploadImage', {
         url: uploadUrl,
         filename: file.name,
         base64Data,
         mimeType: file.type
-      }) as { ok: boolean; data: { name: string } };
-      
+      }) as { ok: boolean; status?: number; data: { name: string } };
+
       if (!result.ok) {
-        throw new Error('ComfyUI upload failed via Bridge');
+        const statusMsg = result.status ? ` (HTTP ${result.status})` : '';
+        throw new Error(`ComfyUI upload failed via Bridge${statusMsg}`);
       }
-      
+
       return result.data.name;
-    } else {
-      // 在浏览器环境中直接上传
-      const formData = new FormData();
-      formData.append('image', file);
-      
-      const response = await fetch.call(window, uploadUrl, {
-        method: 'POST',
-        body: formData
-      });
-      
-      if (!response.ok) {
-        throw new Error(`ComfyUI upload failed: ${response.statusText}`);
-      }
-      
-      const result = await response.json() as { name: string };
-      return result.name;
+    } catch (bridgeErr) {
+      const msg = bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr);
+      console.error(`[Upload] Bridge upload failed: ${msg}, URL: ${uploadUrl}`);
+      throw new Error(`Upload to ComfyUI failed: ${msg}`);
     }
-  } catch (error) {
-    console.error('Failed to upload image to ComfyUI:', error);
-    throw error;
+  } else {
+    const formData = new FormData();
+    formData.append('image', file);
+
+    const response = await fetch.call(window, uploadUrl, {
+      method: 'POST',
+      body: formData
+    });
+
+    if (!response.ok) {
+      throw new Error(`ComfyUI upload failed: ${response.status} ${response.statusText}`);
+    }
+
+    const result = await response.json() as { name: string };
+    return result.name;
   }
 }
 

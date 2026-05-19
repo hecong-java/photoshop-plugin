@@ -164,7 +164,7 @@ export async function analyzeImage(
     // Sanitize the API error message in case the server echoes back the key
     const rawMessage =
       errorData.error?.message || `DashScope API error: ${response.status}`;
-    const safeMessage = rawMessage.replaceAll(config.apiKey, '***');
+    const safeMessage = rawMessage.split(config.apiKey).join('***');
     throw new Error(safeMessage);
   }
 

@@ -190,7 +190,7 @@ export const Settings = () => {
         <div className="settings-card mode-toggle">
           <h2>连接模式</h2>
           <div className="mode-toggle-group">
-            <label className="mode-option">
+            <label className={`mode-option${connectionMode === 'direct' ? ' active' : ''}`}>
               <input
                 type="radio"
                 name="connectionMode"
@@ -200,7 +200,7 @@ export const Settings = () => {
               />
               <span>直连 (ComfyUI)</span>
             </label>
-            <label className="mode-option">
+            <label className={`mode-option${connectionMode === 'cluster' ? ' active' : ''}`}>
               <input
                 type="radio"
                 name="connectionMode"

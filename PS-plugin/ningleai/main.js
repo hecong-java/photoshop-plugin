@@ -373,10 +373,23 @@ const exportActiveLayerPng = async () => {
     }
   }, { commandName: 'Export Active Layer PNG' });
 
-  // Phase 2: Non-modal -- file I/O and base64 conversion (per D-04: outside modal scope)
+  // Phase 2: File I/O and base64 conversion
+  // Try outside modal scope first (optimized), fall back to modal scope for older PS versions
+  // where file tokens may not persist outside executeAsModal
   try {
     if (internalResult._exportedFile) {
-      const fileData = await internalResult._exportedFile.read({ format: formats.binary });
+      let fileData;
+      try {
+        // Optimized path: read outside modal scope
+        fileData = await internalResult._exportedFile.read({ format: formats.binary });
+      } catch (readErr) {
+        // Fallback: re-read inside modal scope for PS v24.x compatibility
+        console.warn('[Bridge] File read outside modal failed, retrying inside modal scope:', getErrorMsg(readErr));
+        const fileRef = internalResult._exportedFile;
+        fileData = await core.executeAsModal(async () => {
+          return await fileRef.read({ format: formats.binary });
+        }, { commandName: 'Read Exported File' });
+      }
       const base64 = await arrayBufferToBase64(fileData);
       return {
         base64,
@@ -546,9 +559,19 @@ const exportSelectionPng = async () => {
   }, { commandName: 'Export Selection PNG' });
 
   // Per D-04: File I/O and base64 conversion outside modal scope
+  // Fallback to modal scope for PS v24.x compatibility
   try {
     if (result && result._exportedFile) {
-      const fileData = await result._exportedFile.read({ format: formats.binary });
+      let fileData;
+      try {
+        fileData = await result._exportedFile.read({ format: formats.binary });
+      } catch (readErr) {
+        console.warn('[Bridge] Selection file read outside modal failed, retrying inside modal scope:', getErrorMsg(readErr));
+        const fileRef = result._exportedFile;
+        fileData = await core.executeAsModal(async () => {
+          return await fileRef.read({ format: formats.binary });
+        }, { commandName: 'Read Selection Export File' });
+      }
       const base64 = await arrayBufferToBase64(fileData);
       return {
         base64,
@@ -790,91 +813,108 @@ const handlers = {
   // ComfyUI 网络代理 - 解决 UXP WebView 网络隔离问题
   'comfyui.fetch': async (payload) => {
     const { url, method = 'GET', headers = {}, body, timeout = 30000, retryOnAbort = true } = payload;
-    
+
     if (!url || typeof url !== 'string') {
       throw new Error('comfyui.fetch: missing or invalid "url" parameter');
     }
 
-    try {
-      const fetchOptions = {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...headers
-        },
-      };
+    const fetchOptions = {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers
+      },
+    };
 
-      if (body && method !== 'GET') {
-        fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
-      }
-
-      const performFetchWithTimeout = async (requestTimeout) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
-        try {
-          return await fetch(url, {
-            ...fetchOptions,
-            signal: controller.signal
-          });
-        } finally {
-          clearTimeout(timeoutId);
-        }
-      };
-
-      let response;
-      try {
-        response = await performFetchWithTimeout(timeout);
-      } catch (error) {
-        if (retryOnAbort && error && error._name === 'AbortError') {
-          const retryTimeout = Math.min(Math.max(timeout * 2, 15000), 60000);
-          console.warn('[Bridge] ComfyUI fetch aborted, retrying once with longer timeout:', retryTimeout);
-          response = await performFetchWithTimeout(retryTimeout);
-        } else {
-          throw error;
-        }
-      }
-
-      const contentType = response.headers.get('content-type') || '';
-      let responseData;
-      
-      if (contentType.includes('application/json')) {
-        responseData = await response.json();
-      } else if (contentType.includes('image/') || contentType.includes('application/octet-stream')) {
-        const arrayBuffer = await response.arrayBuffer();
-        const b64 = await arrayBufferToBase64(arrayBuffer);
-        responseData = {
-          __base64__: true,
-          data: b64,
-          contentType,
-          // Convenience field for <img src="..."> preview in the WebView UI.
-          dataUrl: `data:${contentType || 'application/octet-stream'};base64,${b64}`,
-          byteLength: arrayBuffer.byteLength
-        };
-      } else {
-        responseData = await response.text();
-      }
-
-      return {
-        ok: response.ok,
-        status: response.status,
-        statusText: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
-        data: responseData
-      };
-    } catch (error) {
-      console.error('[Bridge] ComfyUI fetch error:', error);
-      const isAbortError = error && (error._name === 'AbortError' || error.name === 'AbortError');
-      throw {
-        code: isAbortError ? 'TIMEOUT' : 'FETCH_ERROR',
-        message: isAbortError
-          ? `Request timed out after ${timeout}ms (or retry timeout)`
-          : (error.message || error._message || 'Network request failed'),
-        url
-      };
+    if (body && method !== 'GET') {
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
     }
+
+    const performFetchWithTimeout = async (requestTimeout) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+      try {
+        return await fetch(url, {
+          ...fetchOptions,
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    };
+
+    const MAX_ATTEMPTS = 2;
+    let lastError;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        let response;
+        try {
+          const requestTimeout = attempt > 1 ? Math.min(Math.max(timeout * 2, 15000), 90000) : timeout;
+          response = await performFetchWithTimeout(requestTimeout);
+        } catch (fetchError) {
+          const isAbort = fetchError && (fetchError._name === 'AbortError' || fetchError.name === 'AbortError');
+          if (retryOnAbort && isAbort) {
+            const retryTimeout = Math.min(Math.max(timeout * 2, 15000), 60000);
+            console.warn('[Bridge] ComfyUI fetch aborted, retrying once with longer timeout:', retryTimeout);
+            response = await performFetchWithTimeout(retryTimeout);
+          } else {
+            throw fetchError;
+          }
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        let responseData;
+
+        if (contentType.includes('application/json')) {
+          responseData = await response.json();
+        } else if (contentType.includes('image/') || contentType.includes('application/octet-stream')) {
+          const arrayBuffer = await response.arrayBuffer();
+          const b64 = await arrayBufferToBase64(arrayBuffer);
+          responseData = {
+            __base64__: true,
+            data: b64,
+            contentType,
+            dataUrl: `data:${contentType || 'application/octet-stream'};base64,${b64}`,
+            byteLength: arrayBuffer.byteLength
+          };
+        } else {
+          responseData = await response.text();
+        }
+
+        return {
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          headers: Object.fromEntries(response.headers.entries()),
+          data: responseData
+        };
+      } catch (error) {
+        lastError = error;
+        const isAbort = error && (error._name === 'AbortError' || error.name === 'AbortError');
+        console.warn(`[Bridge] ComfyUI fetch attempt ${attempt}/${MAX_ATTEMPTS} failed:`,
+          isAbort ? 'TIMEOUT' : (error.message || error._message || 'Network request failed'));
+
+        if (attempt < MAX_ATTEMPTS) {
+          // Brief pause before retry
+          await new Promise(r => setTimeout(r, 1000));
+        }
+      }
+    }
+
+    console.error('[Bridge] ComfyUI fetch error after ${MAX_ATTEMPTS} attempts:', lastError);
+    const isAbortError = lastError && (lastError._name === 'AbortError' || lastError.name === 'AbortError');
+    throw {
+      code: isAbortError ? 'TIMEOUT' : 'FETCH_ERROR',
+      message: isAbortError
+        ? `Request timed out after ${timeout}ms (all retries exhausted)`
+        : (lastError.message || lastError._message || 'Network request failed'),
+      url
+    };
   },
 
   // ComfyUI 文件上传 - 专门处理 multipart/form-data
+  // Uses ArrayBuffer instead of Blob for UXP compatibility across PS v24.x+
   'comfyui.uploadImage': async (payload) => {
     const { url, filename, base64Data, mimeType = 'image/png' } = payload;
 
@@ -889,32 +929,35 @@ const handlers = {
     }
 
     try {
-      // 将 base64 转换为二进制数据
+      // Convert base64 to binary Uint8Array
       const binaryString = atob(base64Data);
-      const bytes = new Uint8Array(binaryString.length);
+      const fileBytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+        fileBytes[i] = binaryString.charCodeAt(i);
       }
 
-      // 构建 multipart/form-data
+      // Build multipart/form-data using ArrayBuffer (not Blob)
+      // Blob body in fetch is unreliable in UXP v7.x (PS v24.x)
       const boundary = '----FormBoundary' + Date.now();
-      const parts = [];
+      const headerStr = `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`;
+      const footerStr = `\r\n--${boundary}--\r\n`;
 
-      // 添加文件部分
-      parts.push(`--${boundary}\r\n`);
-      parts.push(`Content-Disposition: form-data; name="image"; filename="${filename}"\r\n`);
-      parts.push(`Content-Type: ${mimeType}\r\n\r\n`);
+      // Encode header and footer to bytes, then combine with file bytes into single ArrayBuffer
+      const headerBytes = new Uint8Array(Array.from(headerStr).map(c => c.charCodeAt(0)));
+      const footerBytes = new Uint8Array(Array.from(footerStr).map(c => c.charCodeAt(0)));
 
-      const headerBlob = new Blob([parts.join('')]);
-      const footerBlob = new Blob(['\r\n--' + boundary + '--\r\n']);
-      const formDataBlob = new Blob([headerBlob, bytes, footerBlob]);
+      const totalLen = headerBytes.length + fileBytes.length + footerBytes.length;
+      const bodyBytes = new Uint8Array(totalLen);
+      bodyBytes.set(headerBytes, 0);
+      bodyBytes.set(fileBytes, headerBytes.length);
+      bodyBytes.set(footerBytes, headerBytes.length + fileBytes.length);
 
       const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': `multipart/form-data; boundary=${boundary}`
         },
-        body: formDataBlob
+        body: bodyBytes.buffer
       });
 
       let responseData;
@@ -1285,30 +1328,29 @@ const handlers = {
     const token = lgSettings.accessToken || '';
 
     try {
-      // Convert base64 to binary
+      // Convert base64 to binary Uint8Array
       const binaryString = atob(base64Data);
-      const bytes = new Uint8Array(binaryString.length);
+      const fileBytes = new Uint8Array(binaryString.length);
       for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+        fileBytes[i] = binaryString.charCodeAt(i);
       }
 
-      // Build multipart/form-data
+      // Build multipart/form-data using ArrayBuffer (not Blob)
+      // Blob body in fetch is unreliable in UXP v7.x (PS v24.x)
       const boundary = '----FormBoundary' + Date.now();
-      const parts = [];
 
-      // Add library_type as additional form field (LemonGrid specific)
-      parts.push(`--${boundary}\r\n`);
-      parts.push(`Content-Disposition: form-data; name="library_type"\r\n\r\n`);
-      parts.push(`${libraryType}\r\n`);
+      // Header part: library_type field + file field header
+      const headerStr = `--${boundary}\r\nContent-Disposition: form-data; name="library_type"\r\n\r\n${libraryType}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`;
+      const footerStr = `\r\n--${boundary}--\r\n`;
 
-      // Add file part (name="file" for LemonGrid, not "image")
-      parts.push(`--${boundary}\r\n`);
-      parts.push(`Content-Disposition: form-data; name="file"; filename="${filename}"\r\n`);
-      parts.push(`Content-Type: ${mimeType}\r\n\r\n`);
+      const headerBytes = new Uint8Array(Array.from(headerStr).map(c => c.charCodeAt(0)));
+      const footerBytes = new Uint8Array(Array.from(footerStr).map(c => c.charCodeAt(0)));
 
-      const headerBlob = new Blob([parts.join('')]);
-      const footerBlob = new Blob(['\r\n--' + boundary + '--\r\n']);
-      const formDataBlob = new Blob([headerBlob, bytes, footerBlob]);
+      const totalLen = headerBytes.length + fileBytes.length + footerBytes.length;
+      const bodyBytes = new Uint8Array(totalLen);
+      bodyBytes.set(headerBytes, 0);
+      bodyBytes.set(fileBytes, headerBytes.length);
+      bodyBytes.set(footerBytes, headerBytes.length + fileBytes.length);
 
       const response = await fetch(url, {
         method: 'POST',
@@ -1316,7 +1358,7 @@ const handlers = {
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
-        body: formDataBlob
+        body: bodyBytes.buffer
       });
 
       let responseData;

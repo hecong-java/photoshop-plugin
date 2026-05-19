@@ -50,7 +50,25 @@ export async function downloadAndSaveImage(
 
     const reader = response.body?.getReader();
     if (!reader) {
-      throw new Error('Response body not readable');
+      // Fallback for older WebView without ReadableStream support
+      const arrayBuffer = await response.arrayBuffer();
+      const data = new Uint8Array(arrayBuffer);
+      progress.bytesDownloaded = data.length;
+      progress.totalBytes = data.length;
+      progress.percentComplete = 100;
+      onProgress?.(progress);
+
+      progress.status = 'saving';
+      onProgress?.(progress);
+
+      const result = await sendBridgeMessage('fs.saveDownload', {
+        filename,
+        data: Array.from(data)
+      }) as { path: string; success: boolean };
+
+      progress.status = 'complete';
+      onProgress?.(progress);
+      return { ...progress, path: result.path };
     }
 
     const chunks: Uint8Array[] = [];

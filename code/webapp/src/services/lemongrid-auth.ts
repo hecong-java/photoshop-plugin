@@ -49,11 +49,18 @@ interface DingTalkPollResponse {
 const ENCRYPTION_SALT = new TextEncoder().encode('Ningleai-LemonGrid-Encrypt-Salt');
 const ENCRYPTION_KEY_MATERIAL = 'Ningleai-LG-DeviceKey-v1';
 
+// Check if Web Crypto API is available (requires secure context)
+const hasSubtleCrypto = typeof crypto !== 'undefined' && !!crypto.subtle;
+
 /**
  * Derive an AES-GCM key from a static device key material + salt.
  * Per D-78: AES-GCM encryption via Web Crypto API with device-derived key.
+ * Falls back to simple encoding when crypto.subtle is unavailable (non-secure context).
  */
 async function getEncryptionKey(): Promise<CryptoKey> {
+  if (!hasSubtleCrypto) {
+    throw new Error('crypto.subtle unavailable — use fallback encoding');
+  }
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(ENCRYPTION_KEY_MATERIAL),
@@ -81,6 +88,11 @@ async function getEncryptionKey(): Promise<CryptoKey> {
  * Returns base64 encoded string containing IV + ciphertext.
  */
 export async function encryptPassword(password: string): Promise<string> {
+  // Fallback: simple base64 encoding when crypto.subtle unavailable
+  if (!hasSubtleCrypto) {
+    console.warn('[Auth] crypto.subtle unavailable, using base64 encoding fallback');
+    return btoa(unescape(encodeURIComponent(password)));
+  }
   const key = await getEncryptionKey();
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const encoded = new TextEncoder().encode(password);
@@ -104,6 +116,14 @@ export async function encryptPassword(password: string): Promise<string> {
  * Decrypt password using AES-GCM per D-78.
  */
 export async function decryptPassword(encrypted: string): Promise<string> {
+  // Fallback: simple base64 decoding when crypto.subtle unavailable
+  if (!hasSubtleCrypto) {
+    try {
+      return decodeURIComponent(escape(atob(encrypted)));
+    } catch {
+      return encrypted;
+    }
+  }
   const key = await getEncryptionKey();
   const combined = new Uint8Array(
     atob(encrypted).split('').map((c) => c.charCodeAt(0))
