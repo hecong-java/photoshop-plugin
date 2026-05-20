@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { ContextMenu } from './ContextMenu';
 import { usePromptReverseStore } from '../../stores/promptReverseStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import { imageElementToBase64 } from '../../services/dashscope';
 
 interface PromptReverseProviderProps {
@@ -12,6 +13,7 @@ export const PromptReverseProvider: React.FC<PromptReverseProviderProps> = ({ ch
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const targetImageRef = useRef<HTMLImageElement | null>(null);
   const startFlow = usePromptReverseStore((state) => state.startFlow);
+  const connectionMode = useSettingsStore((s) => s.connectionMode);
 
   const handleContextMenu = useCallback((e: MouseEvent) => {
     const target = e.target as HTMLElement;
@@ -49,12 +51,17 @@ export const PromptReverseProvider: React.FC<PromptReverseProviderProps> = ({ ch
     try {
       const base64 = await imageElementToBase64(imgElement);
       const previewUrl = imgElement.src;
-      startFlow(base64, previewUrl);
+      if (connectionMode === 'cluster') {
+        const assetId = imgElement.getAttribute('data-asset-id');
+        startFlow(base64, previewUrl, assetId || undefined);
+      } else {
+        startFlow(base64, previewUrl);
+      }
     } catch (error) {
       console.error('[PromptReverse] Failed to extract image:', error);
     }
     targetImageRef.current = null;
-  }, [startFlow]);
+  }, [startFlow, connectionMode]);
 
   const handleMenuDismiss = useCallback(() => {
     setMenuVisible(false);
