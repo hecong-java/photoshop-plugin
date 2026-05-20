@@ -22,19 +22,19 @@ progress:
 
 **Core Value:** 让用户在 Photoshop 中无缝使用 ComfyUI 的 AI 图像生成能力
 
-**Current Focus:** Phase 09 — LemonGrid Task Queue Information
+**Current Focus:** Phase 09 — LemonGrid Task Queue Information (Plan 01 complete)
 
 ---
 
 ## Current Position
 
-Phase: 08 (lemongrid-preset-prompt-reverse) — COMPLETE (3/3 plans complete)
+Phase: 09 (lemongrid-task-queue) -- IN PROGRESS (1/2 plans complete)
 | Attribute | Value |
 |-----------|-------|
-| **Phase** | 8 - LemonGrid Preset and Prompt Reverse Integration |
-| **Plan** | 3/3 complete |
-| **Status** | Complete |
-| **Progress** | `[████████████    ]` 100% |
+| **Phase** | 9 - LemonGrid Task Queue Information |
+| **Plan** | 1/2 complete |
+| **Status** | In Progress |
+| **Progress** | `[██████          ]` 50% |
 
 ---
 
@@ -64,6 +64,7 @@ Phase: 08 (lemongrid-preset-prompt-reverse) — COMPLETE (3/3 plans complete)
 | Phase 08 P01 | 5min | 2 tasks | 4 files |
 | Phase 08 P02 | 6min | 3 tasks | 6 files |
 | Phase 08 P03 | 2min | 1 tasks | 1 files |
+| Phase 09 P01 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -112,6 +113,9 @@ Phase: 08 (lemongrid-preset-prompt-reverse) — COMPLETE (3/3 plans complete)
 - [Phase 08 P03]: OutputImageData extended with optional assetId for unified preview rendering across direct/cluster modes
 - [Phase 08 P03]: Cluster downloads populate both clusterOutputImages store and outputImages local state
 - [Phase 08 P03]: Dedicated useEffect clears preset selection on connectionMode change (T-08-06 mitigation)
+- [Phase 09 P01]: getTaskETA only called for QUEUED tasks -- returns 404 for tasks not in Redis ZSET
+- [Phase 09 P01]: queueSummary is transient state, not persisted to localStorage via partialize exclusion
+- [Phase 09 P01]: etaMinutes stored as integer minutes for direct UI consumption
 
 ### Roadmap Evolution
 
@@ -161,12 +165,12 @@ Phase: 08 (lemongrid-preset-prompt-reverse) — COMPLETE (3/3 plans complete)
 ### Last Session
 
 - **Date:** 2026-05-20
-- **Action:** Phase 08 Plan 03 — Draw.tsx data-asset-id wiring and mode-switch cleanup
-- **Outcome:** Added data-asset-id to all cluster output image rendering points (OutputImageItem strip, preview, viewer). Cluster downloads now populate outputImages with assetId. Mode-switch useEffect clears preset selection on connectionMode change. Phase 08 complete.
+- **Action:** Phase 09 Plan 01 -- Queue API types, methods, and store state
+- **Outcome:** Added TaskQueueSummary and TaskETAResponse interfaces to lemongrid.ts. Added getQueueSummary() and getTaskETA() methods to LemonGridClient. Added queueSummary transient state and etaMinutes field to lemongridStore.
 
 ### Next Action
 
-Phase 08 complete. Ready for next phase planning.
+Phase 09 Plan 02 -- Cluster queue badge, per-task ETA display, and polling integration in Draw.tsx.
 
 ---
 

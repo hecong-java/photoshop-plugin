@@ -123,7 +123,7 @@ Plans:
 **Plans:** 2 plans
 
 Plans:
-- [ ] 09-01-PLAN.md — Queue API types, methods, and store state
+- [x] 09-01-PLAN.md — Queue API types, methods, and store state
 - [ ] 09-02-PLAN.md — Cluster queue badge, per-task ETA display, and polling
 
 ---
@@ -142,7 +142,7 @@ Plans:
 | 7. DingTalk Auth Integration | 3/3 | Complete | 07-01, 07-02, 07-03 |
 | 7. DingTalk Auth Integration | 3/3 | Complete | 2026-05-08 |
 | 8. LemonGrid 预设与反推提示词集成 | 3/3 | Complete | 08-01, 08-02, 08-03 |
-| 9. 接入LemonGrid的任务队列信息 | 0/2 | Planning | - |
+| 9. 接入LemonGrid的任务队列信息 | 1/2 | In progress | 09-01 |
 
 ---
 
