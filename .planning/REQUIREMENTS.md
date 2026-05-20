@@ -42,6 +42,12 @@
 - [x] **SC-4**: Prompt reverse uses LemonGrid image analysis (KIE Gemini)
 - [x] **SC-5**: Direct and cluster modes work independently
 
+### LemonGrid Task Queue Information (Phase 9)
+
+- [x] **Q-01**: Cluster mode shows platform queue status badge with queue counts and wait time
+- [x] **Q-02**: Queue summary polls periodically when in Cluster Mode and authenticated
+- [x] **Q-03**: QUEUED tasks show estimated wait time with per-task ETA polling
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -75,14 +81,18 @@
 | SC-3 | Phase 8 | Complete |
 | SC-4 | Phase 8 | Complete |
 | SC-5 | Phase 8 | Complete |
+| Q-01 | Phase 9 | Complete |
+| Q-02 | Phase 9 | Complete |
+| Q-03 | Phase 9 | Complete |
 
 **Coverage:**
 - v1 requirements: 13 total
 - Phase 8 requirements: 5 total
-- Mapped to phases: 18
+- Phase 9 requirements: 3 total
+- Mapped to phases: 21
 - Unmapped: 0
-- Complete: 11 (CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, INTG-01, SC-1, SC-2, SC-3, SC-4, SC-5)
+- Complete: 14 (CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, INTG-01, SC-1, SC-2, SC-3, SC-4, SC-5, Q-01, Q-02, Q-03)
 
 ---
 *Requirements defined: 2026-03-11*
-*Last updated: 2026-05-20 after plan 08-03 completion (Phase 8 complete)*
+*Last updated: 2026-05-20 after plan 09-02 completion (Phase 9 complete)*

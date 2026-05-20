@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-20T02:30:00Z"
+last_updated: "2026-05-20T03:24:56Z"
 progress:
   total_phases: 10
   completed_phases: 4
   total_plans: 23
-  completed_plans: 21
-  percent: 91
+  completed_plans: 22
+  percent: 96
 ---
 
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-05-20T01:46:12Z
+**Last Updated:** 2026-05-20T03:24:56Z
 
 ---
 
@@ -22,19 +22,19 @@ progress:
 
 **Core Value:** 让用户在 Photoshop 中无缝使用 ComfyUI 的 AI 图像生成能力
 
-**Current Focus:** Phase 09 — LemonGrid Task Queue Information (Plan 01 complete)
+**Current Focus:** Phase 09 — LemonGrid Task Queue Information (Plan 02 complete)
 
 ---
 
 ## Current Position
 
-Phase: 09 (lemongrid-task-queue) -- IN PROGRESS (1/2 plans complete)
+Phase: 09 (lemongrid-task-queue) -- COMPLETE (2/2 plans complete)
 | Attribute | Value |
 |-----------|-------|
 | **Phase** | 9 - LemonGrid Task Queue Information |
-| **Plan** | 1/2 complete |
-| **Status** | In Progress |
-| **Progress** | `[██████          ]` 50% |
+| **Plan** | 2/2 complete |
+| **Status** | Complete |
+| **Progress** | `[████████████    ]` 100% |
 
 ---
 
@@ -65,6 +65,7 @@ Phase: 09 (lemongrid-task-queue) -- IN PROGRESS (1/2 plans complete)
 | Phase 08 P02 | 6min | 3 tasks | 6 files |
 | Phase 08 P03 | 2min | 1 tasks | 1 files |
 | Phase 09 P01 | 3min | 2 tasks | 2 files |
+| Phase 09 P02 | 2min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -116,6 +117,9 @@ Phase: 09 (lemongrid-task-queue) -- IN PROGRESS (1/2 plans complete)
 - [Phase 09 P01]: getTaskETA only called for QUEUED tasks -- returns 404 for tasks not in Redis ZSET
 - [Phase 09 P01]: queueSummary is transient state, not persisted to localStorage via partialize exclusion
 - [Phase 09 P01]: etaMinutes stored as integer minutes for direct UI consumption
+- [Phase 09 P02]: Cluster queue badge uses "平台:" prefix to distinguish platform-wide counts from user tasks
+- [Phase 09 P02]: ETA polling only for QUEUED tasks to avoid 404 on non-queued tasks
+- [Phase 09 P02]: Green ETA text (#48bb78) vs yellow queue position (#ecc94b) for visual differentiation
 
 ### Roadmap Evolution
 
@@ -165,12 +169,12 @@ Phase: 09 (lemongrid-task-queue) -- IN PROGRESS (1/2 plans complete)
 ### Last Session
 
 - **Date:** 2026-05-20
-- **Action:** Phase 09 Plan 01 -- Queue API types, methods, and store state
-- **Outcome:** Added TaskQueueSummary and TaskETAResponse interfaces to lemongrid.ts. Added getQueueSummary() and getTaskETA() methods to LemonGridClient. Added queueSummary transient state and etaMinutes field to lemongridStore.
+- **Action:** Phase 09 Plan 02 -- Cluster queue badge, per-task ETA display, and polling integration
+- **Outcome:** Added cluster queue badge in Draw.tsx preview section with 15-second queue summary polling. Added per-task ETA display in MiniTaskList with 30-second polling for QUEUED tasks.
 
 ### Next Action
 
-Phase 09 Plan 02 -- Cluster queue badge, per-task ETA display, and polling integration in Draw.tsx.
+Phase 09 complete. Ready for verification or next phase.
 
 ---
 

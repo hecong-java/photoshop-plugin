@@ -14,7 +14,7 @@
 - [ ] **Phase 4: 工作流参数预设功能** - 参数预设的保存、管理、导入导出
 - [ ] **Phase 5: 图片提示词反推功能** - 通过图片反推生成提示词
 - [x] **Phase 8: LemonGrid 预设与反推提示词集成** - 将预设和反推提示词功能接入 LemonGrid 已有基础设施 *(completed 2026-05-20)*
-- [ ] **Phase 9: 接入LemonGrid的任务队列信息** - 在插件中展示 LemonGrid 平台的任务队列状态信息
+- [x] **Phase 9: 接入LemonGrid的任务队列信息** - 在插件中展示 LemonGrid 平台的任务队列状态信息 *(completed 2026-05-20)*
 
 ---
 
@@ -124,7 +124,7 @@ Plans:
 
 Plans:
 - [x] 09-01-PLAN.md — Queue API types, methods, and store state
-- [ ] 09-02-PLAN.md — Cluster queue badge, per-task ETA display, and polling
+- [x] 09-02-PLAN.md — Cluster queue badge, per-task ETA display, and polling
 
 ---
 
@@ -142,7 +142,7 @@ Plans:
 | 7. DingTalk Auth Integration | 3/3 | Complete | 07-01, 07-02, 07-03 |
 | 7. DingTalk Auth Integration | 3/3 | Complete | 2026-05-08 |
 | 8. LemonGrid 预设与反推提示词集成 | 3/3 | Complete | 08-01, 08-02, 08-03 |
-| 9. 接入LemonGrid的任务队列信息 | 1/2 | In progress | 09-01 |
+| 9. 接入LemonGrid的任务队列信息 | 2/2 | Complete | 09-01, 09-02 |
 
 ---
 
@@ -194,9 +194,9 @@ Plans:
 | PERF-06 | Phase 05.1 | Planned |
 | PERF-07 | Phase 05.1 | Planned |
 | D-01..D-29 | Phase 7 | Planned |
-| Q-01 | Phase 9 | Planned |
-| Q-02 | Phase 9 | Planned |
-| Q-03 | Phase 9 | Planned |
+| Q-01 | Phase 9 | Complete |
+| Q-02 | Phase 9 | Complete |
+| Q-03 | Phase 9 | Complete |
 
 **Coverage:** requirements mapped (100%)
 
@@ -327,4 +327,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-05-20 - Phase 09 planned (2 plans)*
+*Last updated: 2026-05-20 - Phase 09 complete (2/2 plans)*
