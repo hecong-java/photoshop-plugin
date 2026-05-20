@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { TemplateType } from '../services/lemongrid';
+import type { TemplateType, TaskQueueSummary } from '../services/lemongrid';
 
 export interface LemonGridTaskState {
   taskId: string;
@@ -11,6 +11,7 @@ export interface LemonGridTaskState {
   progress: number;
   progressDetail: string | null;
   queuePosition: number | null;
+  etaMinutes: number | null;
   errorCode: string | null;
   errorMessage: string | null;
   outputAssetIds: string[];
@@ -49,6 +50,9 @@ interface LemonGridState {
   // Global login modal trigger (transient - not persisted)
   showLoginModal: boolean;
 
+  // Queue summary state (transient - not persisted)
+  queueSummary: TaskQueueSummary | null;
+
   // Auth provider tracking per D-13
   authProvider: 'password' | 'dingtalk' | null;
 
@@ -70,6 +74,7 @@ interface LemonGridState {
   addClusterOutputImage: (image: ClusterOutputImage) => void;
   clearClusterOutputImages: () => void;
   setShowLoginModal: (show: boolean) => void;
+  setQueueSummary: (summary: TaskQueueSummary | null) => void;
   setAuthProvider: (provider: 'password' | 'dingtalk' | null) => void;
 }
 
@@ -95,6 +100,9 @@ export const useLemonGridStore = create<LemonGridState>()(
 
       // Global login modal
       showLoginModal: false,
+
+      // Queue summary defaults
+      queueSummary: null,
 
       // Auth provider tracking per D-13
       authProvider: null,
@@ -142,6 +150,7 @@ export const useLemonGridStore = create<LemonGridState>()(
                 progress: 0,
                 progressDetail: null,
                 queuePosition: null,
+                etaMinutes: null,
                 errorCode: null,
                 errorMessage: null,
                 outputAssetIds: [],
@@ -174,6 +183,8 @@ export const useLemonGridStore = create<LemonGridState>()(
       clearClusterOutputImages: () => set({ clusterOutputImages: [] }),
 
       setShowLoginModal: (show) => set({ showLoginModal: show }),
+
+      setQueueSummary: (summary) => set({ queueSummary: summary }),
 
       setAuthProvider: (provider) => set({ authProvider: provider }),
     }),
