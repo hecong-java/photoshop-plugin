@@ -434,7 +434,7 @@ const loadPresetsForMode = useCallback(async (key: string) => {
 | A5 | `ensureValidToken` is called before every cluster preset/prompt operation, ensuring auth is valid | Services | 401 errors during preset/prompt operations |
 | A6 | The LemonGrid `list_presets` endpoint returns all user-visible presets in a single page with `page_size=100` | Preset Service | Pagination needed if users have >100 presets per template |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **LemonGridClient.fetchJson visibility**
    - What we know: `fetchJson` is a private method on `LemonGridClient`. Cluster preset service needs authenticated fetch.
