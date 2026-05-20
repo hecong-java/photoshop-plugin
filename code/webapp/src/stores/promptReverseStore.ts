@@ -7,12 +7,13 @@ interface PromptReverseState {
   step: FlowStep;
   imageBase64: string | null;
   imagePreviewUrl: string | null;
+  assetId: string | null;
   selectedTemplate: string | null;
   result: string | null;
   error: string | null;
   abortController: AbortController | null;
 
-  startFlow: (imageBase64: string, imagePreviewUrl: string) => void;
+  startFlow: (imageBase64: string, imagePreviewUrl: string, assetId?: string) => void;
   selectTemplate: (templateId: string) => void;
   setLoading: () => void;
   setResult: (result: string) => void;
@@ -26,6 +27,7 @@ const INITIAL_STATE = {
   step: 'closed' as FlowStep,
   imageBase64: null as string | null,
   imagePreviewUrl: null as string | null,
+  assetId: null as string | null,
   selectedTemplate: null as string | null,
   result: null as string | null,
   error: null as string | null,
@@ -35,7 +37,7 @@ const INITIAL_STATE = {
 export const usePromptReverseStore = create<PromptReverseState>()((set, get) => ({
   ...INITIAL_STATE,
 
-  startFlow: (imageBase64, imagePreviewUrl) => {
+  startFlow: (imageBase64, imagePreviewUrl, assetId) => {
     const { step, abortController } = get();
     // If currently loading, abort the in-flight request
     if (step === 'loading' && abortController) {
@@ -46,6 +48,7 @@ export const usePromptReverseStore = create<PromptReverseState>()((set, get) => 
       step: 'preview',
       imageBase64,
       imagePreviewUrl,
+      assetId: assetId ?? null,
     });
   },
 
