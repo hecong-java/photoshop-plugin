@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-last_updated: "2026-05-09T09:24:51.993Z"
+last_updated: "2026-05-20T01:29:51Z"
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 4
   total_plans: 21
-  completed_plans: 19
-  percent: 90
+  completed_plans: 20
+  percent: 95
 ---
 
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-05-09T09:00:00Z
+**Last Updated:** 2026-05-20T01:29:51Z
 
 ---
 
@@ -22,19 +22,19 @@ progress:
 
 **Core Value:** 让用户在 Photoshop 中无缝使用 ComfyUI 的 AI 图像生成能力
 
-**Current Focus:** Phase 07 — DingTalk Auth Integration
+**Current Focus:** Phase 08 — LemonGrid Preset and Prompt Reverse Integration
 
 ---
 
 ## Current Position
 
-Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
+Phase: 08 (lemongrid-preset-prompt-reverse) — IN PROGRESS (1/3 plans complete)
 | Attribute | Value |
 |-----------|-------|
-| **Phase** | 7 - DingTalk Auth Integration |
-| **Plan** | 3/3 complete |
-| **Status** | Complete |
-| **Progress** | `[████████████████████]` 100% |
+| **Phase** | 8 - LemonGrid Preset and Prompt Reverse Integration |
+| **Plan** | 1/3 complete |
+| **Status** | In Progress |
+| **Progress** | `[████            ]` 33% |
 
 ---
 
@@ -61,6 +61,7 @@ Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
 | Phase 07 P01 | 5min | 2 tasks | 2 files |
 | Phase 07 P02 | 3min | 2 tasks | 3 files |
 | Phase 07 P03 | 1min | 1 tasks | 2 files |
+| Phase 08 P01 | 5min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,8 @@ Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
 - [Phase 07 P02]: loginView state initialized based on authProvider + token validity per D-14
 - [Phase 07 P03]: showLoginModal state moved from local useState to lemongridStore for global access
 - [Phase 07 P03]: Smart modal on mode switch requires no additional code -- ensureValidToken + LoginModal handle it
+- [Phase 08 P01]: clusterPresetService uses lemongridFetch + ensureValidToken directly, not LemonGridClient internal methods
+- [Phase 08 P01]: uploadForReversePrompt creates LemonGridClient instance for asset upload, separate from reverse-prompt call
 
 ### Roadmap Evolution
 
@@ -108,6 +111,7 @@ Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
 - Phase 05.1 inserted after Phase 05: plugin-performance-fix (URGENT)
 - Phase 6 added: LemonGrid Integration
 - Phase 7 added: DingTalk Auth Integration
+- Phase 8 added: LemonGrid 预设与反推提示词集成
 
 ### Active TODOs
 
@@ -146,13 +150,13 @@ Phase: 07 (dingtalk-auth) — COMPLETE (3/3 plans complete)
 
 ### Last Session
 
-- **Date:** 2026-05-09
-- **Action:** Quick task 260509 — 集群模式历史记录通过LemonGrid接口返回
-- **Outcome:** LemonGridClient.getTaskHistory() added, historyStore.fetchFromCluster() fetches completed tasks from LemonGrid API, History.tsx merges both sources with "[集群]" badge on cluster items
+- **Date:** 2026-05-20
+- **Action:** Phase 08 Plan 01 — Cluster preset service and cluster prompt reverse service with tests
+- **Outcome:** Created clusterPresetService.ts (CRUD via LemonGrid REST API) and clusterPromptReverseService.ts (reverse prompt via asset_id + image upload). 16 unit tests all passing.
 
 ### Next Action
 
-Phase 07 complete. All DingTalk auth UI implemented. Backend poll/callback endpoints still need implementation in separate backend repo.
+Phase 08 Plan 02: PresetToolbar and PromptReverseFlow cluster mode branching. Wire cluster services into UI components based on connectionMode.
 
 ---
 

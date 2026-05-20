@@ -34,6 +34,14 @@
 - **CONF-06**: UI 界面配置节点（无需手动编辑 JSON）
 - **CACH-06**: 缓存版本管理与迁移
 
+### LemonGrid Cluster Preset and Prompt Reverse (Phase 8)
+
+- [x] **SC-1**: Cluster mode preset CRUD via LemonGrid REST API
+- [x] **SC-2**: Preset data persists on LemonGrid server (not local only)
+- [x] **SC-3**: Cluster mode prompt reverse via LemonGrid API
+- [x] **SC-4**: Prompt reverse uses LemonGrid image analysis (KIE Gemini)
+- [ ] **SC-5**: Direct and cluster modes work independently
+
 ## Out of Scope
 
 | Feature | Reason |
@@ -62,13 +70,19 @@
 | INTG-01 | Phase 1 | Complete |
 | INTG-02 | Phase 2 | Pending |
 | INTG-03 | Phase 2 | Pending |
+| SC-1 | Phase 8 | Complete |
+| SC-2 | Phase 8 | Complete |
+| SC-3 | Phase 8 | Complete |
+| SC-4 | Phase 8 | Complete |
+| SC-5 | Phase 8 | Pending |
 
 **Coverage:**
 - v1 requirements: 13 total
-- Mapped to phases: 13
+- Phase 8 requirements: 5 total
+- Mapped to phases: 18
 - Unmapped: 0
-- Complete: 6 (CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, INTG-01)
+- Complete: 10 (CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, INTG-01, SC-1, SC-2, SC-3, SC-4)
 
 ---
 *Requirements defined: 2026-03-11*
-*Last updated: 2026-03-11 after plan 01-03 completion*
+*Last updated: 2026-05-20 after plan 08-01 completion*

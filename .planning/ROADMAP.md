@@ -101,7 +101,7 @@ Plans:
 **Plans:** 3 plans
 
 Plans:
-- [ ] 08-01-PLAN.md — Cluster preset service and cluster prompt reverse service (with tests)
+- [x] 08-01-PLAN.md — Cluster preset service and cluster prompt reverse service (with tests)
 - [ ] 08-02-PLAN.md — PresetToolbar and PromptReverseFlow cluster mode branching
 - [ ] 08-03-PLAN.md — Draw.tsx data-asset-id wiring and mode switch cleanup
 
@@ -120,7 +120,7 @@ Plans:
 | 6. LemonGrid Integration | 3/3 | Complete | 2026-04-28 |
 | 7. DingTalk Auth Integration | 3/3 | Complete | 07-01, 07-02, 07-03 |
 | 7. DingTalk Auth Integration | 3/3 | Complete | 2026-05-08 |
-| 8. LemonGrid 预设与反推提示词集成 | 0/3 | Planning | - |
+| 8. LemonGrid 预设与反推提示词集成 | 1/3 | In progress | 08-01 |
 
 ---
 
@@ -302,4 +302,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-05-19 - Phase 8 planned (3 plans)*
+*Last updated: 2026-05-20 - Phase 08 Plan 01 complete*
