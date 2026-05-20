@@ -13,7 +13,7 @@
 - [ ] **Phase 3: Integration & Testing** - Full integration testing and refinement
 - [ ] **Phase 4: 工作流参数预设功能** - 参数预设的保存、管理、导入导出
 - [ ] **Phase 5: 图片提示词反推功能** - 通过图片反推生成提示词
-- [ ] **Phase 8: LemonGrid 预设与反推提示词集成** - 将预设和反推提示词功能接入 LemonGrid 已有基础设施
+- [x] **Phase 8: LemonGrid 预设与反推提示词集成** - 将预设和反推提示词功能接入 LemonGrid 已有基础设施 *(completed 2026-05-20)*
 
 ---
 
