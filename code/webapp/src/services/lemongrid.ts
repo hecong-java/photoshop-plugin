@@ -107,6 +107,24 @@ export interface LemonGridTaskHistoryResponse {
   page_size: number;
 }
 
+export interface TaskQueueSummary {
+  queued_count: number;
+  running_count: number;
+  completed_today: number;
+  failed_today: number;
+  active_nodes: number;
+  avg_wait_seconds: number | null;
+  avg_duration_seconds: number | null;
+}
+
+export interface TaskETAResponse {
+  task_id: string;
+  queue_position: number;
+  total_workers: number;
+  avg_duration_seconds: number;
+  estimated_wait_seconds: number;
+}
+
 // ---------------------------------------------------------------------------
 // Error suggestions per D-45
 // ---------------------------------------------------------------------------
@@ -410,6 +428,22 @@ export class LemonGridClient {
     if (params?.page) query.set('page', String(params.page));
     if (params?.pageSize) query.set('page_size', String(params.pageSize));
     return this.fetchJson<LemonGridTaskHistoryResponse>(`/api/v1/tasks?${query.toString()}`);
+  }
+
+  /**
+   * Get platform-wide queue summary.
+   * Returns total queued/running counts and estimated average wait time.
+   */
+  async getQueueSummary(): Promise<TaskQueueSummary> {
+    return this.fetchJson<TaskQueueSummary>('/api/v1/tasks/queue');
+  }
+
+  /**
+   * Get estimated wait time for a specific queued task.
+   * Only call for QUEUED tasks -- returns 404 for tasks not in the queue ZSET.
+   */
+  async getTaskETA(taskId: string): Promise<TaskETAResponse> {
+    return this.fetchJson<TaskETAResponse>(`/api/v1/tasks/${taskId}/eta`);
   }
 
   // -------------------------------------------------------------------------
