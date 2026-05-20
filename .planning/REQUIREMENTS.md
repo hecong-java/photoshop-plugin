@@ -40,7 +40,7 @@
 - [x] **SC-2**: Preset data persists on LemonGrid server (not local only)
 - [x] **SC-3**: Cluster mode prompt reverse via LemonGrid API
 - [x] **SC-4**: Prompt reverse uses LemonGrid image analysis (KIE Gemini)
-- [ ] **SC-5**: Direct and cluster modes work independently
+- [x] **SC-5**: Direct and cluster modes work independently
 
 ## Out of Scope
 
@@ -74,15 +74,15 @@
 | SC-2 | Phase 8 | Complete |
 | SC-3 | Phase 8 | Complete |
 | SC-4 | Phase 8 | Complete |
-| SC-5 | Phase 8 | Pending |
+| SC-5 | Phase 8 | Complete |
 
 **Coverage:**
 - v1 requirements: 13 total
 - Phase 8 requirements: 5 total
 - Mapped to phases: 18
 - Unmapped: 0
-- Complete: 10 (CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, INTG-01, SC-1, SC-2, SC-3, SC-4)
+- Complete: 11 (CONF-01, CONF-02, CONF-03, CONF-04, CONF-05, INTG-01, SC-1, SC-2, SC-3, SC-4, SC-5)
 
 ---
 *Requirements defined: 2026-03-11*
-*Last updated: 2026-05-20 after plan 08-01 completion*
+*Last updated: 2026-05-20 after plan 08-03 completion (Phase 8 complete)*
