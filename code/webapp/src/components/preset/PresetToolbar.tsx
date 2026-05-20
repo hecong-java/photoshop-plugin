@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { usePresetStore } from '../../stores/presetStore';
+import { useSettingsStore } from '../../stores/settingsStore';
 import * as presetService from '../../services/preset';
+import * as clusterPresetService from '../../services/clusterPresetService';
 import type { PresetFile } from '../../types/preset';
+import type { PresetMeta } from '../../types/preset';
 import { ConfirmDialog } from './ConfirmDialog';
 import './PresetToolbar.css';
 
@@ -36,6 +39,27 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
     hasUnsavedChanges,
   } = usePresetStore();
 
+  const connectionMode = useSettingsStore((s) => s.connectionMode);
+  const isCluster = connectionMode === 'cluster';
+
+  // Cluster mode: load presets from LemonGrid server instead of Bridge filesystem
+  useEffect(() => {
+    if (isCluster && workflowName) {
+      clusterPresetService.listPresets(workflowName).then(clusterPresets => {
+        const metas: PresetMeta[] = clusterPresets.map(p => ({
+          filename: p.id,
+          name: p.name,
+          workflowName: p.template_id,
+          updatedAt: p.updated_at,
+          createdAt: p.created_at,
+        }));
+        usePresetStore.setState({ presets: metas, isLoading: false });
+      }).catch(err => {
+        usePresetStore.setState({ error: err.message, isLoading: false });
+      });
+    }
+  }, [isCluster, workflowName]);
+
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -57,23 +81,35 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
   const handleAddPreset = async () => {
     if (!workflowName) return;
     try {
-      const nextName = presetService.getNextPresetName(presets);
-      const filename = sanitizeFilename(`${workflowName}-${nextName}.json`);
-      const now = new Date().toISOString();
-      const data: PresetFile = {
-        version: 1,
-        name: nextName,
-        workflowName,
-        workflowPath,
-        inputValues: { ...inputValues },
-        imageFilenames: { ...imageFilenames },
-        createdAt: now,
-        updatedAt: now,
-      };
-      await presetService.savePreset(filename, data);
-      await loadPresets(workflowName);
-      await selectPreset(filename);
-      setLastAppliedValues(inputValues, imageFilenames);
+      if (isCluster) {
+        const nextName = presetService.getNextPresetName(presets);
+        const parameters: Record<string, unknown> = { ...inputValues, ...imageFilenames };
+        await clusterPresetService.createPreset(workflowName, nextName, parameters);
+        await loadPresets(workflowName);
+        // Find and select the newly created preset by name
+        const updated = usePresetStore.getState().presets;
+        const created = updated.find(p => p.name === nextName);
+        if (created) await selectPreset(created.filename);
+        setLastAppliedValues(inputValues, imageFilenames);
+      } else {
+        const nextName = presetService.getNextPresetName(presets);
+        const filename = sanitizeFilename(`${workflowName}-${nextName}.json`);
+        const now = new Date().toISOString();
+        const data: PresetFile = {
+          version: 1,
+          name: nextName,
+          workflowName,
+          workflowPath,
+          inputValues: { ...inputValues },
+          imageFilenames: { ...imageFilenames },
+          createdAt: now,
+          updatedAt: now,
+        };
+        await presetService.savePreset(filename, data);
+        await loadPresets(workflowName);
+        await selectPreset(filename);
+        setLastAppliedValues(inputValues, imageFilenames);
+      }
     } catch (error) {
       console.error('Failed to add preset:', error);
     }
@@ -81,10 +117,42 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
 
   const applyPresetFromFile = async (filename: string) => {
     try {
-      const presetData = await presetService.readPreset(filename);
-      await selectPreset(filename);
-      onApplyPreset(presetData);
-      setLastAppliedValues(presetData.inputValues, presetData.imageFilenames);
+      if (isCluster) {
+        // In cluster mode, filename is actually the cluster preset ID
+        const clusterPresets = await clusterPresetService.listPresets(workflowName!);
+        const clusterPreset = clusterPresets.find(p => p.id === filename);
+        if (!clusterPreset) {
+          console.error('Cluster preset not found:', filename);
+          return;
+        }
+        // LemonGrid JSONB stores the exact dict. Split by type: strings -> imageFilenames, others -> inputValues
+        const inputVals: Record<string, string | number | boolean> = {};
+        const imageFns: Record<string, string> = {};
+        for (const [key, value] of Object.entries(clusterPreset.parameters)) {
+          if (typeof value === 'string') {
+            imageFns[key] = value;
+          } else {
+            inputVals[key] = value as string | number | boolean;
+          }
+        }
+        const presetData: PresetFile = {
+          version: 1,
+          name: clusterPreset.name,
+          workflowName: clusterPreset.template_id,
+          inputValues: inputVals,
+          imageFilenames: imageFns,
+          createdAt: clusterPreset.created_at,
+          updatedAt: clusterPreset.updated_at,
+        };
+        await selectPreset(filename);
+        onApplyPreset(presetData);
+        setLastAppliedValues(presetData.inputValues, presetData.imageFilenames);
+      } else {
+        const presetData = await presetService.readPreset(filename);
+        await selectPreset(filename);
+        onApplyPreset(presetData);
+        setLastAppliedValues(presetData.inputValues, presetData.imageFilenames);
+      }
     } catch (error) {
       console.error('Failed to load preset:', error);
     }
@@ -114,7 +182,11 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
   const handleDeletePreset = async () => {
     if (!selectedPresetName || !workflowName) return;
     try {
-      await presetService.deletePreset(selectedPresetName);
+      if (isCluster) {
+        await clusterPresetService.deletePreset(workflowName, selectedPresetName);
+      } else {
+        await presetService.deletePreset(selectedPresetName);
+      }
       clearSelection();
       await loadPresets(workflowName);
       setShowDeleteConfirm(false);
@@ -134,19 +206,26 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
     if (!selectedPresetData || !selectedPresetName || !workflowName || !editName.trim()) return;
     try {
       const trimmedName = editName.trim();
-      const newFilename = sanitizeFilename(`${workflowName}-${trimmedName}.json`);
-      const now = new Date().toISOString();
-      const updatedData: PresetFile = {
-        ...selectedPresetData,
-        name: trimmedName,
-        updatedAt: now,
-      };
-      await presetService.savePreset(newFilename, updatedData);
-      if (newFilename !== selectedPresetName) {
-        await presetService.deletePreset(selectedPresetName);
+      if (isCluster) {
+        await clusterPresetService.updatePreset(workflowName, selectedPresetName, { name: trimmedName });
+        await loadPresets(workflowName);
+        // Re-select by finding the preset with the same ID
+        await selectPreset(selectedPresetName);
+      } else {
+        const newFilename = sanitizeFilename(`${workflowName}-${trimmedName}.json`);
+        const now = new Date().toISOString();
+        const updatedData: PresetFile = {
+          ...selectedPresetData,
+          name: trimmedName,
+          updatedAt: now,
+        };
+        await presetService.savePreset(newFilename, updatedData);
+        if (newFilename !== selectedPresetName) {
+          await presetService.deletePreset(selectedPresetName);
+        }
+        await loadPresets(workflowName);
+        await selectPreset(newFilename);
       }
-      await loadPresets(workflowName);
-      await selectPreset(newFilename);
       setIsEditing(false);
     } catch (error) {
       console.error('Failed to rename preset:', error);
@@ -319,7 +398,7 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
             className="preset-toolbar-btn"
             title="导入预设"
             onClick={handleImportPreset}
-            disabled={isPresetLoading || !workflowName}
+            disabled={isPresetLoading || !workflowName || isCluster}
           >
             &#x2193;
           </button>
@@ -327,7 +406,7 @@ export const PresetToolbar: React.FC<PresetToolbarProps> = ({
             className="preset-toolbar-btn"
             title="导出预设"
             onClick={handleExportPreset}
-            disabled={!selectedPresetName || isPresetLoading}
+            disabled={!selectedPresetName || isPresetLoading || isCluster}
           >
             &#x2191;
           </button>
