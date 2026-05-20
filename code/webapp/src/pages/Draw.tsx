@@ -12,7 +12,7 @@ import { usePresetStore } from '../stores/presetStore';
 import type { PresetFile } from '../types/preset';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
-import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField } from '../services/lemongrid';
+import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField, type TaskQueueSummary } from '../services/lemongrid';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { ensureValidToken } from '../services/lemongrid-auth';
 import { LoginModal } from '../components/LoginModal';
@@ -268,6 +268,7 @@ export const Draw = () => {
   const connectionMode = useSettingsStore((s) => s.connectionMode);
   const lemonGridStore = useLemonGridStore();
   const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl, showLoginModal: lgShowLoginModal, setShowLoginModal: lgSetShowLoginModal } = lemonGridStore;
+  const queueSummary = useLemonGridStore((s) => s.queueSummary);
 
   // Template state (replaces workflow state in Cluster Mode)
   const [clusterTemplates, setClusterTemplates] = useState<LemonGridTemplateSummary[]>([]);
@@ -596,6 +597,25 @@ export const Draw = () => {
         .catch((err) => console.error('[Queue] Error:', err));
     }
   }, [comfyUISettings.isConnected, fetchQueue]);
+
+  // Cluster Mode: Poll platform queue summary every 15 seconds
+  useEffect(() => {
+    if (connectionMode !== 'cluster' || !isLemonGridConnected || !lemonGridServerUrl) return;
+
+    const fetchQueueSummary = async () => {
+      try {
+        const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+        const summary = await client.getQueueSummary();
+        useLemonGridStore.getState().setQueueSummary(summary);
+      } catch (e) {
+        console.warn('[Draw] Queue summary fetch failed:', e);
+      }
+    };
+
+    fetchQueueSummary();
+    const interval = setInterval(fetchQueueSummary, 15000);
+    return () => clearInterval(interval);
+  }, [connectionMode, isLemonGridConnected, lemonGridServerUrl]);
 
   // Refresh queue periodically during generation
   useEffect(() => {
@@ -3035,7 +3055,24 @@ export const Draw = () => {
       // Build params with node_id.name keys (e.g. "100.upload") as required by API
       const snapshotParams: Record<string, unknown> = {};
       for (const field of selectedTemplate.param_schema) {
+        // Skip hidden fields — backend uses workflow defaults for those
+        if (field.hidden) continue;
+
         const value = templateParams[field.name] ?? renderParamDefault(field);
+
+        // For image fields: only include if user actually uploaded an asset.
+        // Default ComfyUI filenames from param_schema are invalid on the cluster server.
+        if (field.type === 'image' || isImageParam(field)) {
+          if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string' && value[0].includes('-')) {
+            // Looks like a LemonGrid asset ID array — unwrap single-element arrays
+            // to string so backend (workflow_merge_service + agent) can resolve them.
+            // Backend only accepts str or dict, not arrays.
+            snapshotParams[`${field.node_id}.${field.name}`] = value.length === 1 ? value[0] : value;
+          }
+          // else: no upload yet — skip, let backend use workflow default
+          continue;
+        }
+
         snapshotParams[`${field.node_id}.${field.name}`] = value;
       }
       const result = await client.submitTask(selectedTemplate.id, snapshotParams, selectedTemplate.version, selectedTemplate.template_type || 'COMFYUI');
@@ -4148,6 +4185,18 @@ export const Draw = () => {
               {queueRunning.length > 0 && `${queueRunning.length} 运行中`}
               {queueRunning.length > 0 && queuePending.length > 0 && ' · '}
               {queuePending.length > 0 && `${queuePending.length} 排队中`}
+            </span>
+          </div>
+        )}
+        {/* Cluster Mode: Platform queue status badge */}
+        {connectionMode === 'cluster' && isLemonGridConnected && queueSummary && (queueSummary.queued_count > 0 || queueSummary.running_count > 0) && (
+          <div className="queue-status-badge cluster-queue-badge">
+            <span className="queue-dot"></span>
+            <span className="queue-text cluster-queue-text">
+              平台: {queueSummary.running_count > 0 && `${queueSummary.running_count} 运行中`}
+              {queueSummary.running_count > 0 && queueSummary.queued_count > 0 && ' · '}
+              {queueSummary.queued_count > 0 && `${queueSummary.queued_count} 排队中`}
+              {queueSummary.avg_wait_seconds != null && queueSummary.queued_count > 0 && ` · ~${Math.ceil(queueSummary.avg_wait_seconds / 60)}分钟`}
             </span>
           </div>
         )}
