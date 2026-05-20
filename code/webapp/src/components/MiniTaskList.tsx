@@ -2,7 +2,7 @@
 // Shows all LemonGrid tasks below the Generate button with state badges,
 // expand/collapse, cancel/retry/dismiss actions.
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useLemonGridStore, type LemonGridTaskState } from '../stores/lemongridStore';
 import { LemonGridClient, LEMONGRID_ERROR_SUGGESTIONS } from '../services/lemongrid';
 import './MiniTaskList.css';
@@ -83,6 +83,40 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
     return Object.values(tasks).sort((a, b) => b.submittedAt - a.submittedAt);
   }, [tasks]);
 
+  // Per-task ETA polling: fetch ETA for QUEUED tasks every 30 seconds
+  useEffect(() => {
+    const queuedTasks = sortedTasks.filter(t => t.status === 'QUEUED');
+    if (queuedTasks.length === 0) return;
+
+    const serverUrl = useLemonGridStore.getState().serverUrl;
+    if (!serverUrl) return;
+
+    let cancelled = false;
+
+    const fetchETAs = async () => {
+      const client = new LemonGridClient({ serverUrl });
+      for (const task of queuedTasks) {
+        if (cancelled) break;
+        try {
+          const eta = await client.getTaskETA(task.taskId);
+          if (!cancelled) {
+            const waitMin = Math.ceil(eta.estimated_wait_seconds / 60);
+            useLemonGridStore.getState().updateTask(task.taskId, {
+              etaMinutes: waitMin > 0 ? waitMin : null,
+              queuePosition: eta.queue_position,
+            });
+          }
+        } catch {
+          // ETA not available (task may have left queue) -- ignore silently
+        }
+      }
+    };
+
+    fetchETAs();
+    const interval = setInterval(fetchETAs, 30000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [sortedTasks]);
+
   // Per D-60: Summary bar with counts by status
   const summaryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -156,6 +190,10 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
                 <span className="queue-position">#{task.queuePosition}</span>
               )}
 
+              {task.status === 'QUEUED' && task.etaMinutes != null && task.etaMinutes > 0 && (
+                <span className="eta-text">~{task.etaMinutes}分钟</span>
+              )}
+
               {isActiveStatus(task.status) && (
                 <button
                   className="task-cancel-btn"
@@ -175,6 +213,10 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
               <div className="task-details" onClick={(e) => e.stopPropagation()}>
                 {task.status === 'QUEUED' && task.queuePosition && (
                   <div className="task-detail-row">排队位置: #{task.queuePosition}</div>
+                )}
+
+                {task.status === 'QUEUED' && task.etaMinutes != null && task.etaMinutes > 0 && (
+                  <div className="task-detail-row eta-detail">预计等待: ~{task.etaMinutes}分钟</div>
                 )}
 
                 {task.status === 'RUNNING' && task.progressDetail && (

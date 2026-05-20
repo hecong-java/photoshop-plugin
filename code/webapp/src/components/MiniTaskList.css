@@ -133,6 +133,19 @@
   flex-shrink: 0;
 }
 
+.eta-text {
+  font-size: 10px;
+  color: #48bb78;
+  font-weight: 600;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.eta-detail {
+  color: #48bb78;
+}
+
 .task-cancel-btn {
   background: rgba(245, 101, 101, 0.15);
   border: 1px solid rgba(245, 101, 101, 0.3);
