@@ -282,22 +282,19 @@ useEffect(() => {
 | A3 | Queue summary polling should stop when no active tasks | Architecture Patterns | Unnecessary API calls when user is idle |
 | A4 | The `estimated_eta` field in task response (from `_task_to_response`) could be used as an alternative to separate ETA API call | Code Examples | May need to verify if this field is populated during QUEUED state |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Should queue summary polling start immediately on Cluster Mode entry, or only when user submits a task?**
-   - What we know: The queue summary is platform-wide, not user-specific. It shows total queued/running counts.
-   - What's unclear: Whether users want to see queue info before submitting (to decide whether to submit) or only after.
-   - Recommendation: Start polling on Cluster Mode entry if authenticated. Show a small queue status indicator. This helps users understand platform load before committing to a task submission.
+1. **Should queue summary polling start immediately on Cluster Mode entry, or only when user submits a task?** (RESOLVED)
+   - **Decision:** Start polling on Cluster Mode entry if authenticated. Plan 09-02 implements queue summary polling in a useEffect that activates when `connectionMode === 'cluster'` and user is authenticated.
+   - **Rationale:** Users benefit from seeing platform load before committing to a task submission.
 
-2. **Should per-task ETA be fetched for PENDING tasks (not yet in Redis queue)?**
-   - What we know: The ETA API returns 404 for tasks not in the Redis ZSET queue. PENDING tasks may not yet be in the ZSET.
-   - What's unclear: The exact timing of PENDING -> QUEUED transition and when ZRANK becomes available.
-   - Recommendation: Only fetch ETA for QUEUED tasks. PENDING tasks show "准备入队..." (matching LemonGrid frontend pattern).
+2. **Should per-task ETA be fetched for PENDING tasks (not yet in Redis queue)?** (RESOLVED)
+   - **Decision:** Only fetch ETA for QUEUED tasks. PENDING tasks show "准备入队..." status text.
+   - **Rationale:** The ETA API returns 404 for tasks not in the Redis ZSET. PENDING tasks have not entered the queue yet. Plan 09-02 only triggers ETA polling for `status === 'QUEUED'` tasks.
 
-3. **Should the existing `estimated_eta` field from task status response be used instead of separate ETA API?**
-   - What we know: The `_task_to_response` function in tasks.py includes `estimated_eta` field. The existing `LemonGridTaskStatus` interface does not currently include this field.
-   - What's unclear: Whether this field is populated during QUEUED state or only after computation.
-   - Recommendation: Check if `estimated_eta` is populated during task polling. If so, use it instead of a separate ETA API call to reduce HTTP requests.
+3. **Should the existing `estimated_eta` field from task status response be used instead of separate ETA API?** (RESOLVED)
+   - **Decision:** Use the separate `GET /api/v1/tasks/{task_id}/eta` API, not the `estimated_eta` field from task status.
+   - **Rationale:** The separate ETA API returns richer data (queue_position, total_workers, avg_duration_seconds, estimated_wait_seconds) vs a single scalar. Using the dedicated endpoint keeps the existing task polling response unchanged and avoids modifying LemonGridTaskStatus interface.
 
 ## Environment Availability
 
