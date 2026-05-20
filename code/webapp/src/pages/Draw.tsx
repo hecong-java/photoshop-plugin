@@ -48,6 +48,7 @@ interface OutputImageData {
   previewUrl: string;
   blob: Blob;
   filename: string;
+  assetId?: string;
 }
 
 interface WorkflowInputGroup {
@@ -210,12 +211,14 @@ const OutputImageItem = React.memo(({
   image,
   index,
   isActive,
-  onSelect
+  onSelect,
+  assetId,
 }: {
   image: { previewUrl: string };
   index: number;
   isActive: boolean;
   onSelect: (index: number) => void;
+  assetId?: string;
 }) => (
   <button
     key={`draw-output-${index}`}
@@ -224,7 +227,12 @@ const OutputImageItem = React.memo(({
     onClick={() => onSelect(index)}
     title={`查看第 ${index + 1} 张输出`}
   >
-    <img src={image.previewUrl} alt={`output-${index + 1}`} data-prompt-reverse />
+    <img
+      src={image.previewUrl}
+      alt={`output-${index + 1}`}
+      data-prompt-reverse
+      {...(assetId ? { 'data-asset-id': assetId } : {})}
+    />
   </button>
 ));
 
@@ -504,6 +512,11 @@ export const Draw = () => {
       clearSelection();
     }
   }, [connectionMode, selectedTemplate?.id]);
+
+  // Per T-08-06: Clear preset selection on mode switch to prevent cross-mode data leak
+  useEffect(() => {
+    usePresetStore.getState().clearSelection();
+  }, [connectionMode]);
 
   // Per D-22, D-23, D-37, D-38: WebSocket progress through Bridge + auto-fallback to polling
   useEffect(() => {
@@ -3213,6 +3226,8 @@ export const Draw = () => {
           filename,
           assetId,
         });
+        // Also add to outputImages for preview strip and prompt reverse data-asset-id
+        setOutputImages(prev => [...prev, { previewUrl: URL.createObjectURL(blob), blob, filename, assetId }]);
       } catch (e) {
         console.error('[Draw] Download/import failed for asset:', assetId, e);
       }
@@ -4143,6 +4158,7 @@ export const Draw = () => {
               alt="Preview"
               className="preview-image"
               data-prompt-reverse
+              {...(outputImages[activeOutputIndex]?.assetId ? { 'data-asset-id': outputImages[activeOutputIndex].assetId } : {})}
             />
           ) : (
             <div className="preview-placeholder">
@@ -4161,6 +4177,7 @@ export const Draw = () => {
                 index={index}
                 isActive={index === activeOutputIndex}
                 onSelect={openOutputViewer}
+                assetId={image.assetId}
               />
             ))}
           </div>
@@ -4201,7 +4218,7 @@ export const Draw = () => {
               </button>
             </div>
             <div className="draw-viewer-body">
-              <img src={activeOutput.previewUrl} alt={`viewer-output-${activeOutputIndex + 1}`} data-prompt-reverse />
+              <img src={activeOutput.previewUrl} alt={`viewer-output-${activeOutputIndex + 1}`} data-prompt-reverse {...(activeOutput.assetId ? { 'data-asset-id': activeOutput.assetId } : {})} />
             </div>
             {outputImages.length > 1 && (
               <div className="draw-viewer-controls">
