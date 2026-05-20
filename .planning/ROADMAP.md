@@ -14,6 +14,7 @@
 - [ ] **Phase 4: 工作流参数预设功能** - 参数预设的保存、管理、导入导出
 - [ ] **Phase 5: 图片提示词反推功能** - 通过图片反推生成提示词
 - [x] **Phase 8: LemonGrid 预设与反推提示词集成** - 将预设和反推提示词功能接入 LemonGrid 已有基础设施 *(completed 2026-05-20)*
+- [ ] **Phase 9: 接入LemonGrid的任务队列信息** - 在插件中展示 LemonGrid 平台的任务队列状态信息
 
 ---
 
@@ -105,6 +106,26 @@ Plans:
 - [x] 08-02-PLAN.md — PresetToolbar and PromptReverseFlow cluster mode branching
 - [x] 08-03-PLAN.md — Draw.tsx data-asset-id wiring and mode switch cleanup
 
+### Phase 9: 接入LemonGrid的任务队列信息
+
+**Goal:** 在插件中接入 LemonGrid 平台的任务队列信息，使用户能够查看当前平台的队列状态（如排队任务数、预计等待时间等），帮助用户了解任务提交后的排队情况。
+
+**Depends on:** Phase 6, Phase 8
+
+**Requirements:** Q-01, Q-02, Q-03
+
+**Success Criteria** (what must be TRUE):
+1. Cluster Mode 下用户可以查看 LemonGrid 平台的队列状态信息
+2. 队列信息实时更新或定期刷新
+3. 队列状态以直观的方式展示（如排队数量、预计等待时间）
+4. 不影响现有 Direct Mode 功能
+
+**Plans:** 2 plans
+
+Plans:
+- [ ] 09-01-PLAN.md — Queue API types, methods, and store state
+- [ ] 09-02-PLAN.md — Cluster queue badge, per-task ETA display, and polling
+
 ---
 
 ## Progress
@@ -121,6 +142,7 @@ Plans:
 | 7. DingTalk Auth Integration | 3/3 | Complete | 07-01, 07-02, 07-03 |
 | 7. DingTalk Auth Integration | 3/3 | Complete | 2026-05-08 |
 | 8. LemonGrid 预设与反推提示词集成 | 3/3 | Complete | 08-01, 08-02, 08-03 |
+| 9. 接入LemonGrid的任务队列信息 | 0/2 | Planning | - |
 
 ---
 
@@ -172,6 +194,9 @@ Plans:
 | PERF-06 | Phase 05.1 | Planned |
 | PERF-07 | Phase 05.1 | Planned |
 | D-01..D-29 | Phase 7 | Planned |
+| Q-01 | Phase 9 | Planned |
+| Q-02 | Phase 9 | Planned |
+| Q-03 | Phase 9 | Planned |
 
 **Coverage:** requirements mapped (100%)
 
@@ -302,4 +327,4 @@ Plans:
 ---
 
 *Roadmap created: 2026-03-11*
-*Last updated: 2026-05-20 - Phase 08 complete (3/3 plans)*
+*Last updated: 2026-05-20 - Phase 09 planned (2 plans)*
