@@ -24,13 +24,13 @@ const { shell } = require('uxp');
 
 const webviewEl = document.getElementById(WEBVIEW_ID);
 
-// Auto cache-bust: append timestamp to webview URL
+// Auto cache-bust: append timestamp to webview URL (任何 origin 都加，防 UXP webview 缓存)
 if (webviewEl) {
-  const baseUrl = 'http://192.168.0.124:5173';
   const currentSrc = webviewEl.getAttribute('src') || '';
-  if (currentSrc.startsWith(baseUrl)) {
-    const timestamp = Date.now();
-    webviewEl.setAttribute('src', `${baseUrl}?t=${timestamp}`);
+  if (currentSrc && !currentSrc.includes('?t=')) {
+    const u = new URL(currentSrc);
+    u.searchParams.set('t', String(Date.now()));
+    webviewEl.setAttribute('src', u.toString());
   }
 }
 
