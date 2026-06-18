@@ -10,6 +10,7 @@ import { HistoryList } from '../components/history/HistoryList';
 import { downloadAndSaveZip, generateDownloadFilename } from '../services/download';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import { usePSBridge } from '../hooks/usePSBridge';
+import { bridgeFetch } from '../services/upload';
 import './History.css';
 
 interface DownloadSuccess {
@@ -85,7 +86,7 @@ export const History = () => {
         type: (image.type as 'output' | 'input' | 'temp') || 'output',
         preview: false,
       });
-      const resp = await fetch(url);
+      const resp = await bridgeFetch(url);
       if (!resp.ok) throw new Error(`下载图片失败: ${resp.status}`);
       blob = await resp.blob();
     }
@@ -123,23 +124,20 @@ export const History = () => {
     if (item.source === 'cluster') {
       // Cluster items: download assets via authenticated LemonGridClient
       const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
-      const objectUrls: string[] = [];
-      try {
-        const urls = await Promise.all(item.images.map(async (image, index) => {
-          const assetId = image.filename; // filename stores the asset ID for cluster items
-          if (!assetId) return { url: '', filename: `image-${index + 1}.png`, index };
-          const blob = await client.downloadAsset(assetId);
-          const objectUrl = URL.createObjectURL(blob);
-          objectUrls.push(objectUrl);
-          return { url: objectUrl, filename: `${item.imageName || 'cluster'}-${index + 1}.png`, index };
-        }));
-        const filename = generateDownloadFilename(item.imageName || 'cluster', 0).replace(/\.png$/i, '.zip');
-        const result = await downloadAndSaveZip(urls, filename);
-        addLocalDownload(item.promptId, result.savedPath);
-        setDownloadSuccess({ path: result.savedPath, timestamp: Date.now() });
-      } finally {
-        objectUrls.forEach(URL.revokeObjectURL);
-      }
+      // 直接传 bytes 给 zip——勿造 blob URL 再让 bridge fetch（UXP 原生 fetch 不支持 blob:）
+      const entries = await Promise.all(item.images.map(async (image, index) => {
+        const assetId = image.filename; // filename stores the asset ID for cluster items
+        if (!assetId) {
+          return { filename: `image-${index + 1}.png`, index, data: new Uint8Array() };
+        }
+        const blob = await client.downloadAsset(assetId);
+        const data = new Uint8Array(await blob.arrayBuffer());
+        return { filename: `${item.imageName || 'cluster'}-${index + 1}.png`, index, data };
+      }));
+      const filename = generateDownloadFilename(item.imageName || 'cluster', 0).replace(/\.png$/i, '.zip');
+      const result = await downloadAndSaveZip(entries, filename);
+      addLocalDownload(item.promptId, result.savedPath);
+      setDownloadSuccess({ path: result.savedPath, timestamp: Date.now() });
       return;
     }
 

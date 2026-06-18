@@ -2,7 +2,7 @@
 // Handles progress tracking, file saving via bridge, and local file management
 
 import { zipSync } from 'fflate';
-import { sendBridgeMessage } from './upload';
+import { sendBridgeMessage, bridgeFetch } from './upload';
 
 export interface DownloadProgress {
   filename: string;
@@ -36,8 +36,8 @@ export async function downloadAndSaveImage(
 
   try {
     // Fetch with progress tracking
-    const response = await fetch(imageUrl);
-    
+    const response = await bridgeFetch(imageUrl);
+
     if (!response.ok) {
       throw new Error(`Failed to fetch image: ${response.statusText}`);
     }
@@ -68,7 +68,7 @@ export async function downloadAndSaveImage(
 
       progress.status = 'complete';
       onProgress?.(progress);
-      return { ...progress, path: result.path };
+      return { savedPath: result.path, filename };
     }
 
     const chunks: Uint8Array[] = [];
@@ -129,7 +129,7 @@ export async function downloadAndSaveImage(
 }
 
 export async function downloadAndSaveZip(
-  images: Array<{ url: string; filename: string; index: number }>,
+  images: Array<{ url?: string; data?: Uint8Array; filename: string; index: number }>,
   archiveName: string
 ): Promise<{ savedPath: string; filename: string }> {
   if (!archiveName.toLowerCase().endsWith('.zip')) {
@@ -140,12 +140,22 @@ export async function downloadAndSaveZip(
 
   for (let index = 0; index < images.length; index += 1) {
     const image = images[index];
-    const response = await fetch(image.url);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    // 预取 bytes（集群模式已 downloadAsset 拿到）→ 直接用；否则走 bridge fetch http URL。
+    // ⚠️ 勿传 blob: URL 给 bridgeFetch——UXP 原生 fetch 不支持 blob: scheme。
+    let data: Uint8Array;
+    if (image.data) {
+      data = image.data;
+    } else {
+      if (!image.url) {
+        throw new Error(`Zip entry ${index} 缺少 url 和 data`);
+      }
+      const response = await bridgeFetch(image.url);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.statusText}`);
+      }
+      data = new Uint8Array(await response.arrayBuffer());
     }
 
-    const buffer = await response.arrayBuffer();
     const baseName = image.filename || `image-${image.index + 1}.png`;
     let fileName = baseName;
     let suffix = 1;
@@ -158,7 +168,7 @@ export async function downloadAndSaveZip(
       }
       suffix += 1;
     }
-    fileMap[fileName] = new Uint8Array(buffer);
+    fileMap[fileName] = data;
   }
 
   const zipData = zipSync(fileMap, { level: 0 });
