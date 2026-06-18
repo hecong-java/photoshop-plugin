@@ -92,7 +92,7 @@ export const useWorkflowCacheStore = create<WorkflowCacheState>()(
       },
     }),
     {
-      name: 'Ningleai-workflow-cache',
+      name: 'LemonGrid-workflow-cache',
       version: 1,
       migrate: (persisted: any, version: number) => {
         // version 0 → 1: clear old caches that may contain dimension values (width/height: 1024)

@@ -1,5 +1,6 @@
 const ALLOWED_ORIGINS = [
   'http://192.168.0.124:5173',
+  'http://123.207.74.28:8081',
 ];
 
 const normalizeOrigin = (origin) => {
@@ -15,7 +16,7 @@ const normalizeOrigin = (origin) => {
       .replace(/^(https?:\/\/[^/]+).*/, '$1');
   }
 };
-const WEBVIEW_ID = 'ningleai-ps-plugin';
+const WEBVIEW_ID = 'lemongrid-ps-plugin';
 
 const { core, action, app } = require('photoshop');
 const { localFileSystem, formats } = require('uxp').storage;
@@ -1113,7 +1114,7 @@ const handlers = {
   // Declared as lazy property on handlers so it is module-level accessible.
 
   'lemongrid.fetch': async (payload) => {
-    const { url, method = 'GET', headers = {}, body, timeout = 30000 } = payload;
+    const { url, method = 'GET', headers = {}, body, timeout = 30000, retryOnAbort = true } = payload;
 
     if (!url || typeof url !== 'string') {
       throw new Error('lemongrid.fetch: missing or invalid "url" parameter');
@@ -1123,71 +1124,84 @@ const handlers = {
     const lgSettings = settingsStorage.get('lemongrid') || {};
     const token = lgSettings.accessToken || '';
 
-    try {
-      const fetchOptions = {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-          ...headers
-        },
-      };
+    const fetchOptions = {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...headers
+      },
+    };
 
-      if (body && method !== 'GET') {
-        fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+    if (body && method !== 'GET') {
+      fetchOptions.body = typeof body === 'string' ? body : JSON.stringify(body);
+    }
+
+    const performFetchWithTimeout = async (requestTimeout) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
+      try {
+        return await fetch(url, {
+          ...fetchOptions,
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
       }
+    };
 
-      const performFetchWithTimeout = async (requestTimeout) => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), requestTimeout);
-        try {
-          return await fetch(url, {
-            ...fetchOptions,
-            signal: controller.signal
-          });
-        } finally {
-          clearTimeout(timeoutId);
+    let lastError;
+
+    for (let attempt = 1; attempt <= (retryOnAbort ? 2 : 1); attempt++) {
+      try {
+        const requestTimeout = attempt > 1 ? Math.min(Math.max(timeout * 2, 15000), 90000) : timeout;
+        const response = await performFetchWithTimeout(requestTimeout);
+
+        const contentType = response.headers.get('content-type') || '';
+        let responseData;
+
+        if (contentType.includes('application/json')) {
+          responseData = await response.json();
+        } else if (contentType.includes('image/') || contentType.includes('application/octet-stream')) {
+          const arrayBuffer = await response.arrayBuffer();
+          const b64 = await arrayBufferToBase64(arrayBuffer);
+          responseData = {
+            __base64__: true,
+            data: b64,
+            contentType,
+            dataUrl: `data:${contentType || 'application/octet-stream'};base64,${b64}`,
+            byteLength: arrayBuffer.byteLength
+          };
+        } else {
+          responseData = await response.text();
         }
-      };
 
-      const response = await performFetchWithTimeout(timeout);
-
-      const contentType = response.headers.get('content-type') || '';
-      let responseData;
-
-      if (contentType.includes('application/json')) {
-        responseData = await response.json();
-      } else if (contentType.includes('image/') || contentType.includes('application/octet-stream')) {
-        const arrayBuffer = await response.arrayBuffer();
-        const b64 = await arrayBufferToBase64(arrayBuffer);
-        responseData = {
-          __base64__: true,
-          data: b64,
-          contentType,
-          dataUrl: `data:${contentType || 'application/octet-stream'};base64,${b64}`,
-          byteLength: arrayBuffer.byteLength
+        return {
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          headers: Object.fromEntries(response.headers.entries()),
+          data: responseData
         };
-      } else {
-        responseData = await response.text();
-      }
+      } catch (error) {
+        lastError = error;
+        const isAbortError = error && (error._name === 'AbortError' || error.name === 'AbortError');
 
-      return {
-        ok: response.ok,
-        status: response.status,
-        statusText: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
-        data: responseData
-      };
-    } catch (error) {
-      console.error('[Bridge] LemonGrid fetch error:', error);
-      const isAbortError = error && (error._name === 'AbortError' || error.name === 'AbortError');
-      throw {
-        code: isAbortError ? 'TIMEOUT' : 'FETCH_ERROR',
-        message: isAbortError
-          ? `Request timed out after ${timeout}ms`
-          : (error.message || error._message || 'Network request failed'),
-        url
-      };
+        if (isAbortError && retryOnAbort && attempt === 1) {
+          const retryTimeout = Math.min(Math.max(timeout * 2, 15000), 60000);
+          console.warn('[Bridge] LemonGrid fetch aborted, retrying once with longer timeout:', retryTimeout);
+          continue;
+        }
+
+        console.error('[Bridge] LemonGrid fetch error:', error);
+        throw {
+          code: isAbortError ? 'TIMEOUT' : 'FETCH_ERROR',
+          message: isAbortError
+            ? `Request timed out after ${timeout}ms (all retries exhausted)`
+            : (error.message || error._message || 'Network request failed'),
+          url
+        };
+      }
     }
   },
 
@@ -1212,77 +1226,93 @@ const handlers = {
     }
 
     const connectionId = 'lg-ws-' + Date.now() + '-' + Math.random().toString(36).substring(2, 8);
+    const MAX_WS_RECONNECTS = 3;
+    let reconnectAttempt = 0;
 
-    return new Promise((resolve, reject) => {
-      try {
-        const ws = new WebSocket(wsUrl);
+    const connectWs = () => {
+      return new Promise((resolve, reject) => {
+        try {
+          const ws = new WebSocket(wsUrl);
 
-        ws.onopen = () => {
-          // Resolve the Bridge call with connection ID once WS is open
-          resolve({ connectionId });
-        };
+          ws.onopen = () => {
+            reconnectAttempt = 0; // Reset on successful connect
+            resolve({ connectionId });
+          };
 
-        ws.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            // Relay message to webview
-            if (webviewEl && typeof webviewEl.postMessage === 'function') {
-              webviewEl.postMessage({
-                type: 'lemongrid.ws.message',
-                taskId,
-                connectionId,
-                data
-              });
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              if (webviewEl && typeof webviewEl.postMessage === 'function') {
+                webviewEl.postMessage({
+                  type: 'lemongrid.ws.message',
+                  taskId,
+                  connectionId,
+                  data
+                });
+              }
+            } catch (parseError) {
+              console.warn('[Bridge] LemonGrid WS message parse error:', parseError);
             }
-          } catch (parseError) {
-            console.warn('[Bridge] LemonGrid WS message parse error:', parseError);
-          }
-        };
+          };
 
-        ws.onerror = (event) => {
-          console.error('[Bridge] LemonGrid WS error:', event);
-          if (webviewEl && typeof webviewEl.postMessage === 'function') {
-            webviewEl.postMessage({
-              type: 'lemongrid.ws.close',
-              taskId,
-              connectionId,
-              code: 'ERROR',
-              reason: 'WebSocket error'
-            });
-          }
-          // Clean up from map
-          if (handlers._lgWsConnections) {
-            handlers._lgWsConnections.delete(connectionId);
-          }
-        };
+          ws.onerror = (event) => {
+            console.error('[Bridge] LemonGrid WS error:', event);
+          };
 
-        ws.onclose = (event) => {
-          if (webviewEl && typeof webviewEl.postMessage === 'function') {
-            webviewEl.postMessage({
-              type: 'lemongrid.ws.close',
-              taskId,
-              connectionId,
-              code: event.code,
-              reason: event.reason || 'Connection closed'
-            });
-          }
-          // Clean up from map
-          if (handlers._lgWsConnections) {
-            handlers._lgWsConnections.delete(connectionId);
-          }
-        };
+          ws.onclose = (event) => {
+            // Auto-reconnect on abnormal close (1006) or server close, up to MAX_WS_RECONNECTS
+            if (reconnectAttempt < MAX_WS_RECONNECTS && event.code !== 1000) {
+              reconnectAttempt++;
+              const delay = Math.min(1000 * Math.pow(2, reconnectAttempt - 1), 8000);
+              console.log(`[Bridge] LemonGrid WS reconnect ${reconnectAttempt}/${MAX_WS_RECONNECTS} in ${delay}ms...`);
+              setTimeout(() => {
+                try {
+                  const newWs = new WebSocket(wsUrl);
+                  // Reuse the same event handlers
+                  newWs.onopen = ws.onopen;
+                  newWs.onmessage = ws.onmessage;
+                  newWs.onerror = ws.onerror;
+                  newWs.onclose = ws.onclose;
+                  handlers._lgWsConnections.set(connectionId, newWs);
+                } catch (reconnectErr) {
+                  console.error('[Bridge] LemonGrid WS reconnect failed:', reconnectErr);
+                  notifyWsClose('ERROR', 'Reconnect failed');
+                }
+              }, delay);
+            } else {
+              // Final close — notify webview
+              notifyWsClose(event.code, event.reason || 'Connection closed');
+            }
+          };
 
-        // Store in connection map for cleanup
-        handlers._lgWsConnections.set(connectionId, ws);
+          handlers._lgWsConnections.set(connectionId, ws);
 
-      } catch (error) {
-        reject({
-          code: 'WS_ERROR',
-          message: error.message || 'Failed to create WebSocket connection',
-          taskId
+        } catch (error) {
+          reject({
+            code: 'WS_ERROR',
+            message: error.message || 'Failed to create WebSocket connection',
+            taskId
+          });
+        }
+      });
+    };
+
+    const notifyWsClose = (code, reason) => {
+      if (webviewEl && typeof webviewEl.postMessage === 'function') {
+        webviewEl.postMessage({
+          type: 'lemongrid.ws.close',
+          taskId,
+          connectionId,
+          code: typeof code === 'number' ? String(code) : code,
+          reason: reason || 'Connection closed'
         });
       }
-    });
+      if (handlers._lgWsConnections) {
+        handlers._lgWsConnections.delete(connectionId);
+      }
+    };
+
+    return connectWs();
   },
 
   'lemongrid.websocket.close': async (payload) => {
@@ -1327,66 +1357,96 @@ const handlers = {
     const lgSettings = settingsStorage.get('lemongrid') || {};
     const token = lgSettings.accessToken || '';
 
-    try {
-      // Convert base64 to binary Uint8Array
-      const binaryString = atob(base64Data);
-      const fileBytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        fileBytes[i] = binaryString.charCodeAt(i);
-      }
-
-      // Build multipart/form-data using ArrayBuffer (not Blob)
-      // Blob body in fetch is unreliable in UXP v7.x (PS v24.x)
-      const boundary = '----FormBoundary' + Date.now();
-
-      // Header part: library_type field + file field header
-      const headerStr = `--${boundary}\r\nContent-Disposition: form-data; name="library_type"\r\n\r\n${libraryType}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`;
-      const footerStr = `\r\n--${boundary}--\r\n`;
-
-      const headerBytes = new Uint8Array(Array.from(headerStr).map(c => c.charCodeAt(0)));
-      const footerBytes = new Uint8Array(Array.from(footerStr).map(c => c.charCodeAt(0)));
-
-      const totalLen = headerBytes.length + fileBytes.length + footerBytes.length;
-      const bodyBytes = new Uint8Array(totalLen);
-      bodyBytes.set(headerBytes, 0);
-      bodyBytes.set(fileBytes, headerBytes.length);
-      bodyBytes.set(footerBytes, headerBytes.length + fileBytes.length);
-
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {})
-        },
-        body: bodyBytes.buffer
-      });
-
-      let responseData;
-      const responseText = await response.text();
-      try {
-        responseData = JSON.parse(responseText);
-      } catch (parseError) {
-        throw new Error(`LemonGrid upload returned non-JSON response (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
-      }
-
-      if (!response.ok) {
-        throw new Error(`LemonGrid upload failed (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
-      }
-
-      return {
-        ok: response.ok,
-        status: response.status,
-        statusText: response.statusText,
-        data: responseData
-      };
-    } catch (error) {
-      console.error('[Bridge] LemonGrid upload error:', error);
-      throw {
-        code: 'UPLOAD_ERROR',
-        message: error.message || 'Upload failed',
-        url
-      };
+    // Convert base64 to binary Uint8Array (done once, reused across retries)
+    const binaryString = atob(base64Data);
+    const fileBytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      fileBytes[i] = binaryString.charCodeAt(i);
     }
+
+    const MAX_RETRIES = 3;
+    let lastError = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000);
+        console.log(`[Bridge] LemonGrid upload retry ${attempt}/${MAX_RETRIES} after ${delay}ms...`);
+        await new Promise(r => setTimeout(r, delay));
+      }
+
+      try {
+        // Build multipart/form-data using ArrayBuffer (not Blob)
+        // Blob body in fetch is unreliable in UXP v7.x (PS v24.x)
+        const boundary = '----FormBoundary' + Date.now();
+
+        const headerStr = `--${boundary}\r\nContent-Disposition: form-data; name="library_type"\r\n\r\n${libraryType}\r\n--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${mimeType}\r\n\r\n`;
+        const footerStr = `\r\n--${boundary}--\r\n`;
+
+        const headerBytes = new Uint8Array(Array.from(headerStr).map(c => c.charCodeAt(0)));
+        const footerBytes = new Uint8Array(Array.from(footerStr).map(c => c.charCodeAt(0)));
+
+        const totalLen = headerBytes.length + fileBytes.length + footerBytes.length;
+        const bodyBytes = new Uint8Array(totalLen);
+        bodyBytes.set(headerBytes, 0);
+        bodyBytes.set(fileBytes, headerBytes.length);
+        bodyBytes.set(footerBytes, headerBytes.length + fileBytes.length);
+
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: bodyBytes.buffer
+        });
+
+        let responseData;
+        const responseText = await response.text();
+        try {
+          responseData = JSON.parse(responseText);
+        } catch (parseError) {
+          // 504 Gateway Timeout — retryable
+          if (response.status === 504 || response.status === 502 || response.status === 503) {
+            lastError = new Error(`LemonGrid upload returned non-JSON response (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+            continue;
+          }
+          throw new Error(`LemonGrid upload returned non-JSON response (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+        }
+
+        if (!response.ok) {
+          // Retryable server errors
+          if (response.status === 502 || response.status === 503 || response.status === 504) {
+            lastError = new Error(`LemonGrid upload failed (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+            continue;
+          }
+          throw new Error(`LemonGrid upload failed (HTTP ${response.status}): ${responseText.substring(0, 200)}`);
+        }
+
+        return {
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          data: responseData
+        };
+      } catch (error) {
+        lastError = error;
+        // Only retry on network errors (TypeError: Network request failed) or server errors
+        const isNetworkError = error instanceof TypeError;
+        const isServerError = error.message && (error.message.includes('504') || error.message.includes('502') || error.message.includes('503'));
+        if (!isNetworkError && !isServerError) {
+          break; // Non-retryable error, fail immediately
+        }
+        console.warn(`[Bridge] LemonGrid upload attempt ${attempt + 1} failed:`, error.message || error);
+      }
+    }
+
+    console.error('[Bridge] LemonGrid upload error after ${MAX_RETRIES + 1} attempts:', lastError);
+    throw {
+      code: 'UPLOAD_ERROR',
+      message: (lastError && lastError.message) || 'Upload failed',
+      url
+    };
   },
 
   'ps.executeShortcut': async (payload) => {

@@ -3,6 +3,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { loadPluginConfig, DEFAULT_CONFIG, type PluginConfig } from '../services/config';
+import { shouldDisplayNode, getAllowedInputs } from '../services/configLogic';
 
 interface ConfigState {
   config: PluginConfig | null;
@@ -29,39 +30,11 @@ export const useConfigStore = create<ConfigState>()(
       loadedAt: null,
 
       shouldDisplayNode: (classType: string): boolean => {
-        const { config } = get();
-
-        // If config is null or nodes array is empty, show all nodes
-        if (!config || !config.nodes || config.nodes.length === 0) {
-          console.log(`[ConfigStore] shouldDisplayNode("${classType}"): true (no config or empty nodes)`);
-          return true;
-        }
-
-        // Return true if any node.class_type matches classType
-        const result = config.nodes.some((node) => node.class_type === classType);
-        console.log(`[ConfigStore] shouldDisplayNode("${classType}"): ${result}`);
-        return result;
+        return shouldDisplayNode(get().config, classType);
       },
 
       getAllowedInputs: (classType: string): string[] | null => {
-        const { config } = get();
-
-        // If config is null or nodes array is empty, return null (all inputs)
-        if (!config || !config.nodes || config.nodes.length === 0) {
-          return null;
-        }
-
-        // Find node with matching class_type
-        const node = config.nodes.find((n) => n.class_type === classType);
-
-        // If not found, return null (all inputs)
-        if (!node) {
-          return null;
-        }
-
-        // If found and has inputs array, return it
-        // If found but no inputs property, return null (all inputs)
-        return node.inputs ?? null;
+        return getAllowedInputs(get().config, classType);
       },
 
       loadConfig: async (): Promise<void> => {
@@ -99,7 +72,7 @@ export const useConfigStore = create<ConfigState>()(
       },
     }),
     {
-      name: 'Ningleai-config',
+      name: 'LemonGrid-config',
       partialize: (state) => ({
         config: state.config,
         loadedAt: state.loadedAt,

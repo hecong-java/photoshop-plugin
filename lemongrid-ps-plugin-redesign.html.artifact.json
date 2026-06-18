@@ -1,8 +1,8 @@
 {
   "version": 1,
   "kind": "html",
-  "title": "NingleAI PS Plugin Redesign — Tech Utility",
-  "entry": "ningleai-ps-plugin-redesign.html",
+  "title": "LemonGrid PS Plugin Redesign — Tech Utility",
+  "entry": "lemongrid-ps-plugin-redesign.html",
   "renderer": "html",
   "status": "complete",
   "exports": [
@@ -13,7 +13,7 @@
   "createdAt": "2026-05-11T06:31:08.534Z",
   "updatedAt": "2026-05-11T06:31:08.554Z",
   "metadata": {
-    "identifier": "ningleai-ps-plugin-redesign",
+    "identifier": "lemongrid-ps-plugin-redesign",
     "artifactType": "text/html",
     "inferred": false
   }

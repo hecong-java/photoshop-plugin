@@ -185,6 +185,12 @@
 
 .dingtalk-icon { flex-shrink: 0; }
 
+.dingtalk-qr-container {
+  background: #ffffff;
+  padding: 16px;
+  border-radius: 6px;
+}
+
 .dingtalk-qrcode-view {
   display: flex;
   flex-direction: column;

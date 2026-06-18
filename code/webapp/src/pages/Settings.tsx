@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { ComfyUIClient, type ComfyUICapabilities } from '../services/comfyui';
-import { DASHSCOPE_MODELS } from '../services/dashscope';
+
 import { sendBridgeMessage } from '../services/upload';
 import { ensureValidToken } from '../services/lemongrid-auth';
 import { LoginModal } from '../components/LoginModal';
@@ -13,9 +13,6 @@ export const Settings = () => {
   const setComfyUIBaseUrl = useSettingsStore((state) => state.setComfyUIBaseUrl);
   const setComfyUIConnected = useSettingsStore((state) => state.setComfyUIConnected);
 
-  const dashScope = useSettingsStore((state) => state.dashScope);
-  const setDashScopeApiKey = useSettingsStore((state) => state.setDashScopeApiKey);
-  const setDashScopeModel = useSettingsStore((state) => state.setDashScopeModel);
 
   const connectionMode = useSettingsStore((state) => state.connectionMode);
   const setConnectionMode = useSettingsStore((state) => state.setConnectionMode);
@@ -322,43 +319,6 @@ export const Settings = () => {
             </div>
           </div>
         )}
-
-        {/* DashScope Config Column - always visible per D-94 */}
-        <div className="settings-card dashscope-config">
-          <div className="card-header">
-            <h2>提示词反推</h2>
-            <span className={`connection-status ${dashScope.apiKey ? 'connected' : 'disconnected'}`}>
-              {dashScope.apiKey ? '已配置' : '未配置'}
-            </span>
-          </div>
-
-          <div className="connection-form">
-            <div className="form-group">
-              <label htmlFor="dashscope-key">API Key</label>
-              <input
-                id="dashscope-key"
-                type="password"
-                value={dashScope.apiKey}
-                onChange={(e) => setDashScopeApiKey(e.target.value)}
-                placeholder="sk-..."
-                className="text-input"
-              />
-            </div>
-            <div className="form-group">
-              <label htmlFor="dashscope-model">模型</label>
-              <select
-                id="dashscope-model"
-                value={dashScope.model}
-                onChange={(e) => setDashScopeModel(e.target.value)}
-                className="text-input"
-              >
-                {DASHSCOPE_MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>{m.name}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-        </div>
 
         {/* Capabilities Matrix Column - per D-94: visible only in direct mode */}
         {connectionMode === 'direct' && (

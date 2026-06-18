@@ -42,7 +42,16 @@
       "Bash(git status *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(mv ningleai-ps-plugin-redesign.html.artifact.json lemongrid-ps-plugin-redesign.html.artifact.json)",
+      "Bash(sed -i 's/ningleai/lemongrid/g; s/NingleAI/LemonGrid/g; s/柠乐AI/LemonGrid/g' lemongrid-ps-plugin-redesign.html.artifact.json)",
+      "Bash(cat code/webapp/index.html)",
+      "Bash(cat code/webapp/public/index.html)",
+      "Skill(gsd-audit-milestone)",
+      "Bash(scp *)",
+      "Bash(ssh-keygen -R 123.207.74.28)",
+      "Bash(ssh-keyscan -H 123.207.74.28)",
+      "Skill(gsd-do)"
     ]
   }
 }

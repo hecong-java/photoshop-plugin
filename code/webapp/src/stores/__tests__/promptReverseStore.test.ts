@@ -3,21 +3,20 @@ import { usePromptReverseStore } from '../promptReverseStore';
 
 describe('promptReverseStore', () => {
   beforeEach(() => {
-    // Reset store state to initial values
     usePromptReverseStore.getState().reset();
   });
 
-  it('Test 1: Initial state has step closed, imageBase64 null, imagePreviewUrl null, selectedTemplate null, result null, error null', () => {
+  it('initial state has step closed, null fields, default prompt', () => {
     const state = usePromptReverseStore.getState();
     expect(state.step).toBe('closed');
     expect(state.imageBase64).toBeNull();
     expect(state.imagePreviewUrl).toBeNull();
-    expect(state.selectedTemplate).toBeNull();
+    expect(state.customPrompt).toBe('');
     expect(state.result).toBeNull();
     expect(state.error).toBeNull();
   });
 
-  it('Test 2: startFlow(base64, previewUrl) sets step to preview, imageBase64 and imagePreviewUrl to provided values', () => {
+  it('startFlow sets step to preview with image data', () => {
     usePromptReverseStore.getState().startFlow('base64data', 'https://example.com/img.png');
 
     const state = usePromptReverseStore.getState();
@@ -26,25 +25,34 @@ describe('promptReverseStore', () => {
     expect(state.imagePreviewUrl).toBe('https://example.com/img.png');
   });
 
-  it('Test 3: selectTemplate("detailed") sets selectedTemplate to "detailed" and step to "template"', () => {
-    usePromptReverseStore.getState().startFlow('base64', 'url');
-    usePromptReverseStore.getState().selectTemplate('detailed');
+  it('startFlow with assetId stores the assetId', () => {
+    usePromptReverseStore.getState().startFlow('base64', 'url', 'asset-123');
 
     const state = usePromptReverseStore.getState();
-    expect(state.selectedTemplate).toBe('detailed');
-    expect(state.step).toBe('template');
+    expect(state.assetId).toBe('asset-123');
   });
 
-  it('Test 4: setLoading() sets step to "loading"', () => {
+  it('goToPrompt sets step to prompt', () => {
     usePromptReverseStore.getState().startFlow('base64', 'url');
-    usePromptReverseStore.getState().selectTemplate('detailed');
+    usePromptReverseStore.getState().goToPrompt();
+
+    expect(usePromptReverseStore.getState().step).toBe('prompt');
+  });
+
+  it('setCustomPrompt updates the prompt text', () => {
+    usePromptReverseStore.getState().setCustomPrompt('custom prompt text');
+
+    expect(usePromptReverseStore.getState().customPrompt).toBe('custom prompt text');
+  });
+
+  it('setLoading sets step to loading', () => {
+    usePromptReverseStore.getState().startFlow('base64', 'url');
     usePromptReverseStore.getState().setLoading();
 
-    const state = usePromptReverseStore.getState();
-    expect(state.step).toBe('loading');
+    expect(usePromptReverseStore.getState().step).toBe('loading');
   });
 
-  it('Test 5: setResult("some result text") sets result to provided text and step to "result"', () => {
+  it('setResult sets result and step to result', () => {
     usePromptReverseStore.getState().startFlow('base64', 'url');
     usePromptReverseStore.getState().setResult('some result text');
 
@@ -53,7 +61,7 @@ describe('promptReverseStore', () => {
     expect(state.step).toBe('result');
   });
 
-  it('Test 6: setError("error msg") sets error to "error msg" and step to "result"', () => {
+  it('setError sets error and step to result', () => {
     usePromptReverseStore.getState().startFlow('base64', 'url');
     usePromptReverseStore.getState().setError('error msg');
 
@@ -62,9 +70,9 @@ describe('promptReverseStore', () => {
     expect(state.step).toBe('result');
   });
 
-  it('Test 7: reset() returns all state to initial values', () => {
+  it('reset returns all state to initial values', () => {
     usePromptReverseStore.getState().startFlow('base64', 'url');
-    usePromptReverseStore.getState().selectTemplate('detailed');
+    usePromptReverseStore.getState().setCustomPrompt('changed');
     usePromptReverseStore.getState().setResult('result text');
 
     usePromptReverseStore.getState().reset();
@@ -73,46 +81,31 @@ describe('promptReverseStore', () => {
     expect(state.step).toBe('closed');
     expect(state.imageBase64).toBeNull();
     expect(state.imagePreviewUrl).toBeNull();
-    expect(state.selectedTemplate).toBeNull();
+    expect(state.customPrompt).toBe('');
     expect(state.result).toBeNull();
     expect(state.error).toBeNull();
     expect(state.abortController).toBeNull();
   });
 
-  it('Test 8: setAbortController stores an AbortController reference', () => {
+  it('setAbortController stores an AbortController reference', () => {
     const controller = new AbortController();
     usePromptReverseStore.getState().setAbortController(controller);
 
-    const state = usePromptReverseStore.getState();
-    expect(state.abortController).toBe(controller);
+    expect(usePromptReverseStore.getState().abortController).toBe(controller);
   });
 
-  it('Test 9: When startFlow is called while step is "loading", the existing abortController is aborted first', () => {
+  it('startFlow while loading aborts existing controller', () => {
     const controller = new AbortController();
     const abortSpy = vi.spyOn(controller, 'abort');
 
-    // Set up loading state with an abort controller
     usePromptReverseStore.getState().startFlow('base64-1', 'url-1');
-    usePromptReverseStore.getState().selectTemplate('detailed');
     usePromptReverseStore.getState().setAbortController(controller);
     usePromptReverseStore.getState().setLoading();
 
-    // Start a new flow while loading
     usePromptReverseStore.getState().startFlow('base64-2', 'url-2');
 
     expect(abortSpy).toHaveBeenCalled();
-    const state = usePromptReverseStore.getState();
-    expect(state.step).toBe('preview');
-    expect(state.imageBase64).toBe('base64-2');
-  });
-
-  it('Test 10: getActiveTemplate returns PROMPT_TEMPLATES entry matching selectedTemplate id', () => {
-    usePromptReverseStore.getState().startFlow('base64', 'url');
-    usePromptReverseStore.getState().selectTemplate('detailed');
-
-    const template = usePromptReverseStore.getState().getActiveTemplate();
-    expect(template).toBeDefined();
-    expect(template!.id).toBe('detailed');
-    expect(template!.name).toBe('详细描述');
+    expect(usePromptReverseStore.getState().step).toBe('preview');
+    expect(usePromptReverseStore.getState().imageBase64).toBe('base64-2');
   });
 });

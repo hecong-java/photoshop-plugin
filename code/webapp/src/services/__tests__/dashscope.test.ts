@@ -95,13 +95,13 @@ describe('dashscope service', () => {
       const [url, options, timeout] = mockedBridgeFetch.mock.calls[0];
       expect(url).toBe(DASHSCOPE_BASE_URL);
       expect(timeout).toBe(60000);
-      expect(options.method).toBe('POST');
+      expect(options!.method).toBe('POST');
 
-      const headers = options.headers as Record<string, string>;
+      const headers = options!.headers as Record<string, string>;
       expect(headers['Content-Type']).toBe('application/json');
       expect(headers['Authorization']).toBe('Bearer test-key');
 
-      const body = JSON.parse(options.body as string);
+      const body = JSON.parse(options!.body as string);
       expect(body.model).toBe('qwen-vl-plus');
       expect(body.messages).toHaveLength(1);
       expect(body.messages[0].role).toBe('user');

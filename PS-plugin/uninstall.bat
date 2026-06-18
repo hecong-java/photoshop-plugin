@@ -2,11 +2,11 @@
 setlocal enabledelayedexpansion
 
 echo ====================================
-echo   Uninstall NingleAI Photoshop Plugin
+echo   Uninstall LemonGrid Photoshop Plugin
 echo ====================================
 echo.
 
-set "PLUGIN_NAME=ningleai"
+set "PLUGIN_NAME=lemongrid"
 set "DELETED=0"
 
 REM Get Photoshop plugin path from registry

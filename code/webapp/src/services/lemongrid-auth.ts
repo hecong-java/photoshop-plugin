@@ -1,6 +1,7 @@
 // LemonGrid authentication and API proxy service
 
 import { sendBridgeMessage, isUXPWebView, hasBridgeTransport } from './upload';
+import { shapeBridgeResponse } from './bridgeTransport';
 import { useLemonGridStore } from '../stores/lemongridStore';
 
 interface LemonGridLoginResponse {
@@ -17,6 +18,8 @@ interface LemonGridLoginResponse {
 
 interface LemonGridRefreshResponse {
   access_token: string;
+  refresh_token?: string;
+  refresh_expires_in?: number;
   token_type: string;
   expires_in: number;
 }
@@ -33,6 +36,8 @@ interface DingTalkPollResponse {
   status: 'pending' | 'completed' | 'error';
   data?: {
     access_token: string;
+    refresh_token?: string;
+    refresh_expires_in?: number;
     token_type: string;
     expires_in: number;
     user: {
@@ -46,8 +51,8 @@ interface DingTalkPollResponse {
 }
 
 // AES-GCM encryption constants per D-78
-const ENCRYPTION_SALT = new TextEncoder().encode('Ningleai-LemonGrid-Encrypt-Salt');
-const ENCRYPTION_KEY_MATERIAL = 'Ningleai-LG-DeviceKey-v1';
+const ENCRYPTION_SALT = new TextEncoder().encode('LemonGrid-Encrypt-Salt-v2');
+const ENCRYPTION_KEY_MATERIAL = 'LemonGrid-DeviceKey-v2';
 
 // Check if Web Crypto API is available (requires secure context)
 const hasSubtleCrypto = typeof crypto !== 'undefined' && !!crypto.subtle;
@@ -180,102 +185,73 @@ export async function lemongridFetch(
     // Shape response into Response-like object
     return shapeBridgeResponse(result, url);
   } else {
-    // Browser mode - add Authorization header manually from store
-    const lgState = useLemonGridStore.getState();
-    const headers = new Headers(options.headers);
-    if (lgState.accessToken) {
-      headers.set('Authorization', `Bearer ${lgState.accessToken}`);
-    }
+    // Browser mode - add Authorization header and handle 401 auto-retry
+    const response = await doBrowserFetch(url, options, timeout);
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-    try {
-      const response = await fetch(url, {
-        ...options,
-        headers,
-        signal: controller.signal,
-      });
-      return response;
-    } finally {
-      clearTimeout(timeoutId);
+    if (response.status === 401) {
+      const refreshed = await tryRefreshOn401();
+      if (refreshed) {
+        return doBrowserFetch(url, options, timeout);
+      }
     }
+    return response;
+  }
+}
+
+async function doBrowserFetch(
+  url: string,
+  options: RequestInit,
+  timeout: number
+): Promise<Response> {
+  const lgState = useLemonGridStore.getState();
+  const headers = new Headers(options.headers);
+  if (lgState.accessToken) {
+    headers.set('Authorization', `Bearer ${lgState.accessToken}`);
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  try {
+    return await fetch(url, { ...options, headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+let isRefreshing = false;
+
+async function tryRefreshOn401(): Promise<boolean> {
+  if (isRefreshing) return false;
+
+  const lgState = useLemonGridStore.getState();
+  if (!lgState.refreshToken || !lgState.serverUrl) return false;
+
+  isRefreshing = true;
+  try {
+    const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
+    useLemonGridStore.getState().setAuth({
+      accessToken: refreshResult.access_token,
+      refreshToken: refreshResult.refresh_token || lgState.refreshToken,
+      expiresIn: refreshResult.expires_in,
+      refreshExpiresIn: refreshResult.refresh_expires_in,
+      username: lgState.username || '',
+      role: lgState.userRole || '',
+    });
+    await syncAuthToBridge();
+    startTokenRefreshTimer();
+    return true;
+  } catch {
+    return false;
+  } finally {
+    isRefreshing = false;
   }
 }
 
 /**
  * Shape Bridge response data into a Response-like object.
- * Same pattern as bridgeFetch in upload.ts.
+ * Re-exported from bridgeTransport so this file's call sites can keep using
+ * `shapeBridgeResponse` directly. The local copy has been removed.
  */
-function shapeBridgeResponse(
-  result: {
-    ok: boolean;
-    status: number;
-    statusText: string;
-    headers: Record<string, string>;
-    data: unknown;
-  },
-  url: string
-): Response {
-  const isBinaryPayload = (
-    value: unknown
-  ): value is { __base64__: true; data: string; contentType?: string } => {
-    if (!value || typeof value !== 'object') return false;
-    const candidate = value as Record<string, unknown>;
-    return candidate.__base64__ === true && typeof candidate.data === 'string';
-  };
-
-  return {
-    ok: result.ok,
-    status: result.status,
-    statusText: result.statusText,
-    headers: new Headers(result.headers),
-    json: async () => {
-      if (isBinaryPayload(result.data)) {
-        throw new Error('Response is binary, not JSON');
-      }
-      return result.data as Record<string, unknown>;
-    },
-    text: async () => {
-      if (typeof result.data === 'string') return result.data;
-      return JSON.stringify(result.data);
-    },
-    arrayBuffer: async () => {
-      if (isBinaryPayload(result.data)) {
-        const base64 = result.data.data;
-        const binaryString = atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        return bytes.buffer;
-      }
-      const text = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-      return new TextEncoder().encode(text).buffer;
-    },
-    blob: async () => {
-      if (isBinaryPayload(result.data)) {
-        const base64 = result.data.data;
-        const contentType = result.data.contentType || 'application/octet-stream';
-        const binaryString = atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        return new Blob([bytes], { type: contentType });
-      }
-      const text = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-      return new Blob([text], { type: 'application/json' });
-    },
-    clone: function () {
-      return this as Response;
-    },
-    body: null,
-    bodyUsed: false,
-    redirected: false,
-    type: 'basic' as ResponseType,
-    url: url,
-  } as Response;
-}
 
 /**
  * Login to LemonGrid.
@@ -435,7 +411,9 @@ export async function loginWithDingTalk(
 
   store.setAuth({
     accessToken: pollData.access_token,
+    refreshToken: pollData.refresh_token,
     expiresIn: pollData.expires_in,
+    refreshExpiresIn: pollData.refresh_expires_in,
     username: displayName,
     role: pollData.user.role,
   }, 'dingtalk');
@@ -474,6 +452,129 @@ export async function syncAuthToBridge(): Promise<void> {
 }
 
 /**
+ * Validate stored auth on app startup.
+ * If access token is still valid, just restore the refresh timer.
+ * If expired but refresh token is valid, attempt refresh.
+ * If refresh also fails or is expired, mark disconnected.
+ */
+export async function validateStoredAuth(): Promise<void> {
+  const lgState = useLemonGridStore.getState();
+  console.log('[Auth] validateStoredAuth:', {
+    hasAccessToken: !!lgState.accessToken,
+    serverUrl: lgState.serverUrl,
+    tokenExpiresAt: lgState.tokenExpiresAt,
+    refreshTokenExpiresAt: lgState.refreshTokenExpiresAt,
+    hasRefreshToken: !!lgState.refreshToken,
+    isConnected: lgState.isConnected,
+    now: Date.now(),
+    authProvider: lgState.authProvider,
+  });
+
+  if (!lgState.accessToken || !lgState.serverUrl) {
+    console.log('[Auth] validateStoredAuth: no token or serverUrl, skipping');
+    return;
+  }
+
+  // Access token still valid — restore refresh timer and connected state
+  if (lgState.tokenExpiresAt && lgState.tokenExpiresAt > Date.now() + 120000) {
+    console.log('[Auth] validateStoredAuth: access token still valid, restoring connection');
+    startTokenRefreshTimer();
+    if (!lgState.isConnected) {
+      useLemonGridStore.getState().setConnected(true);
+    }
+    // Re-sync tokens to Bridge (may have been lost on restart)
+    try { await syncAuthToBridge(); } catch { /* Bridge may not be ready yet */ }
+    return;
+  }
+
+  // Access token expired — try refresh if refresh token is still valid
+  const refreshStillValid = !lgState.refreshTokenExpiresAt || lgState.refreshTokenExpiresAt > Date.now();
+  console.log('[Auth] validateStoredAuth: access token expired, refreshStillValid:', refreshStillValid);
+  if (lgState.refreshToken && refreshStillValid) {
+    try {
+      console.log('[Auth] validateStoredAuth: attempting token refresh...');
+      const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
+      console.log('[Auth] validateStoredAuth: refresh succeeded');
+      useLemonGridStore.getState().setAuth({
+        accessToken: refreshResult.access_token,
+        refreshToken: refreshResult.refresh_token || lgState.refreshToken,
+        expiresIn: refreshResult.expires_in,
+        refreshExpiresIn: refreshResult.refresh_expires_in,
+        username: lgState.username || '',
+        role: lgState.userRole || '',
+      });
+      try { await syncAuthToBridge(); } catch { /* Bridge may not be ready yet */ }
+      return;
+    } catch (err) {
+      console.error('[Auth] validateStoredAuth: refresh failed:', err);
+    }
+  }
+
+  // All tokens expired — clear auth so UI shows login modal
+  console.log('[Auth] validateStoredAuth: all tokens expired, marking disconnected');
+  useLemonGridStore.getState().setConnected(false);
+}
+
+// Proactive token refresh timer
+let refreshTimerId: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Start a proactive token refresh timer.
+ * Refreshes 5 minutes before token expiry to avoid interrupting the user.
+ */
+export function startTokenRefreshTimer(): void {
+  stopTokenRefreshTimer();
+
+  const lgState = useLemonGridStore.getState();
+  if (!lgState.tokenExpiresAt || !lgState.refreshToken || !lgState.serverUrl) return;
+
+  // Refresh 5 minutes before expiry
+  const refreshAt = lgState.tokenExpiresAt - 5 * 60 * 1000;
+  const delay = refreshAt - Date.now();
+
+  if (delay <= 0) {
+    // Already within 5 min of expiry or already expired — refresh immediately
+    doProactiveRefresh();
+    return;
+  }
+
+  refreshTimerId = setTimeout(doProactiveRefresh, delay);
+}
+
+export function stopTokenRefreshTimer(): void {
+  if (refreshTimerId !== null) {
+    clearTimeout(refreshTimerId);
+    refreshTimerId = null;
+  }
+}
+
+async function doProactiveRefresh(): Promise<void> {
+  const lgState = useLemonGridStore.getState();
+  if (!lgState.refreshToken || !lgState.serverUrl) {
+    stopTokenRefreshTimer();
+    return;
+  }
+
+  try {
+    const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
+    useLemonGridStore.getState().setAuth({
+      accessToken: refreshResult.access_token,
+      refreshToken: refreshResult.refresh_token || lgState.refreshToken,
+      expiresIn: refreshResult.expires_in,
+      refreshExpiresIn: refreshResult.refresh_expires_in,
+      username: lgState.username || '',
+      role: lgState.userRole || '',
+    });
+    await syncAuthToBridge();
+    // Restart timer for the new token
+    startTokenRefreshTimer();
+  } catch {
+    stopTokenRefreshTimer();
+    // Next API call will hit ensureValidToken() which handles the failure
+  }
+}
+
+/**
  * Ensure we have a valid token. Per D-42, D-86, D-72:
  * 1. If token is still valid (>2 min remaining), return it.
  * 2. Try refreshAccessToken first.
@@ -494,24 +595,29 @@ export async function ensureValidToken(): Promise<string> {
 
   // Try refresh token first (per D-79)
   if (lgState.refreshToken && lgState.serverUrl) {
-    try {
-      const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
+    // If refresh token itself is expired, skip refresh attempt
+    const refreshStillValid = !lgState.refreshTokenExpiresAt || lgState.refreshTokenExpiresAt > Date.now();
+    if (refreshStillValid) {
+      try {
+        const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
 
-      // Update store with new token
-      useLemonGridStore.getState().setAuth({
-        accessToken: refreshResult.access_token,
-        refreshToken: lgState.refreshToken, // Keep existing refresh token
-        expiresIn: refreshResult.expires_in,
-        username: lgState.username || '',
-        role: lgState.userRole || '',
-      });
+        // Update store with new token
+        useLemonGridStore.getState().setAuth({
+          accessToken: refreshResult.access_token,
+          refreshToken: refreshResult.refresh_token || lgState.refreshToken,
+          expiresIn: refreshResult.expires_in,
+          refreshExpiresIn: refreshResult.refresh_expires_in,
+          username: lgState.username || '',
+          role: lgState.userRole || '',
+        });
 
-      // Sync to Bridge
-      await syncAuthToBridge();
+        // Sync to Bridge
+        await syncAuthToBridge();
 
-      return refreshResult.access_token;
-    } catch {
-      // Refresh failed, try re-login if possible
+        return refreshResult.access_token;
+      } catch {
+        // Refresh failed, try re-login if possible
+      }
     }
   }
 

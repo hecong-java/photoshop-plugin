@@ -17,7 +17,7 @@ interface DingTalkQRViewProps {
 export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRViewProps) => {
   const [phase, setPhase] = useState<QRPhase>('loading');
   const [authUrl, setAuthUrl] = useState('');
-  const [authState, setAuthState] = useState('');
+  const [, setAuthState] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -225,7 +225,7 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
   if (authUrl) {
     return (
       <div className="dingtalk-qr-container" style={{ textAlign: 'center', padding: '8px 0' }}>
-        <QRCodeSVG value={authUrl} size={200} level="M" />
+        <QRCodeSVG value={authUrl} size={256} level="H" bgColor="#ffffff" fgColor="#1a1a22" />
         <div style={{
           fontSize: '12px',
           color: 'var(--color-text-secondary, #999)',

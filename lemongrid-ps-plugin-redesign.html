@@ -4,7 +4,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NingleAI — PS Plugin Redesign Prototype</title>
+<title>LemonGrid — PS Plugin Redesign Prototype</title>
 <style>
 :root {
   --bg:      oklch(15% 0.015 250);
@@ -186,7 +186,7 @@ textarea.text-input { resize: vertical; min-height: 60px; line-height: 1.5; }
         <div class="setting-section"><div class="setting-header"><h3>连接模式</h3></div><div class="setting-body"><div class="mode-toggle"><button class="mode-opt active" onclick="switchMode(this)">直连 ComfyUI</button><button class="mode-opt" onclick="switchMode(this)">集群 LemonGrid</button></div></div></div>
         <div class="setting-section"><div class="setting-header"><h3>ComfyUI 连接</h3><span class="status-pill on">connected</span></div><div class="setting-body"><div class="field"><div class="field-label">服务器地址</div><input type="text" class="text-input" value="http://192.168.0.105:8188" placeholder="http://localhost:8188"></div><button class="btn-primary" style="background:var(--surface2);color:var(--fg);border:1px solid var(--border)">测试连接</button><div><div class="section-label" style="margin-bottom:var(--sp-2)">能力检测</div><div class="cap-grid"><div class="cap-item"><span class="cap-dot ok"></span>节点信息</div><div class="cap-item"><span class="cap-dot ok"></span>列出工作流</div><div class="cap-item"><span class="cap-dot ok"></span>读取工作流</div><div class="cap-item"><span class="cap-dot ok"></span>生成图像</div><div class="cap-item"><span class="cap-dot ok"></span>历史记录</div><div class="cap-item"><span class="cap-dot ok"></span>查看图片</div><div class="cap-item"><span class="cap-dot ok"></span>上传图片</div><div class="cap-item"><span class="cap-dot no"></span>WebSocket</div></div></div></div></div>
         <div class="setting-section"><div class="setting-header"><h3>提示词反推</h3><span class="status-pill on">configured</span></div><div class="setting-body"><div class="field"><div class="field-label">API Key</div><input type="password" class="text-input" value="sk-xxxx...xxxx" placeholder="sk-..."></div><div class="field"><div class="field-label">模型</div><select class="workflow-select"><option>qwen-vl-max-latest</option><option>qwen-vl-plus</option></select></div></div></div>
-        <div style="text-align:center;padding:var(--sp-4) 0;color:var(--fg3);font-size:11px;font-family:var(--font-mono)">NingleAI v1.2.0 &middot; PS Plugin</div>
+        <div style="text-align:center;padding:var(--sp-4) 0;color:var(--fg3);font-size:11px;font-family:var(--font-mono)">LemonGrid v1.2.0 &middot; PS Plugin</div>
       </div>
     </div>
   </div>

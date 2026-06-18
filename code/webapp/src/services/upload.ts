@@ -1,5 +1,6 @@
 // Bridge communication and upload service
 
+import { isBridgeBinaryPayload, shapeBridgeResponse, type BridgeBinaryPayload } from './bridgeTransport';
 
 export interface BridgeMessage {
   uuid: string;
@@ -15,11 +16,9 @@ export interface BridgeResponse {
   code?: string;
 }
 
-interface BridgeBinaryPayload {
-  __base64__: true;
-  data: string;
-  contentType?: string;
-}
+// Re-export for callers that imported it from here
+export type { BridgeBinaryPayload };
+export { isBridgeBinaryPayload };
 
 interface UXPHostBridge {
   postMessage: (message: unknown) => void;
@@ -29,12 +28,6 @@ declare global {
   interface Window {
     uxpHost?: UXPHostBridge;
   }
-}
-
-function isBridgeBinaryPayload(value: unknown): value is BridgeBinaryPayload {
-  if (!value || typeof value !== 'object') return false;
-  const candidate = value as Record<string, unknown>;
-  return candidate.__base64__ === true && typeof candidate.data === 'string';
 }
 
 // Simple UUID generator for browser (crypto.getRandomValues)
@@ -84,8 +77,9 @@ export async function sendBridgeMessage(action: string, payload?: unknown): Prom
   const promise = new Promise((resolve, reject) => {
     pendingRequests.set(uuid, { resolve, reject });
     
-    // Timeout: 90s for upload actions, 30s for others
-    const timeoutMs = action === 'comfyui.uploadImage' ? 90000 : 30000;
+    // Timeout: 120s for upload actions (retries need more time), 30s for others
+    const isUploadAction = action === 'comfyui.uploadImage' || action === 'lemongrid.uploadAsset';
+    const timeoutMs = isUploadAction ? 120000 : 30000;
     const timeout = setTimeout(() => {
       pendingRequests.delete(uuid);
       reject(new Error(`Bridge timeout for action: ${action}`));
@@ -139,7 +133,7 @@ export async function bridgeFetch(
 ): Promise<Response> {
   const method = options.method || 'GET';
   const headers: Record<string, string> = {};
-  
+
   if (options.headers) {
     const headersObj = options.headers as Record<string, string>;
     for (const [key, value] of Object.entries(headersObj)) {
@@ -154,71 +148,9 @@ export async function bridgeFetch(
     body: options.body as string | undefined,
     timeout,
     retryOnAbort: bridgeOptions?.retryOnAbort ?? true
-  }) as {
-    ok: boolean;
-    status: number;
-    statusText: string;
-    headers: Record<string, string>;
-    data: unknown;
-  };
+  });
 
-  // Sanitize headers: strip non-ISO-8859-1 characters (e.g. Chinese locale in Last-Modified)
-  // The Headers constructor rejects any string with code points outside ISO-8859-1 range.
-  const safeHeaders: Record<string, string> = {};
-  for (const [key, value] of Object.entries(result.headers)) {
-    safeHeaders[key] = value.replace(/[^\x20-\x7E\xA0-\xFF]/g, '');
-  }
-
-  // Convert bridge response back to fetch Response object
-  return {
-    ok: result.ok,
-    status: result.status,
-    statusText: result.statusText,
-    headers: new Headers(safeHeaders),
-    json: async () => {
-      if (isBridgeBinaryPayload(result.data)) {
-        throw new Error('Response is binary, not JSON');
-      }
-      return result.data as Record<string, unknown>;
-    },
-    text: async () => {
-      if (typeof result.data === 'string') return result.data;
-      return JSON.stringify(result.data);
-    },
-    arrayBuffer: async () => {
-      if (isBridgeBinaryPayload(result.data)) {
-        const base64 = result.data.data;
-        const binaryString = atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        return bytes.buffer;
-      }
-      const text = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-      return new TextEncoder().encode(text).buffer;
-    },
-    blob: async () => {
-      if (isBridgeBinaryPayload(result.data)) {
-        const base64 = result.data.data;
-        const contentType = result.data.contentType || 'application/octet-stream';
-        const binaryString = atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        return new Blob([bytes], { type: contentType });
-      }
-      const text = typeof result.data === 'string' ? result.data : JSON.stringify(result.data);
-      return new Blob([text], { type: 'application/json' });
-    },
-    clone: function() { return this as Response; },
-    body: null,
-    bodyUsed: false,
-    redirected: false,
-    type: 'basic' as ResponseType,
-    url: url
-  } as Response;
+  return shapeBridgeResponse(result as Parameters<typeof shapeBridgeResponse>[0], url);
 }
 
 // Export active PS layer as PNG

@@ -40,6 +40,7 @@ export interface ParamSchemaField {
   default: unknown;
   required: boolean;
   hidden?: boolean;
+  group?: string;
   options?: Array<{ label: string; value: unknown }>;
   min?: number;
   max?: number;
@@ -175,7 +176,7 @@ function mapApiType(apiType: string): ParamSchemaField['type'] {
 
 /** Check if a raw field is marked invisible */
 function isHidden(raw: RawParamSchemaField): boolean {
-  return raw.visible === false || raw.visible === 0 || raw.visible === 'false' || raw.visible === 'False';
+  return raw.visible === false;
 }
 
 /**
@@ -217,6 +218,7 @@ function normalizeParamField(raw: RawParamSchemaField): ParamSchemaField {
     step: raw.step ?? undefined,
     description: raw.description ?? undefined,
     source_class_type: raw.source_class_type ?? undefined,
+    group: raw.group || undefined,
   };
 }
 
@@ -297,7 +299,7 @@ export class LemonGridClient {
   /**
    * Internal: authenticated fetch with auto token refresh.
    */
-  private async fetchWithAuth(path: string, options?: RequestInit): Promise<Response> {
+  private async fetchWithAuth(path: string, options?: RequestInit, timeout?: number): Promise<Response> {
     await ensureValidToken();
     const token = useLemonGridStore.getState().accessToken;
     const url = `${this.serverUrl}${path}`;
@@ -307,20 +309,20 @@ export class LemonGridClient {
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
-    return lemongridFetch(url, { ...options, headers });
+    return lemongridFetch(url, { ...options, headers }, timeout);
   }
 
   /**
    * Internal: fetch JSON with auth, throws on non-ok response.
    */
-  private async fetchJson<T>(path: string, options?: RequestInit): Promise<T> {
+  private async fetchJson<T>(path: string, options?: RequestInit, timeout?: number): Promise<T> {
     const response = await this.fetchWithAuth(path, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
         ...(options?.headers as Record<string, string> || {}),
       },
-    });
+    }, timeout);
     if (!response.ok) {
       const errorBody = await response.text();
       throw new Error(`LemonGrid API error ${response.status}: ${errorBody.substring(0, 200)}`);
@@ -398,7 +400,7 @@ export class LemonGridClient {
         template_version: templateVersion,
         parameters: params,
       }),
-    });
+    }, 300000);
   }
 
   /**
@@ -451,10 +453,40 @@ export class LemonGridClient {
   // -------------------------------------------------------------------------
 
   /**
+   * Get the thumbnail URL for an asset. Returns a URL string that the browser
+   * can load directly via <img src> with auth cookies or token in query params.
+   * The LemonGrid backend serves pre-generated resized thumbnails at this endpoint.
+   * NOTE: This URL requires Bearer auth. For <img> tags that cannot send auth headers,
+   * use getThumbnailUrlWithToken() instead, or download the thumbnail blob manually.
+   */
+  getThumbnailUrl(assetId: string): string {
+    return `${this.serverUrl}/api/v1/assets/library/${assetId}/thumbnail`;
+  }
+
+  /**
+   * Get thumbnail URL with access_token as query parameter.
+   * This allows <img> tags to load thumbnails without custom auth headers.
+   * Falls back to the full download URL if no token is available.
+   */
+  getThumbnailUrlWithToken(assetId: string): string {
+    const token = useLemonGridStore.getState().accessToken;
+    const base = `${this.serverUrl}/api/v1/assets/library/${assetId}/thumbnail`;
+    return token ? `${base}?token=${encodeURIComponent(token)}` : base;
+  }
+
+  /**
+   * Get the full-resolution download URL for an asset (requires Bearer auth).
+   */
+  getDownloadUrl(assetId: string): string {
+    return `${this.serverUrl}/api/v1/assets/library/${assetId}/download`;
+  }
+
+  /**
    * Upload an asset (image) to LemonGrid.
    * Per D-18: Same image input UI, only upload target changes.
    * Uses sendBridgeMessage('lemongrid.uploadAsset') in UXP mode,
    * or direct multipart fetch in browser mode.
+   * Single attempt — main.js handler already retries with exponential backoff.
    */
   async uploadAsset(
     file: File,
@@ -464,7 +496,6 @@ export class LemonGridClient {
     const token = useLemonGridStore.getState().accessToken;
 
     if (isUXPWebView()) {
-      // Use Bridge proxy for upload
       const base64Data = await fileToBase64(file);
       const uploadUrl = `${this.serverUrl}/api/v1/assets/library/upload`;
       const result = await sendBridgeMessage('lemongrid.uploadAsset', {
@@ -480,7 +511,6 @@ export class LemonGridClient {
       }
       return result.data;
     } else {
-      // Browser mode: direct multipart fetch
       const formData = new FormData();
       formData.append('file', file);
       formData.append('library_type', libraryType);

@@ -4,6 +4,7 @@
 import { create } from 'zustand';
 import * as presetService from '../services/preset';
 import type { PresetMeta, PresetFile } from '../types/preset';
+import { hasUnsavedChanges } from '../services/presetLogic';
 
 interface PresetState {
   presets: PresetMeta[];
@@ -64,35 +65,12 @@ export const usePresetStore = create<PresetState>()((set, get) => ({
 
   hasUnsavedChanges: (currentInputValues: Record<string, string | number | boolean>, currentImageFilenames: Record<string, string>): boolean => {
     const { lastAppliedInputValues, lastAppliedImageFilenames } = get();
-
-    // No baseline to compare against
-    if (!lastAppliedInputValues && !lastAppliedImageFilenames) {
-      return false;
-    }
-
-    // Compare inputValues
-    const allInputKeys = new Set([
-      ...Object.keys(lastAppliedInputValues || {}),
-      ...Object.keys(currentInputValues),
-    ]);
-    for (const key of allInputKeys) {
-      const applied = (lastAppliedInputValues as Record<string, unknown>)?.[key];
-      const current = currentInputValues[key];
-      if (applied !== current) return true;
-    }
-
-    // Compare imageFilenames
-    const allImageKeys = new Set([
-      ...Object.keys(lastAppliedImageFilenames || {}),
-      ...Object.keys(currentImageFilenames),
-    ]);
-    for (const key of allImageKeys) {
-      const applied = (lastAppliedImageFilenames as Record<string, unknown>)?.[key];
-      const current = currentImageFilenames[key];
-      if (applied !== current) return true;
-    }
-
-    return false;
+    return hasUnsavedChanges(
+      lastAppliedInputValues,
+      lastAppliedImageFilenames,
+      currentInputValues,
+      currentImageFilenames
+    );
   },
 
   clearDirtyState: (): void => {

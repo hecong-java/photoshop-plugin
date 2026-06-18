@@ -1,6 +1,6 @@
 {
-  "id": "ningleai",
-  "name": "柠乐AI",
+  "id": "lemongrid",
+  "name": "LemonGrid",
   "version": "1.0.0",
   "main": "index.html",
   "manifestVersion": 5,
@@ -13,7 +13,7 @@
       "type": "panel",
       "id": "index",
       "label": {
-        "default": "柠乐AI"
+        "default": "LemonGrid"
       },
       "minimumSize": {
         "width": 430,

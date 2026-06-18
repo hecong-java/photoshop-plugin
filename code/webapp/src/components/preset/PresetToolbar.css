@@ -1,6 +1,7 @@
 .preset-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 8px 0;
   margin-bottom: 8px;
@@ -94,4 +95,51 @@
 .preset-delete-btn:hover:not(:disabled) {
   background: rgba(245, 101, 101, 0.15);
   color: #f56565;
+}
+
+/* Preset operation error notice */
+.preset-error-notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  background: rgba(245, 101, 101, 0.1);
+  border: 1px solid rgba(245, 101, 101, 0.3);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #f56565;
+  animation: preset-error-fade-in 0.2s ease;
+}
+
+@keyframes preset-error-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.preset-error-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.preset-error-text {
+  flex: 1;
+  word-break: break-word;
+}
+
+.preset-error-dismiss {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: #f56565;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 4px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.preset-error-dismiss:hover {
+  opacity: 1;
 }

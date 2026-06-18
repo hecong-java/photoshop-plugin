@@ -3,13 +3,7 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-04-17T01:39:59.384Z"
-progress:
-  total_phases: 6
-  completed_phases: 2
-  total_plans: 15
-  completed_plans: 13
-  percent: 87
+last_updated: "2026-06-01T03:55:29.217Z"
 ---
 
 # STATE: Photoshop ComfyUI Plugin

@@ -1,26 +1,26 @@
 import { create } from 'zustand';
-import { PROMPT_TEMPLATES, type PromptTemplate } from '../services/dashscope';
+import { getDefaultPrompt } from '../services/clusterPromptReverseService';
 
-export type FlowStep = 'closed' | 'preview' | 'template' | 'loading' | 'result';
+export type FlowStep = 'closed' | 'preview' | 'prompt' | 'loading' | 'result';
 
 interface PromptReverseState {
   step: FlowStep;
   imageBase64: string | null;
   imagePreviewUrl: string | null;
   assetId: string | null;
-  selectedTemplate: string | null;
+  customPrompt: string;
   result: string | null;
   error: string | null;
   abortController: AbortController | null;
 
-  startFlow: (imageBase64: string, imagePreviewUrl: string, assetId?: string) => void;
-  selectTemplate: (templateId: string) => void;
+  startFlow: (imageBase64: string | null, imagePreviewUrl: string, assetId?: string) => void;
+  goToPrompt: () => void;
+  setCustomPrompt: (prompt: string) => void;
   setLoading: () => void;
   setResult: (result: string) => void;
   setError: (error: string) => void;
   reset: () => void;
   setAbortController: (controller: AbortController | null) => void;
-  getActiveTemplate: () => PromptTemplate | undefined;
 }
 
 const INITIAL_STATE = {
@@ -28,7 +28,7 @@ const INITIAL_STATE = {
   imageBase64: null as string | null,
   imagePreviewUrl: null as string | null,
   assetId: null as string | null,
-  selectedTemplate: null as string | null,
+  customPrompt: '',
   result: null as string | null,
   error: null as string | null,
   abortController: null as AbortController | null,
@@ -39,21 +39,33 @@ export const usePromptReverseStore = create<PromptReverseState>()((set, get) => 
 
   startFlow: (imageBase64, imagePreviewUrl, assetId) => {
     const { step, abortController } = get();
-    // If currently loading, abort the in-flight request
+    console.log('[PromptReverseStore] startFlow called:', { imageBase64: !!imageBase64, imagePreviewUrl: imagePreviewUrl?.substring(0, 60), assetId, currentStep: step });
     if (step === 'loading' && abortController) {
       abortController.abort();
     }
     set({
       ...INITIAL_STATE,
       step: 'preview',
-      imageBase64,
+      imageBase64: imageBase64 ?? null,
       imagePreviewUrl,
       assetId: assetId ?? null,
     });
+    // Fetch default prompt from backend in background
+    getDefaultPrompt().then((prompt) => {
+      // Only update if still in preview/prompt step (user hasn't closed)
+      const currentStep = get().step;
+      if (currentStep === 'preview' || currentStep === 'prompt') {
+        set({ customPrompt: prompt });
+      }
+    });
   },
 
-  selectTemplate: (templateId) => {
-    set({ selectedTemplate: templateId, step: 'template' });
+  goToPrompt: () => {
+    set({ step: 'prompt' });
+  },
+
+  setCustomPrompt: (prompt) => {
+    set({ customPrompt: prompt });
   },
 
   setLoading: () => {
@@ -78,10 +90,5 @@ export const usePromptReverseStore = create<PromptReverseState>()((set, get) => 
 
   setAbortController: (controller) => {
     set({ abortController: controller });
-  },
-
-  getActiveTemplate: () => {
-    const { selectedTemplate } = get();
-    return PROMPT_TEMPLATES.find((t) => t.id === selectedTemplate);
   },
 }));

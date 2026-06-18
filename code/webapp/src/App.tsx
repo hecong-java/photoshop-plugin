@@ -1,10 +1,11 @@
-import { Component, type ReactNode } from 'react';
+import { Component, useEffect, type ReactNode } from 'react';
 import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
 import './App.css';
 import { Settings } from './pages/Settings';
 import { Draw } from './pages/Draw';
 import { History } from './pages/History';
 import { PromptReverseProvider } from './components/promptReverse/PromptReverseProvider';
+import { validateStoredAuth } from './services/lemongrid-auth';
 
 // SVG icons — 20×20, stroke-based
 const DrawIcon = () => (
@@ -63,12 +64,17 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 }
 
 function App() {
+  // Validate stored auth tokens on startup — refresh if needed
+  useEffect(() => {
+    validateStoredAuth().catch(() => { /* validation failure is non-fatal */ });
+  }, []);
+
   return (
     <Router>
       <div className="app">
         {/* Minimal topbar — brand + connection status */}
         <div className="topbar">
-          <div className="topbar-brand">Ningle<span>AI</span></div>
+          <div className="topbar-brand">Lemon<span>Grid</span></div>
           <div className="topbar-mode">
             <span className="topbar-dot" />
           </div>

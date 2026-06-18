@@ -184,6 +184,49 @@
   text-align: center;
 }
 
+/* Editable prompt step */
+.prompt-reverse-prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prompt-reverse-prompt-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.prompt-reverse-prompt-textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  resize: vertical;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s ease;
+  box-sizing: border-box;
+}
+
+.prompt-reverse-prompt-textarea:focus {
+  border-color: #4299e1;
+}
+
+.prompt-reverse-prompt-textarea::placeholder {
+  color: #64748b;
+}
+
+.prompt-reverse-prompt-hint {
+  font-size: 11px;
+  color: #64748b;
+}
+
 /* Action buttons */
 .prompt-reverse-flow-actions {
   display: flex;

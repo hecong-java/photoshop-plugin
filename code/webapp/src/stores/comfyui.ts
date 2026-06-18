@@ -77,7 +77,7 @@ export const useComfyUIStore = create<ComfyUIStoreState>((set, get) => ({
   isLoadingQueue: false,
 
   setBaseUrl: (url) => {
-    set({ baseUrl: url, error: null });
+    set({ baseUrl: url.trim().replace(/\/+$/, ''), error: null });
   },
 
   clearError: () => {

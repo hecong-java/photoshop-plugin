@@ -84,7 +84,7 @@ export const useSettingsStore = create<SettingsState>()(
         set((state) => ({ dashScope: { ...state.dashScope, model } })),
     }),
     {
-      name: 'Ningleai-settings',
+      name: 'LemonGrid-settings',
       partialize: (state) => ({
         theme: state.theme,
         autoSave: state.autoSave,

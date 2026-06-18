@@ -16,6 +16,33 @@
   color: #a0a0a0;
   padding: 2px 4px;
   margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.task-refresh-btn {
+  background: none;
+  border: none;
+  color: #a0a0a0;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  transition: color 0.15s, transform 0.3s;
+}
+
+.task-refresh-btn:hover {
+  color: #e0e0e0;
+}
+
+.task-refresh-btn.spinning {
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* Per D-58: Compact single-row items when collapsed (~40px height) */

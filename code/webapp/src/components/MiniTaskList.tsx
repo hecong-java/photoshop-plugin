@@ -2,7 +2,7 @@
 // Shows all LemonGrid tasks below the Generate button with state badges,
 // expand/collapse, cancel/retry/dismiss actions.
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useLemonGridStore, type LemonGridTaskState } from '../stores/lemongridStore';
 import { LemonGridClient, LEMONGRID_ERROR_SUGGESTIONS } from '../services/lemongrid';
 import './MiniTaskList.css';
@@ -74,7 +74,6 @@ function isActiveStatus(status: LemonGridTaskState['status']): boolean {
 export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportResult }) => {
   const tasks = useLemonGridStore((s) => s.tasks);
   const removeTask = useLemonGridStore((s) => s.removeTask);
-  const updateTask = useLemonGridStore((s) => s.updateTask);
 
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
 
@@ -117,6 +116,50 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
     return () => { cancelled = true; clearInterval(interval); };
   }, [sortedTasks]);
 
+  // Poll active task status every 5 seconds to recover from WS drops / navigation
+  const refreshActiveTasks = useCallback(() => {
+    const serverUrl = useLemonGridStore.getState().serverUrl;
+    if (!serverUrl) return;
+    const activeTasks = Object.values(useLemonGridStore.getState().tasks)
+      .filter(t => isActiveStatus(t.status));
+    if (activeTasks.length === 0) return;
+
+    const client = new LemonGridClient({ serverUrl });
+    for (const task of activeTasks) {
+      client.getTaskStatus(task.taskId).then((status) => {
+        useLemonGridStore.getState().updateTask(task.taskId, {
+          status: status.status,
+          progress: status.progress,
+          progressDetail: status.progress_detail,
+          queuePosition: status.queue_position,
+          errorCode: status.error_code,
+          errorMessage: status.error_message,
+          outputAssetIds: status.output_file_ids ?? [],
+          durationSeconds: status.duration_seconds,
+          completedAt: status.completed_at ? new Date(status.completed_at).getTime() : null,
+        });
+      }).catch(() => { /* task may not exist on server yet */ });
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshActiveTasks();
+    const interval = setInterval(refreshActiveTasks, 5000);
+    return () => clearInterval(interval);
+  }, [refreshActiveTasks, sortedTasks]);
+
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const handleRefresh = () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    refreshActiveTasks();
+    refreshTimerRef.current = setTimeout(() => setRefreshing(false), 1000);
+  };
+
+  useEffect(() => () => clearTimeout(refreshTimerRef.current), []);
+
   // Per D-60: Summary bar with counts by status
   const summaryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -153,7 +196,16 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
   return (
     <div className="mini-task-list">
       {summaryParts.length > 0 && (
-        <div className="mini-task-summary">{summaryParts.join(', ')}</div>
+        <div className="mini-task-summary">
+          <span>{summaryParts.join(', ')}</span>
+          <button
+            className={`task-refresh-btn ${refreshing ? 'spinning' : ''}`}
+            onClick={(e) => { e.stopPropagation(); handleRefresh(); }}
+            title="刷新任务状态"
+          >
+            &#x21bb;
+          </button>
+        </div>
       )}
 
       {sortedTasks.map((task) => {

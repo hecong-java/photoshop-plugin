@@ -35,6 +35,7 @@ interface LemonGridState {
   accessToken: string | null;
   refreshToken: string | null;
   tokenExpiresAt: number | null; // Unix timestamp ms
+  refreshTokenExpiresAt: number | null; // Unix timestamp ms
   username: string | null;
   userRole: string | null;
   isConnected: boolean;
@@ -63,6 +64,7 @@ interface LemonGridState {
     expiresIn: number;
     username: string;
     role: string;
+    refreshExpiresIn?: number;
   }, provider?: 'password' | 'dingtalk') => void;
   clearAuth: () => void;
   setConnected: (connected: boolean) => void;
@@ -86,6 +88,7 @@ export const useLemonGridStore = create<LemonGridState>()(
       accessToken: null,
       refreshToken: null,
       tokenExpiresAt: null,
+      refreshTokenExpiresAt: null,
       username: null,
       userRole: null,
       isConnected: false,
@@ -108,33 +111,41 @@ export const useLemonGridStore = create<LemonGridState>()(
       authProvider: null,
 
       // Actions
-      setAuth: (data, provider) =>
+      setAuth: (data, provider) => {
         set({
           accessToken: data.accessToken,
           refreshToken: data.refreshToken ?? null,
           tokenExpiresAt: Date.now() + data.expiresIn * 1000,
+          refreshTokenExpiresAt: data.refreshExpiresIn
+            ? Date.now() + data.refreshExpiresIn * 1000
+            : null,
           username: data.username,
           userRole: data.role,
           isConnected: true,
-          authProvider: provider ?? 'password', // Default to password per D-13
-        }),
+          authProvider: provider ?? 'password',
+        });
+        import('../services/lemongrid-auth').then(m => m.startTokenRefreshTimer());
+      },
 
-      clearAuth: () =>
+      clearAuth: () => {
+        import('../services/lemongrid-auth').then(m => m.stopTokenRefreshTimer());
         set({
           accessToken: null,
           refreshToken: null,
           tokenExpiresAt: null,
+          refreshTokenExpiresAt: null,
           userRole: null,
           isConnected: false,
           encryptedPassword: null,
           authProvider: null,
           tasks: {},
           clusterOutputImages: [],
-        }),
+        });
+      },
 
       setConnected: (connected) => set({ isConnected: connected }),
 
-      setServerUrl: (url) => set({ serverUrl: url }),
+      setServerUrl: (url) => set({ serverUrl: url.trim().replace(/\/+$/, '') }),
 
       updateTask: (taskId, update) =>
         set((state) => ({
@@ -189,15 +200,17 @@ export const useLemonGridStore = create<LemonGridState>()(
       setAuthProvider: (provider) => set({ authProvider: provider }),
     }),
     {
-      name: 'Ningleai-lemongrid',
-      version: 2,
-      migrate: (persisted: Record<string, unknown>, version: number) => {
+      name: 'LemonGrid-lemongrid',
+      version: 3,
+      migrate: (persistedState: unknown, version: number) => {
+        const persisted = (persistedState ?? {}) as Record<string, unknown>;
         if (version === 0) {
           return {
             serverUrl: '',
             accessToken: null,
             refreshToken: null,
             tokenExpiresAt: null,
+            refreshTokenExpiresAt: null,
             username: null,
             userRole: null,
             encryptedPassword: null,
@@ -207,7 +220,14 @@ export const useLemonGridStore = create<LemonGridState>()(
         if (version === 1) {
           return {
             ...persisted,
+            refreshTokenExpiresAt: null,
             authProvider: persisted.encryptedPassword ? 'password' : null,
+          };
+        }
+        if (version === 2) {
+          return {
+            ...persisted,
+            refreshTokenExpiresAt: null,
           };
         }
         return persisted;
@@ -217,6 +237,7 @@ export const useLemonGridStore = create<LemonGridState>()(
         accessToken: state.accessToken,
         refreshToken: state.refreshToken,
         tokenExpiresAt: state.tokenExpiresAt,
+        refreshTokenExpiresAt: state.refreshTokenExpiresAt,
         username: state.username,
         userRole: state.userRole,
         encryptedPassword: state.encryptedPassword,

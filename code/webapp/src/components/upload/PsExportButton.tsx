@@ -33,11 +33,23 @@ export const PsExportButton: React.FC<PsExportButtonProps> = ({
         : await exportActiveLayerPng();
       console.log(`Successfully exported ${exportLabel}, size:`, blob.size);
       
-      await Promise.resolve(onExport?.(blob));
+      await Promise.resolve(onExport?.(blob)).catch(() => {});
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      console.error('Failed to export layer:', err);
-      onError?.(err);
+      const msg = err.message || '';
+      // Translate known bridge error codes to user-friendly Chinese messages
+      let friendlyMsg = msg;
+      if (msg.includes('ACTIVE_LAYER_HIDDEN')) {
+        friendlyMsg = '当前图层已隐藏，请先在图层面板中取消隐藏再导出';
+      } else if (msg.includes('NO_ACTIVE_LAYER')) {
+        friendlyMsg = '没有选中的图层，请先选择一个图层';
+      } else if (msg.includes('NO_ACTIVE_DOCUMENT')) {
+        friendlyMsg = '没有打开的文档，请先打开一个文件';
+      }
+      const friendlyErr = new Error(friendlyMsg);
+      friendlyErr.name = err.name;
+      console.error('Failed to export layer:', friendlyMsg);
+      onError?.(friendlyErr);
     } finally {
       setIsExporting(false);
     }

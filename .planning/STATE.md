@@ -14,7 +14,7 @@ progress:
 
 # STATE: Photoshop ComfyUI Plugin
 
-**Last Updated:** 2026-05-20T03:24:56Z
+**Last Updated:** 2026-05-20
 
 ---
 
@@ -152,6 +152,8 @@ Phase: 09 (lemongrid-task-queue) -- COMPLETE (2/2 plans complete)
 | 7 | Fix PS layer/selection export bounds | 2026-03-17 | 90fe508 | [260317-fii-ps](./quick/260317-fii-ps/) |
 | 8 | Filter error entries from ComfyUI history | 2026-03-17 | 3c85916 | [260317-n67-status-str-error](./quick/260317-n67-status-str-error/) |
 | 9 | 集群模式历史记录通过LemonGrid接口返回 | 2026-05-09 | 1d68b6e | [260509-cluster-history-lemongrid-api](./quick/260509-cluster-history-lemongrid-api/) |
+| 10 | 限制多图上传仅对云端模型模板生效 | 2026-05-20 | — | [20260520-multi-upload-cloud-only](./quick/20260520-multi-upload-cloud-only/) |
+| 11 | ComfyUI工作流参数名称显示group | 2026-05-20 | — | [20260520-comfyui-param-group-display](./quick/20260520-comfyui-param-group-display/) |
 
 ### Recent Completions
 
@@ -169,8 +171,8 @@ Phase: 09 (lemongrid-task-queue) -- COMPLETE (2/2 plans complete)
 ### Last Session
 
 - **Date:** 2026-05-20
-- **Action:** Phase 09 Plan 02 -- Cluster queue badge, per-task ETA display, and polling integration
-- **Outcome:** Added cluster queue badge in Draw.tsx preview section with 15-second queue summary polling. Added per-task ETA display in MiniTaskList with 30-second polling for QUEUED tasks.
+- **Action:** Quick task — restricted multi-image upload to cloud model (THIRD_PARTY_API) templates only
+- **Outcome:** ComfyUI templates now show single-image upload (replace mode). Cloud model templates keep multi-image support.
 
 ### Next Action
 

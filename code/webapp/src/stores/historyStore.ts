@@ -1,35 +1,35 @@
+// History Store — thin orchestration layer.
+//
+// Responsibilities are now split across:
+//   - services/historyParser.ts — pure functions for entry → HistoryItem conversion
+//   - services/downloadTracker.ts — localStorage CRUD for downloads and deleted prompts
+//   - this file — Zustand state, fetch orchestration, store updates
+//
+// The store imports the pure helpers and delegates all parsing and
+// localStorage work to them.
+
 import { create } from 'zustand';
-import { ComfyUIClient, type ComfyUIHistoryEntry, type PrefixMode } from '../services/comfyui';
+import { ComfyUIClient, type PrefixMode } from '../services/comfyui';
 import { LemonGridClient } from '../services/lemongrid';
+import {
+  convertEntryToItem,
+  convertClusterTaskToItem,
+  isHistoryEntrySuccessful,
+  buildLocalDownloadsMap,
+} from '../services/historyParser';
+import {
+  loadLocalDownloads as loadDownloadsFromStorage,
+  loadDeletedPrompts,
+  addLocalDownload as addLocalDownloadToStorage,
+  removeLocalDownloadEntry as removeLocalDownloadFromStorage,
+  removeDownloadsForPrompt,
+  addDeletedPrompt,
+  clearAllHistoryStorage,
+} from '../services/downloadTracker';
+import type { HistoryItem, LocalDownload } from './historyTypes';
 
-export interface HistoryItem {
-  id: string;
-  promptId: string;
-  workflow: string;
-  workflowName: string;
-  imageName: string;
-  params: Record<string, unknown>;
-  outputs: Record<string, unknown>;
-  imageUrl?: string;
-  thumbnailUrl?: string; // URL or path, NOT base64
-  timestamp: number; // ms since epoch
-  status: 'completed' | 'failed' | 'pending';
-  localDownloads: string[];
-  images: Array<{
-    filename: string;
-    subfolder?: string;
-    type?: string;
-    thumbnailUrl?: string;
-    imageUrl?: string;
-  }>;
-  source?: 'direct' | 'cluster'; // defaults to 'direct' for backward compat
-}
-
-interface LocalDownload {
-  promptId: string;
-  filePath: string;
-  downloadedAt: number;
-}
+// Re-export for backward compatibility (other files import these types from here)
+export type { HistoryItem, LocalDownload };
 
 interface HistoryState {
   items: HistoryItem[];
@@ -51,224 +51,7 @@ interface HistoryState {
   loadFromStorage: () => void;
 }
 
-const LOCAL_DOWNLOADS_KEY = 'Ningleai-local-downloads';
-const DELETED_PROMPTS_KEY = 'Ningleai-deleted-prompts';
-
-const extractExecutionTimestamp = (entry: ComfyUIHistoryEntry): number => {
-  const status = entry.status;
-  if (!status || typeof status !== 'object') {
-    return typeof entry.start_time === 'number' ? entry.start_time * 1000 : Date.now();
-  }
-
-  const statusRecord = status as Record<string, unknown>;
-  const messages = statusRecord.messages;
-  if (Array.isArray(messages)) {
-    for (const msg of messages) {
-      if (!Array.isArray(msg) || msg.length < 2) continue;
-      const type = msg[0];
-      const payload = msg[1];
-      if (type !== 'execution_success' || !payload || typeof payload !== 'object') continue;
-      const ts = (payload as Record<string, unknown>).timestamp;
-      if (typeof ts === 'number') {
-        return ts < 1e12 ? ts * 1000 : ts;
-      }
-    }
-  }
-
-  return typeof entry.start_time === 'number' ? entry.start_time * 1000 : Date.now();
-};
-
-const extractHistoryImage = (
-  outputs: Record<string, unknown>,
-  client: ComfyUIClient
-): {
-  imageName: string;
-  thumbnailUrl?: string;
-  imageUrl?: string;
-  images: Array<{
-    filename: string;
-    subfolder?: string;
-    type?: string;
-    thumbnailUrl?: string;
-    imageUrl?: string;
-  }>;
-} => {
-  const images: Array<{
-    filename: string;
-    subfolder?: string;
-    type?: string;
-    thumbnailUrl?: string;
-    imageUrl?: string;
-  }> = [];
-  for (const nodeId of Object.keys(outputs)) {
-    const nodeOutput = outputs[nodeId] as {
-      images?: Array<{ filename: string; subfolder?: string; type?: string }>;
-    };
-    if (!Array.isArray(nodeOutput.images) || nodeOutput.images.length === 0) {
-      continue;
-    }
-
-    nodeOutput.images.forEach((image) => {
-      if (!image || !image.filename) return;
-      const filename = image.filename;
-      const subfolder = image.subfolder || '';
-      const type = image.type || 'output';
-      images.push({
-        filename,
-        subfolder,
-        type,
-        thumbnailUrl: client.getViewUrl({
-          filename,
-          type: type as 'output' | 'input' | 'temp',
-          subfolder,
-          preview: true,
-        }),
-        imageUrl: client.getViewUrl({
-          filename,
-          type: type as 'output' | 'input' | 'temp',
-          subfolder,
-          preview: false,
-        }),
-      });
-    });
-  }
-
-  if (images.length === 0) {
-    return { imageName: 'Unknown Image', images };
-  }
-
-  const first = images[0];
-  const imageName = first.filename || 'Unknown Image';
-  const type = (first.type as 'output' | 'input' | 'temp') || 'output';
-  const subfolder = first.subfolder || '';
-
-  return {
-    imageName,
-    thumbnailUrl: client.getViewUrl({
-      filename: imageName,
-      type,
-      subfolder,
-      preview: true,
-    }),
-    imageUrl: client.getViewUrl({
-      filename: imageName,
-      type,
-      subfolder,
-      preview: false,
-    }),
-    images,
-  };
-};
-
-const isPromptNodesRecord = (value: unknown): value is Record<string, unknown> => {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false;
-  }
-
-  const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.length === 0) {
-    return false;
-  }
-
-  return entries.some(([, node]) => {
-    if (!node || typeof node !== 'object' || Array.isArray(node)) {
-      return false;
-    }
-    const record = node as Record<string, unknown>;
-    return (
-      typeof record.class_type === 'string' ||
-      typeof record.type === 'string' ||
-      (record.inputs && typeof record.inputs === 'object' && !Array.isArray(record.inputs))
-    );
-  });
-};
-
-const extractPromptNodes = (prompt: unknown): Record<string, unknown> => {
-  if (isPromptNodesRecord(prompt)) {
-    return prompt;
-  }
-
-  if (Array.isArray(prompt)) {
-    for (const item of prompt) {
-      if (isPromptNodesRecord(item)) {
-        return item;
-      }
-    }
-  }
-
-  if (prompt && typeof prompt === 'object') {
-    const record = prompt as Record<string, unknown>;
-    const candidates: unknown[] = [record.prompt, record.workflow, record.nodes];
-    for (const candidate of candidates) {
-      if (isPromptNodesRecord(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  return {};
-};
-
-const convertEntryToItem = (
-  promptId: string,
-  entry: ComfyUIHistoryEntry,
-  client: ComfyUIClient,
-  localDownloads: string[]
-): HistoryItem => {
-  const outputs = entry.outputs || {};
-  const imageInfo = extractHistoryImage(outputs, client);
-
-  // ComfyUI history structure: prompt is a tuple [number, prompt_id, workflow_dict, extra_data, outputs_to_execute, sensitive]
-  // - index 2: actual workflow dict (the API format JSON)
-  // - index 3: extra_data (contains workflow_name, client_id, etc.)
-  const promptTuple = entry.prompt;
-  const workflowDict = Array.isArray(promptTuple) && promptTuple.length > 2
-    ? promptTuple[2]
-    : promptTuple; // fallback for old format
-  const extraData = Array.isArray(promptTuple) && promptTuple.length > 3
-    ? promptTuple[3]
-    : undefined;
-
-  const promptData = extractPromptNodes(workflowDict);
-  // Use workflow name from extra_data if available, otherwise fall back to image name
-  const hasExtraData = extraData && typeof extraData === 'object';
-  const hasWorkflowName = hasExtraData && 'workflow_name' in extraData;
-  const extractedWorkflowName = hasExtraData ? (extraData as Record<string, unknown>).workflow_name : undefined;
-  const workflowName = hasWorkflowName
-    ? String(extractedWorkflowName)
-    : imageInfo.imageName;
-
-  // Debug: log workflow name extraction with detailed info
-  console.log('[historyStore] Converting entry to item:', {
-    promptId,
-    isArray: Array.isArray(promptTuple),
-    tupleLength: Array.isArray(promptTuple) ? promptTuple.length : 0,
-    hasExtraData,
-    hasWorkflowName,
-    extraDataKeys: hasExtraData ? Object.keys(extraData as Record<string, unknown>) : [],
-    extractedWorkflowName,
-    finalWorkflowName: workflowName,
-    fallbackImageName: imageInfo.imageName,
-    isUsingFallback: !hasWorkflowName,
-  });
-
-  return {
-    id: promptId,
-    promptId,
-    workflow: promptId,
-    workflowName,
-    imageName: imageInfo.imageName,
-    params: promptData as Record<string, unknown>,
-    outputs,
-    imageUrl: imageInfo.imageUrl,
-    thumbnailUrl: imageInfo.thumbnailUrl,
-    images: imageInfo.images,
-    timestamp: extractExecutionTimestamp(entry),
-    status: 'completed',
-    localDownloads,
-    source: 'direct' as const,
-  };
-};
+const PAGE_SIZE = 50;
 
 export const useHistoryStore = create<HistoryState>((set, get) => ({
   items: [],
@@ -294,31 +77,12 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     set({ isLoading: true, error: null });
     try {
       const historyData = await client.getHistory(prefixMode);
-      const localDownloadsMap = new Map<string, string[]>();
-      const deletedPrompts = (() => {
-        try {
-          const raw = localStorage.getItem(DELETED_PROMPTS_KEY);
-          return new Set<string>(raw ? (JSON.parse(raw) as string[]) : []);
-        } catch {
-          return new Set<string>();
-        }
-      })();
-
-      for (const download of localDownloads) {
-        const existing = localDownloadsMap.get(download.promptId) || [];
-        existing.push(download.filePath);
-        localDownloadsMap.set(download.promptId, existing);
-      }
+      const localDownloadsMap = buildLocalDownloadsMap(localDownloads);
+      const deletedPrompts = loadDeletedPrompts();
 
       const items = Object.entries(historyData)
         .filter(([promptId]) => !deletedPrompts.has(promptId))
-        .filter(([, entry]) => {
-          // Filter out error entries - only show successful ones
-          // Check both status_str directly and nested in status object
-          const statusStr = entry.status_str ||
-            (typeof entry.status === 'object' && entry.status?.status_str);
-          return statusStr !== 'error';
-        })
+        .filter(([, entry]) => isHistoryEntrySuccessful(entry))
         .map(([promptId, entry]) =>
           convertEntryToItem(promptId, entry, client, localDownloadsMap.get(promptId) || [])
         )
@@ -336,8 +100,7 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     try {
       const client = new LemonGridClient({ serverUrl });
 
-      // Fetch all pages
-      const PAGE_SIZE = 50;
+      // Fetch first page to get total count
       const firstPage = await client.getTaskHistory({ page: 1, pageSize: PAGE_SIZE });
       const allTasks = [...firstPage.items];
       const totalPages = Math.ceil(firstPage.total / PAGE_SIZE);
@@ -346,61 +109,8 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
         allTasks.push(...pageResp.items);
       }
 
-      const items: HistoryItem[] = allTasks.map((task) => ({
-        id: `cluster-${task.id}`,
-        promptId: task.id,
-        workflow: task.template_id,
-        workflowName: task.workflow_name || task.template_category || 'Unknown',
-        imageName: task.workflow_name || task.template_id,
-        params: task.parameters || {},
-        outputs: {},
-        // Placeholder URLs — will be replaced with blob URLs below
-        thumbnailUrl: undefined,
-        imageUrl: undefined,
-        timestamp: task.completed_at
-          ? new Date(task.completed_at).getTime()
-          : new Date(task.created_at).getTime(),
-        status: (task.status === 'COMPLETED' ? 'completed' : task.status === 'FAILED' ? 'failed' : 'completed') as HistoryItem['status'],
-        localDownloads: [],
-        images: (task.output_file_ids || []).map((fid) => ({
-          filename: fid,
-          type: 'output',
-          thumbnailUrl: undefined,
-          imageUrl: undefined,
-        })),
-        source: 'cluster' as const,
-      }));
+      const items = allTasks.map((task) => convertClusterTaskToItem(task, client));
       set({ clusterItems: items, isLoading: false });
-
-      // Download thumbnails as blobs in background (first image per item only)
-      // This is needed because asset URLs require Bearer auth — <img> tags can't send auth headers
-      const clusterItems = [...items];
-      let dirtyCount = 0;
-      const BATCH_SIZE = 10;
-      for (let i = 0; i < clusterItems.length; i++) {
-        const task = allTasks[i];
-        const firstAssetId = (task.output_file_ids || [])[0];
-        if (!firstAssetId) continue;
-        try {
-          const blob = await client.downloadAsset(firstAssetId);
-          const objectUrl = URL.createObjectURL(blob);
-          clusterItems[i] = {
-            ...clusterItems[i],
-            thumbnailUrl: objectUrl,
-            imageUrl: objectUrl,
-            images: clusterItems[i].images.map((img, idx) =>
-              idx === 0 ? { ...img, thumbnailUrl: objectUrl, imageUrl: objectUrl } : img
-            ),
-          };
-          dirtyCount++;
-          if (dirtyCount >= BATCH_SIZE || i === clusterItems.length - 1) {
-            set({ clusterItems: [...clusterItems] });
-            dirtyCount = 0;
-          }
-        } catch (e) {
-          console.warn(`[historyStore] Thumbnail download failed for task ${task.id}:`, e);
-        }
-      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to fetch cluster history';
       console.warn('[historyStore] Cluster history fetch failed:', message);
@@ -410,43 +120,24 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
 
   addLocalDownload: (promptId: string, filePath: string) => {
     set((state) => {
-      const newDownload: LocalDownload = { promptId, filePath, downloadedAt: Date.now() };
-      const updatedDownloads = [...state.localDownloads, newDownload];
-
-      try {
-        localStorage.setItem(LOCAL_DOWNLOADS_KEY, JSON.stringify(updatedDownloads));
-      } catch (e) {
-        console.error('Failed to save local downloads:', e);
-      }
-
+      const updatedDownloads = addLocalDownloadToStorage(state.localDownloads, promptId, filePath);
       const updatedItems = state.items.map((item) =>
         item.promptId === promptId
           ? { ...item, localDownloads: [...item.localDownloads, filePath] }
           : item
       );
-
       return { localDownloads: updatedDownloads, items: updatedItems };
     });
   },
 
   removeLocalDownload: (promptId: string, filePath: string) => {
     set((state) => {
-      const updatedDownloads = state.localDownloads.filter(
-        (d) => !(d.promptId === promptId && d.filePath === filePath)
-      );
-
-      try {
-        localStorage.setItem(LOCAL_DOWNLOADS_KEY, JSON.stringify(updatedDownloads));
-      } catch (e) {
-        console.error('Failed to save local downloads:', e);
-      }
-
+      const updatedDownloads = removeLocalDownloadFromStorage(state.localDownloads, promptId, filePath);
       const updatedItems = state.items.map((item) =>
         item.promptId === promptId
           ? { ...item, localDownloads: item.localDownloads.filter((p) => p !== filePath) }
           : item
       );
-
       return { localDownloads: updatedDownloads, items: updatedItems };
     });
   },
@@ -458,49 +149,23 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
     }
 
     set((state) => {
-      const updatedDownloads = state.localDownloads.filter((d) => d.promptId !== item.promptId);
-      const deletedPromptIds = (() => {
-        try {
-          const raw = localStorage.getItem(DELETED_PROMPTS_KEY);
-          const ids = raw ? (JSON.parse(raw) as string[]) : [];
-          return Array.from(new Set([...ids, item.promptId]));
-        } catch {
-          return [item.promptId];
-        }
-      })();
-
-      try {
-        localStorage.setItem(LOCAL_DOWNLOADS_KEY, JSON.stringify(updatedDownloads));
-        localStorage.setItem(DELETED_PROMPTS_KEY, JSON.stringify(deletedPromptIds));
-      } catch (e) {
-        console.error('Failed to save local downloads:', e);
-      }
+      const updatedDownloads = removeDownloadsForPrompt(state.localDownloads, item.promptId);
+      addDeletedPrompt(item.promptId);
 
       const updatedItems = state.items.filter((i) => i.id !== id);
-
       return { localDownloads: updatedDownloads, items: updatedItems };
     });
   },
 
   clearAll: () => {
-    try {
-      localStorage.removeItem(LOCAL_DOWNLOADS_KEY);
-      localStorage.removeItem(DELETED_PROMPTS_KEY);
-    } catch (e) {
-      console.error('Failed to clear local downloads:', e);
-    }
+    clearAllHistoryStorage();
     set({ items: [], localDownloads: [] });
   },
 
   loadLocalDownloads: () => {
-    try {
-      const stored = localStorage.getItem(LOCAL_DOWNLOADS_KEY);
-      if (stored) {
-        const downloads = JSON.parse(stored) as LocalDownload[];
-        set({ localDownloads: downloads });
-      }
-    } catch (e) {
-      console.error('Failed to load local downloads:', e);
+    const downloads = loadDownloadsFromStorage();
+    if (downloads.length > 0) {
+      set({ localDownloads: downloads });
     }
   },
 

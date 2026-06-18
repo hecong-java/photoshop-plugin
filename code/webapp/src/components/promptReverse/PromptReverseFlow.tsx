@@ -1,7 +1,5 @@
 import React, { useState, useCallback } from 'react';
 import { usePromptReverseStore } from '../../stores/promptReverseStore';
-import { useSettingsStore } from '../../stores/settingsStore';
-import { analyzeImage, PROMPT_TEMPLATES } from '../../services/dashscope';
 import * as clusterPromptReverseService from '../../services/clusterPromptReverseService';
 import { ClusterResultView } from './ClusterResultView';
 import type { ClusterReversePromptResult } from '../../services/clusterPromptReverseService';
@@ -14,80 +12,52 @@ export const PromptReverseFlow: React.FC<{ onFillPrompt?: (text: string) => void
   const imagePreviewUrl = usePromptReverseStore((s) => s.imagePreviewUrl);
   const imageBase64 = usePromptReverseStore((s) => s.imageBase64);
   const assetId = usePromptReverseStore((s) => s.assetId);
-  const selectedTemplate = usePromptReverseStore((s) => s.selectedTemplate);
+  const customPrompt = usePromptReverseStore((s) => s.customPrompt);
   const result = usePromptReverseStore((s) => s.result);
   const error = usePromptReverseStore((s) => s.error);
-  const selectTemplate = usePromptReverseStore((s) => s.selectTemplate);
+  const goToPrompt = usePromptReverseStore((s) => s.goToPrompt);
+  const setCustomPrompt = usePromptReverseStore((s) => s.setCustomPrompt);
   const setLoading = usePromptReverseStore((s) => s.setLoading);
   const setResult = usePromptReverseStore((s) => s.setResult);
   const setError = usePromptReverseStore((s) => s.setError);
   const reset = usePromptReverseStore((s) => s.reset);
   const setAbortController = usePromptReverseStore((s) => s.setAbortController);
-  const getActiveTemplate = usePromptReverseStore((s) => s.getActiveTemplate);
-  const dashScope = useSettingsStore((s) => s.dashScope);
-  const connectionMode = useSettingsStore((s) => s.connectionMode);
-  const isCluster = connectionMode === 'cluster';
 
   const [copySuccess, setCopySuccess] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [, setIsAnalyzing] = useState(false);
   const [clusterResult, setClusterResult] = useState<ClusterReversePromptResult | null>(null);
 
   const handleStartAnalysis = useCallback(async () => {
-    if (isCluster) {
-      if (!imageBase64) return;
-      setLoading();
-      setIsAnalyzing(true);
-      const controller = new AbortController();
-      setAbortController(controller);
+    if (!imageBase64 && !assetId) return;
+    setLoading();
+    setIsAnalyzing(true);
+    const controller = new AbortController();
+    setAbortController(controller);
 
-      try {
-        let effectiveAssetId = assetId;
-        if (!effectiveAssetId) {
-          // No asset ID -- upload image to LemonGrid first
-          const blob = await fetch(`data:image/png;base64,${imageBase64}`).then(r => r.blob());
-          effectiveAssetId = await clusterPromptReverseService.uploadForReversePrompt(blob);
-        }
-        const clusterRes = await clusterPromptReverseService.reversePromptFromAsset(effectiveAssetId!);
-        setClusterResult(clusterRes);
-        setResult(clusterRes.prompt_cn);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '未知错误';
-        setError(`分析失败：${msg}`);
-      } finally {
-        setIsAnalyzing(false);
-        setAbortController(null);
+    try {
+      let effectiveAssetId = assetId;
+      if (!effectiveAssetId && imageBase64) {
+        const blob = await fetch(`data:image/png;base64,${imageBase64}`).then(r => r.blob());
+        effectiveAssetId = await clusterPromptReverseService.uploadForReversePrompt(blob);
       }
-    } else {
-      if (!dashScope.apiKey) {
-        setError('请先在设置页面填写 DashScope API Key');
+      if (!effectiveAssetId) {
+        setError('分析失败：无法获取图片资源');
         return;
       }
-      if (!imageBase64 || !selectedTemplate) return;
-
-      const template = getActiveTemplate();
-      if (!template) return;
-
-      setLoading();
-      setIsAnalyzing(true);
-      const controller = new AbortController();
-      setAbortController(controller);
-
-      try {
-        const text = await analyzeImage(
-          { apiKey: dashScope.apiKey, model: dashScope.model },
-          imageBase64,
-          template.systemPrompt
-        );
-        setResult(text);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : '未知错误';
-        setError(`分析失败：${msg}。请检查 API Key 是否正确，稍后重试。`);
-      } finally {
-        setIsAnalyzing(false);
-        setAbortController(null);
-      }
+      const clusterRes = await clusterPromptReverseService.reversePromptFromAsset(
+        effectiveAssetId,
+        customPrompt
+      );
+      setClusterResult(clusterRes);
+      setResult(clusterRes.prompt_cn);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : '未知错误';
+      setError(`分析失败：${msg}`);
+    } finally {
+      setIsAnalyzing(false);
+      setAbortController(null);
     }
-  }, [isCluster, assetId, imageBase64, dashScope, selectedTemplate, getActiveTemplate, setLoading, setResult, setError, setAbortController]);
+  }, [assetId, imageBase64, customPrompt, setLoading, setResult, setError, setAbortController]);
 
   const handleCopy = useCallback(async (text?: string) => {
     const copyText = text || result;
@@ -117,8 +87,8 @@ export const PromptReverseFlow: React.FC<{ onFillPrompt?: (text: string) => void
   const handleRetry = useCallback(() => {
     setIsAnalyzing(false);
     setClusterResult(null);
-    selectTemplate(selectedTemplate || '');
-  }, [selectTemplate, selectedTemplate]);
+    goToPrompt();
+  }, [goToPrompt]);
 
   if (step === 'closed') return null;
 
@@ -130,7 +100,7 @@ export const PromptReverseFlow: React.FC<{ onFillPrompt?: (text: string) => void
         <div className="prompt-reverse-flow-header">
           <h2 className="prompt-reverse-flow-title">
             {step === 'preview' && '确认图片'}
-            {step === 'template' && '选择描述风格'}
+            {step === 'prompt' && '编辑提示词'}
             {step === 'loading' && '正在分析图片...'}
             {step === 'result' && '分析结果'}
           </h2>
@@ -147,38 +117,30 @@ export const PromptReverseFlow: React.FC<{ onFillPrompt?: (text: string) => void
             )}
             <div className="prompt-reverse-flow-actions">
               <button className="prf-btn prf-btn-secondary" onClick={reset}>取消</button>
-              <button className="prf-btn prf-btn-primary" onClick={() => isCluster ? handleStartAnalysis() : selectTemplate(selectedTemplate || '')}>下一步</button>
+              <button className="prf-btn prf-btn-primary" onClick={goToPrompt}>下一步</button>
             </div>
           </div>
         )}
 
-        {/* Step: Template Selection */}
-        {step === 'template' && (
+        {/* Step: Editable Prompt */}
+        {step === 'prompt' && (
           <div className="prompt-reverse-flow-body">
-            {!isCluster && !dashScope.apiKey && (
-              <div className="prompt-reverse-empty-state">
-                请先在设置页面配置 DashScope API Key
-              </div>
-            )}
-            <div className="prompt-reverse-template-grid">
-              {PROMPT_TEMPLATES.map((tpl) => (
-                <button
-                  key={tpl.id}
-                  className={`prompt-reverse-template-card ${selectedTemplate === tpl.id ? 'selected' : ''}`}
-                  onClick={() => selectTemplate(tpl.id)}
-                >
-                  <span className="template-name">{tpl.name}</span>
-                  <span className="template-desc">{tpl.description}</span>
-                </button>
-              ))}
+            <div className="prompt-reverse-prompt-section">
+              <label className="prompt-reverse-prompt-label">分析提示词</label>
+              <textarea
+                className="prompt-reverse-prompt-textarea"
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                rows={6}
+                placeholder="输入自定义提示词来指导图片分析..."
+              />
+              <span className="prompt-reverse-prompt-hint">
+                修改提示词可以改变分析的角度和详细程度
+              </span>
             </div>
             <div className="prompt-reverse-flow-actions">
-              <button className="prf-btn prf-btn-secondary" onClick={reset}>返回</button>
-              <button
-                className="prf-btn prf-btn-primary"
-                disabled={!selectedTemplate || !dashScope.apiKey}
-                onClick={handleStartAnalysis}
-              >
+              <button className="prf-btn prf-btn-secondary" onClick={reset}>取消</button>
+              <button className="prf-btn prf-btn-primary" onClick={handleStartAnalysis}>
                 开始分析
               </button>
             </div>
@@ -205,13 +167,10 @@ export const PromptReverseFlow: React.FC<{ onFillPrompt?: (text: string) => void
               {imagePreviewUrl && (
                 <img src={imagePreviewUrl} alt="analyzed" className="prompt-reverse-result-thumb" />
               )}
-              {getActiveTemplate() && (
-                <span className="prompt-reverse-result-template">{getActiveTemplate()!.name}</span>
-              )}
             </div>
             {error ? (
               <div className="prompt-reverse-error">{error}</div>
-            ) : isCluster && clusterResult ? (
+            ) : clusterResult ? (
               <ClusterResultView
                 result={clusterResult}
                 onCopy={handleCopy}
@@ -227,7 +186,7 @@ export const PromptReverseFlow: React.FC<{ onFillPrompt?: (text: string) => void
                 <button className="prf-btn prf-btn-info" onClick={handleFillPrompt}>填入提示词</button>
               )}
               {!error && (
-                <button className="prf-btn prf-btn-primary" onClick={handleCopy}>
+                <button className="prf-btn prf-btn-primary" onClick={() => void handleCopy()}>
                   {copySuccess ? '已复制' : '复制到剪贴板'}
                 </button>
               )}
