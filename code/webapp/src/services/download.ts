@@ -24,7 +24,8 @@ export interface DownloadProgress {
 export async function downloadAndSaveImage(
   imageUrl: string,
   filename: string,
-  onProgress?: (progress: DownloadProgress) => void
+  onProgress?: (progress: DownloadProgress) => void,
+  preloaded?: { data: Uint8Array }
 ): Promise<{ savedPath: string; filename: string }> {
   const progress: DownloadProgress = {
     filename,
@@ -35,11 +36,37 @@ export async function downloadAndSaveImage(
   };
 
   try {
-    // Fetch with progress tracking
-    const response = await bridgeFetch(imageUrl);
-
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    // 预取 bytes（已 downloadAsset 拿到）→ 直接走 fs.saveDownload，不再经 bridge fetch URL
+    // ⚠️ 勿传 blob: URL 给 bridgeFetch——UXP 原生 fetch 不支持 blob: scheme。
+    let response: Response;
+    if (preloaded?.data) {
+      const total = preloaded.data.byteLength;
+      progress.totalBytes = total;
+      progress.bytesDownloaded = total;
+      progress.percentComplete = 100;
+      onProgress?.(progress);
+      // 构造一个最小 Response-like（只用 .arrayBuffer() / .headers / .ok）
+      response = {
+        ok: true,
+        status: 200,
+        statusText: 'OK (preloaded)',
+        headers: new Headers({ 'content-length': String(total) }),
+        arrayBuffer: async () => preloaded.data.buffer.slice(preloaded.data.byteOffset, preloaded.data.byteOffset + preloaded.data.byteLength),
+        body: null,
+        bodyUsed: false,
+        text: async () => '',
+        json: async () => ({}),
+        blob: async () => new Blob([preloaded.data]),
+        clone() { return this; },
+        redirected: false,
+        type: 'basic',
+        url: '',
+      } as Response;
+    } else {
+      response = await bridgeFetch(imageUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.statusText}`);
+      }
     }
 
     // Get total size if available
