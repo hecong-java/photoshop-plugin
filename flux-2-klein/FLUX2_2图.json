@@ -1,0 +1,347 @@
+{
+  "76": {
+    "inputs": {
+      "image": "微信图片_20260224230941_792_2.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "121": {
+    "inputs": {
+      "image": "133312.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "加载图像"
+    }
+  },
+  "151": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "K采样器选择"
+    }
+  },
+  "152": {
+    "inputs": {
+      "steps": 4,
+      "width": [
+        "162",
+        0
+      ],
+      "height": [
+        "162",
+        1
+      ]
+    },
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2调度器"
+    }
+  },
+  "153": {
+    "inputs": {
+      "cfg": 1,
+      "model": [
+        "157",
+        0
+      ],
+      "positive": [
+        "165",
+        0
+      ],
+      "negative": [
+        "160",
+        0
+      ]
+    },
+    "class_type": "CFGGuider",
+    "_meta": {
+      "title": "CFG引导器"
+    }
+  },
+  "154": {
+    "inputs": {
+      "noise": [
+        "156",
+        0
+      ],
+      "guider": [
+        "153",
+        0
+      ],
+      "sampler": [
+        "151",
+        0
+      ],
+      "sigmas": [
+        "152",
+        0
+      ],
+      "latent_image": [
+        "161",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "自定义采样器（高级）"
+    }
+  },
+  "155": {
+    "inputs": {
+      "samples": [
+        "154",
+        0
+      ],
+      "vae": [
+        "167",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE解码"
+    }
+  },
+  "156": {
+    "inputs": {
+      "noise_seed": 631671904187158
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "随机噪波"
+    }
+  },
+  "157": {
+    "inputs": {
+      "unet_name": "flux/flux-2-klein-9b-fp8.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "UNet加载器"
+    }
+  },
+  "158": {
+    "inputs": {
+      "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+      "type": "flux2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "加载CLIP"
+    }
+  },
+  "159": {
+    "inputs": {
+      "text": "",
+      "clip": [
+        "158",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "160": {
+    "inputs": {
+      "conditioning": [
+        "159",
+        0
+      ]
+    },
+    "class_type": "ConditioningZeroOut",
+    "_meta": {
+      "title": "条件零化"
+    }
+  },
+  "161": {
+    "inputs": {
+      "width": [
+        "162",
+        0
+      ],
+      "height": [
+        "162",
+        1
+      ],
+      "batch_size": 1
+    },
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "空Latent图像（Flux2）"
+    }
+  },
+  "162": {
+    "inputs": {
+      "image": [
+        "177",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "获取图像尺寸"
+    }
+  },
+  "163": {
+    "inputs": {
+      "pixels": [
+        "177",
+        0
+      ],
+      "vae": [
+        "167",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "165": {
+    "inputs": {
+      "conditioning": [
+        "168",
+        0
+      ],
+      "latent": [
+        "166",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "参考Latent"
+    }
+  },
+  "166": {
+    "inputs": {
+      "pixels": [
+        "172",
+        0
+      ],
+      "vae": [
+        "167",
+        0
+      ]
+    },
+    "class_type": "VAEEncode",
+    "_meta": {
+      "title": "VAE编码"
+    }
+  },
+  "167": {
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "加载VAE"
+    }
+  },
+  "168": {
+    "inputs": {
+      "conditioning": [
+        "159",
+        0
+      ],
+      "latent": [
+        "163",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent",
+    "_meta": {
+      "title": "参考Latent"
+    }
+  },
+  "172": {
+    "inputs": {
+      "目标宽高比": "原始比例",
+      "自定义宽比例": 1,
+      "自定义高比例": 1,
+      "适应模式": "留黑边(letterbox)",
+      "采样方法": "lanczos",
+      "向倍数取整": "8",
+      "缩放基准边": "最长边",
+      "缩放目标长度": [
+        "176",
+        0
+      ],
+      "最大长边限制": [
+        "176",
+        0
+      ],
+      "背景颜色": "#000000",
+      "图像": [
+        "121",
+        0
+      ]
+    },
+    "class_type": "ZJ_ImageScaleByAspectRatioV2",
+    "_meta": {
+      "title": "智能图片比例缩放"
+    }
+  },
+  "176": {
+    "inputs": {
+      "数值": 2048
+    },
+    "class_type": "ZJ_IntControl",
+    "_meta": {
+      "title": "整数控制"
+    }
+  },
+  "177": {
+    "inputs": {
+      "目标宽高比": "原始比例",
+      "自定义宽比例": 1,
+      "自定义高比例": 1,
+      "适应模式": "留黑边(letterbox)",
+      "采样方法": "lanczos",
+      "向倍数取整": "8",
+      "缩放基准边": "最长边",
+      "缩放目标长度": [
+        "176",
+        0
+      ],
+      "最大长边限制": [
+        "176",
+        0
+      ],
+      "背景颜色": "#000000",
+      "图像": [
+        "76",
+        0
+      ]
+    },
+    "class_type": "ZJ_ImageScaleByAspectRatioV2",
+    "_meta": {
+      "title": "智能图片比例缩放"
+    }
+  },
+  "184": {
+    "inputs": {
+      "文件名前缀": "ZJ_JPG",
+      "图片质量": 95,
+      "图像": [
+        "155",
+        0
+      ]
+    },
+    "class_type": "ZJ_SaveImageJPG",
+    "_meta": {
+      "title": "保存为纯净JPG (OSS自动抓取)"
+    }
+  }
+}

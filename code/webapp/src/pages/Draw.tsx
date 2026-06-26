@@ -5,17 +5,14 @@ import { useSettingsStore } from '../stores/settingsStore';
 import { useConfigStore } from '../stores/configStore';
 import { useWorkflowCacheStore, blobToBase64, base64ToBlobUrl } from '../stores/workflowCacheStore';
 import { useComfyUIStore } from '../stores/comfyui';
+import { useHistoryStore } from '../stores/historyStore';
 import { PsExportButton } from '../components/upload/PsExportButton';
 import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer, sendBridgeMessage } from '../services/upload';
-import { PresetToolbar } from '../components/preset/PresetToolbar';
-import { usePresetStore } from '../stores/presetStore';
-import type { PresetFile } from '../types/preset';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
-import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, type LemonGridTemplateSummary, type LemonGridTemplateDetail } from '../services/lemongrid';
+import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, groupClusterTemplatesByVariants, resolveClusterTemplateVariant, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField, type GroupedClusterTemplateSummary } from '../services/lemongrid';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { ensureValidToken } from '../services/lemongrid-auth';
-import { LoginModal } from '../components/LoginModal';
 import { MiniTaskList } from '../components/MiniTaskList';
 import './Draw.css';
 import {
@@ -26,7 +23,9 @@ import {
 import type { WorkflowInput, WorkflowInputGroup } from '../services/workflowTypes';
 import {
   getWorkflowDisplayMeta,
+  getDefaultGroupedWorkflow,
   getDefaultWorkflow,
+  groupWorkflowsByImageVariants,
   sanitizePromptGraph,
   applyInputValuesToPrompt,
   enforceLatestImageInputs,
@@ -34,7 +33,18 @@ import {
   findBestMatchingWorkflow,
   parseWorkflowInputs,
   compileWorkflowToPrompt,
+  remapInputValuesToWorkflowInputs,
+  resolveGroupedWorkflowVariant,
+  type GroupedWorkflowEntry,
 } from '../services/workflowEngine';
+import {
+  addPromptHistoryEntries,
+  addPromptLibraryEntry,
+  getPromptLibraryEntries,
+  removePromptLibraryEntry,
+  type PromptLibraryEntry,
+  type PromptLibraryKind,
+} from '../services/promptLibrary';
 
 
 
@@ -57,21 +67,387 @@ interface OutputImageData {
 
 interface WorkflowDirectoryGroup {
   directory: string;
-  workflows: ComfyUIWorkflowInfo[];
+  workflows: GroupedWorkflowEntry[];
+}
+
+interface HistoryActionItem {
+  source?: 'direct' | 'cluster';
+  workflow?: string;
+  workflowName?: string;
+  imageName?: string;
+  params?: Record<string, unknown>;
+  templateId?: string;
+  templateType?: 'COMFYUI' | 'THIRD_PARTY_API';
 }
 
 interface HistoryActionState {
-  rerunItem?: {
-    workflowName?: string;
-    imageName?: string;
-    params?: Record<string, unknown>;
-  };
-  editItem?: {
-    workflowName?: string;
-    imageName?: string;
-    params?: Record<string, unknown>;
-  };
+  rerunItem?: HistoryActionItem;
+  editItem?: HistoryActionItem;
+  trackClusterTaskId?: string;
 }
+
+interface PromptLibraryModalState {
+  kind: PromptLibraryKind;
+  storageKey: string;
+  label: string;
+  applyValue: (text: string) => void;
+}
+
+const PROMPT_FIELD_PATTERN = /prompt|提示词|description|描述/i;
+const WORKFLOW_PROMPT_CLASS_PATTERN = /TextEncode|TextInput|ShowText|String/i;
+const NEGATIVE_PROMPT_PATTERN = /negative|neg|反向|负向/i;
+type PromptLibraryScope = 'positive' | 'negative';
+
+const isPromptTemplateField = (field: Pick<ParamSchemaField, 'name' | 'label' | 'description'>): boolean =>
+  PROMPT_FIELD_PATTERN.test(`${field.label} ${field.description || ''}`) || /prompt|text/i.test(field.name);
+
+const isPromptWorkflowField = (input: WorkflowInput): boolean => {
+  if (typeof input.prompt === 'boolean') {
+    return input.prompt;
+  }
+
+  if (typeof input.classType === 'string' && WORKFLOW_PROMPT_CLASS_PATTERN.test(input.classType)) {
+    return true;
+  }
+
+  return PROMPT_FIELD_PATTERN.test(input.label) || /prompt|text/i.test(input.name);
+};
+
+const getPromptLibraryScope = (field: Pick<WorkflowInput, 'name' | 'label'> & { description?: string } | Pick<ParamSchemaField, 'name' | 'label' | 'description'>): PromptLibraryScope => {
+  const fieldText = `${field.name} ${field.label} ${field.description || ''}`;
+  return NEGATIVE_PROMPT_PATTERN.test(fieldText) ? 'negative' : 'positive';
+};
+
+const getGlobalPromptLibraryKey = (scope: PromptLibraryScope): string =>
+  scope === 'negative' ? 'prompt:negative' : 'prompt:positive';
+
+const isLongTextWorkflowField = (input: WorkflowInput): boolean => {
+  if (typeof input.multiline === 'boolean') {
+    return input.multiline;
+  }
+
+  const defaultStr = typeof input.default === 'string' ? input.default : '';
+  return isPromptWorkflowField(input) || /\n/.test(defaultStr);
+};
+
+const getTemplateFieldStateKey = (field: Pick<ParamSchemaField, 'node_id' | 'name'>): string =>
+  `${field.node_id}.${field.name}`;
+
+const getWorkflowImageInputOrder = (input: Pick<WorkflowInput, 'name' | 'nodeId'>): number => {
+  if (typeof input.nodeId === 'string' && input.nodeId.trim() !== '' && !Number.isNaN(Number(input.nodeId))) {
+    return Number(input.nodeId);
+  }
+
+  const splitIndex = input.name.lastIndexOf('_');
+  if (splitIndex > 0 && splitIndex < input.name.length - 1) {
+    const parsed = Number(input.name.slice(splitIndex + 1));
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Number.MAX_SAFE_INTEGER;
+};
+
+const sortWorkflowImageInputsByOrder = (inputs: WorkflowInput[]): WorkflowInput[] => (
+  [...inputs].sort((a, b) => {
+    const nodeDiff = getWorkflowImageInputOrder(a) - getWorkflowImageInputOrder(b);
+    if (nodeDiff !== 0) {
+      return nodeDiff;
+    }
+    return a.name.localeCompare(b.name, 'zh-CN');
+  })
+);
+
+const sortTemplateImageFieldsByOrder = (fields: ParamSchemaField[]): ParamSchemaField[] => (
+  [...fields].sort((a, b) => {
+    const aNodeId = Number(a.node_id);
+    const bNodeId = Number(b.node_id);
+    if (Number.isFinite(aNodeId) && Number.isFinite(bNodeId) && aNodeId !== bNodeId) {
+      return aNodeId - bNodeId;
+    }
+    return String(a.node_id).localeCompare(String(b.node_id), 'zh-CN');
+  })
+);
+
+interface TemplateImageSlot {
+  field: ParamSchemaField;
+  fieldKey: string;
+  slotIndex: number;
+  slotKey: string;
+  capacity: number;
+}
+
+interface WorkflowImageEntry {
+  value: string;
+  preview: string;
+  base64: string;
+}
+
+interface TemplateImageEntry {
+  assetId: string;
+  filename: string;
+  preview: string;
+}
+
+const getTemplateImageSlotKey = (fieldKey: string, slotIndex: number): string =>
+  `${fieldKey}::${slotIndex}`;
+
+const getTemplateImageFieldCapacity = (
+  field: ParamSchemaField,
+  templateType?: 'COMFYUI' | 'THIRD_PARTY_API'
+): number => {
+  if (templateType === 'THIRD_PARTY_API') {
+    const maxImages = typeof field.max_images === 'number' && Number.isFinite(field.max_images)
+      ? field.max_images
+      : typeof field.max === 'number' && Number.isFinite(field.max)
+        ? field.max
+        : null;
+    if (typeof maxImages === 'number') {
+      return Math.max(1, Math.floor(maxImages));
+    }
+  }
+  return 1;
+};
+
+const getTemplateSlotStringValue = (
+  value: string | string[] | undefined,
+  slotIndex: number
+): string => {
+  if (Array.isArray(value)) {
+    const slotValue = value[slotIndex];
+    return typeof slotValue === 'string' ? slotValue : '';
+  }
+  return slotIndex === 0 && typeof value === 'string' ? value : '';
+};
+
+const getTemplateAssetIdFromValue = (value: unknown): string => {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value) && 'asset_id' in value) {
+    const assetId = (value as { asset_id?: unknown }).asset_id;
+    return typeof assetId === 'string' ? assetId : '';
+  }
+  return '';
+};
+
+const getTemplateSlotAssetValue = (value: unknown, slotIndex: number): string => {
+  if (Array.isArray(value)) {
+    const slotValue = value[slotIndex];
+    return getTemplateAssetIdFromValue(slotValue);
+  }
+  return slotIndex === 0 ? getTemplateAssetIdFromValue(value) : '';
+};
+
+const isLikelyLemonGridAssetId = (value: string): boolean => {
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.includes('-')) {
+    return false;
+  }
+  if (/[\\/]/.test(trimmed)) {
+    return false;
+  }
+  return !/\.[a-z0-9]{2,8}$/i.test(trimmed);
+};
+
+const extractOrderedWorkflowImageEntries = (
+  imageInputs: WorkflowInput[],
+  inputValues: Record<string, string | number | boolean>,
+  previews: Record<string, string | string[]>,
+  base64Values: Record<string, string>
+): WorkflowImageEntry[] => (
+  sortWorkflowImageInputsByOrder(imageInputs)
+    .map((input) => {
+      const value = inputValues[input.name];
+      const previewValue = previews[input.name];
+      const preview = Array.isArray(previewValue) ? previewValue[0] : previewValue;
+      const base64 = base64Values[input.name];
+      return {
+        value: typeof value === 'string' ? value : '',
+        preview: typeof preview === 'string' ? preview : '',
+        base64: typeof base64 === 'string' ? base64 : '',
+      };
+    })
+    .filter((entry) => entry.value.trim() !== '' || entry.preview.trim() !== '' || entry.base64.trim() !== '')
+);
+
+const applyWorkflowImageEntriesToInputs = (
+  imageInputs: WorkflowInput[],
+  entries: WorkflowImageEntry[]
+): {
+  values: Record<string, string>;
+  previews: Record<string, string>;
+  base64: Record<string, string>;
+} => {
+  const values: Record<string, string> = {};
+  const previews: Record<string, string> = {};
+  const base64: Record<string, string> = {};
+
+  sortWorkflowImageInputsByOrder(imageInputs).forEach((input, index) => {
+    const entry = entries[index];
+    if (!entry) {
+      return;
+    }
+    if (entry.value.trim() !== '') {
+      values[input.name] = entry.value;
+    }
+    if (entry.preview.trim() !== '') {
+      previews[input.name] = entry.preview;
+    }
+    if (entry.base64.trim() !== '') {
+      base64[input.name] = entry.base64;
+    }
+  });
+
+  return { values, previews, base64 };
+};
+
+const getTemplateImageSlotsForDetail = (detail: LemonGridTemplateDetail): TemplateImageSlot[] =>
+  sortTemplateImageFieldsByOrder(
+    detail.param_schema.filter((field) => !field.hidden && isImageParam(field))
+  ).flatMap((field) => {
+    const fieldKey = getTemplateFieldStateKey(field);
+    const capacity = getTemplateImageFieldCapacity(field, detail.template_type);
+    return Array.from({ length: capacity }, (_, slotIndex) => ({
+      field,
+      fieldKey,
+      slotIndex,
+      slotKey: getTemplateImageSlotKey(fieldKey, slotIndex),
+      capacity,
+    }));
+  });
+
+const extractOrderedTemplateImageEntries = (
+  detail: LemonGridTemplateDetail,
+  params: Record<string, unknown>,
+  imageInputs: Record<string, string | string[]>,
+  previews: Record<string, string | string[]>
+): TemplateImageEntry[] => (
+  getTemplateImageSlotsForDetail(detail)
+    .map((slot) => ({
+      assetId: getTemplateSlotAssetValue(params[slot.fieldKey], slot.slotIndex),
+      filename: getTemplateSlotStringValue(imageInputs[slot.fieldKey], slot.slotIndex),
+      preview: getTemplateSlotStringValue(previews[slot.fieldKey], slot.slotIndex),
+    }))
+    .filter((entry) => entry.assetId.trim() !== '' || entry.filename.trim() !== '' || entry.preview.trim() !== '')
+);
+
+const applyTemplateImageEntriesToDetail = (
+  detail: LemonGridTemplateDetail,
+  entries: TemplateImageEntry[],
+  params: Record<string, unknown>,
+  imageInputs: Record<string, string | string[]>,
+  previews: Record<string, string | string[]>
+): {
+  targetParams: Record<string, unknown>;
+  targetImageInputs: Record<string, string | string[]>;
+  targetPreviews: Record<string, string | string[]>;
+} => {
+  let targetParams = params;
+  let targetImageInputs = imageInputs;
+  let targetPreviews = previews;
+
+  getTemplateImageSlotsForDetail(detail).forEach((slot, index) => {
+    const entry = entries[index];
+    if (!entry) {
+      return;
+    }
+    if (entry.assetId.trim() !== '') {
+      targetParams = updateTemplateAssetSlotRecord(targetParams, slot.fieldKey, slot.slotIndex, entry.assetId);
+    }
+    if (entry.filename.trim() !== '') {
+      targetImageInputs = updateTemplateStringSlotRecord(targetImageInputs, slot.fieldKey, slot.slotIndex, entry.filename);
+    }
+    if (entry.preview.trim() !== '') {
+      targetPreviews = updateTemplateStringSlotRecord(targetPreviews, slot.fieldKey, slot.slotIndex, entry.preview);
+    }
+  });
+
+  return {
+    targetParams,
+    targetImageInputs,
+    targetPreviews,
+  };
+};
+
+const updateTemplateStringSlotRecord = (
+  record: Record<string, string | string[]>,
+  fieldKey: string,
+  slotIndex: number,
+  nextValue: string
+): Record<string, string | string[]> => {
+  const currentValue = record[fieldKey];
+  const currentItems = Array.isArray(currentValue)
+    ? [...currentValue]
+    : typeof currentValue === 'string' && currentValue !== ''
+      ? [currentValue]
+      : [];
+
+  if (nextValue) {
+    currentItems[slotIndex] = nextValue;
+  } else if (slotIndex < currentItems.length) {
+    currentItems.splice(slotIndex, 1);
+  }
+
+  const next = { ...record };
+  if (currentItems.length === 0) {
+    delete next[fieldKey];
+  } else if (currentItems.length === 1 && slotIndex === 0 && !Array.isArray(currentValue)) {
+    next[fieldKey] = currentItems[0];
+  } else {
+    next[fieldKey] = currentItems;
+  }
+  return next;
+};
+
+const updateTemplateAssetSlotRecord = (
+  record: Record<string, unknown>,
+  fieldKey: string,
+  slotIndex: number,
+  nextValue: string
+): Record<string, unknown> => {
+  const currentValue = record[fieldKey];
+  const currentItems = Array.isArray(currentValue)
+    ? currentValue.filter((item): item is string => typeof item === 'string')
+    : typeof currentValue === 'string' && currentValue !== ''
+      ? [currentValue]
+      : [];
+
+  if (nextValue) {
+    currentItems[slotIndex] = nextValue;
+  } else if (slotIndex < currentItems.length) {
+    currentItems.splice(slotIndex, 1);
+  }
+
+  const next = { ...record };
+  next[fieldKey] = currentItems;
+  return next;
+};
+
+const swapTemplateStringSlotRecord = (
+  record: Record<string, string | string[]>,
+  sourceSlot: TemplateImageSlot,
+  targetSlot: TemplateImageSlot
+): Record<string, string | string[]> => {
+  const sourceValue = getTemplateSlotStringValue(record[sourceSlot.fieldKey], sourceSlot.slotIndex);
+  const targetValue = getTemplateSlotStringValue(record[targetSlot.fieldKey], targetSlot.slotIndex);
+  let next = updateTemplateStringSlotRecord(record, sourceSlot.fieldKey, sourceSlot.slotIndex, targetValue);
+  next = updateTemplateStringSlotRecord(next, targetSlot.fieldKey, targetSlot.slotIndex, sourceValue);
+  return next;
+};
+
+const swapTemplateAssetSlotRecord = (
+  record: Record<string, unknown>,
+  sourceSlot: TemplateImageSlot,
+  targetSlot: TemplateImageSlot
+): Record<string, unknown> => {
+  const sourceValue = getTemplateSlotAssetValue(record[sourceSlot.fieldKey], sourceSlot.slotIndex);
+  const targetValue = getTemplateSlotAssetValue(record[targetSlot.fieldKey], targetSlot.slotIndex);
+  let next = updateTemplateAssetSlotRecord(record, sourceSlot.fieldKey, sourceSlot.slotIndex, targetValue);
+  next = updateTemplateAssetSlotRecord(next, targetSlot.fieldKey, targetSlot.slotIndex, sourceValue);
+  return next;
+};
 
 // Per D-05: Memoized output image strip item to prevent re-renders
 const OutputImageItem = React.memo(({
@@ -114,7 +490,7 @@ export const Draw = () => {
   const { shouldDisplayNode, getAllowedInputs, loadConfig, config } = useConfigStore();
 
   // ComfyUI queue store
-  const { fetchQueue, setBaseUrl: setComfyUIBaseUrl, queueRunning, queuePending } = useComfyUIStore();
+  const { fetchQueue, setBaseUrl: setComfyUIBaseUrl } = useComfyUIStore();
 
   // Workflows
   const [workflows, setWorkflows] = useState<ComfyUIWorkflowInfo[]>([]);
@@ -130,17 +506,24 @@ export const Draw = () => {
   const [isWorkflowPickerOpen, setIsWorkflowPickerOpen] = useState(false);
   const [workflowError, setWorkflowError] = useState<string | null>(null);
   const [uploadedImagePreviews, setUploadedImagePreviews] = useState<Record<string, string | string[]>>({});
+  const [templateUploadedImagePreviews, setTemplateUploadedImagePreviews] = useState<Record<string, string | string[]>>({});
+  const [templateUploadingFieldKeys, setTemplateUploadingFieldKeys] = useState<Set<string>>(new Set());
+  const [draggingTemplateImageFieldKey, setDraggingTemplateImageFieldKey] = useState<string | null>(null);
+  const [templateImageDropTargetKey, setTemplateImageDropTargetKey] = useState<string | null>(null);
 
   // Cluster Mode state per D-50, D-51
   const connectionMode = useSettingsStore((s) => s.connectionMode);
   const lemonGridStore = useLemonGridStore();
-  const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl, showLoginModal: lgShowLoginModal, setShowLoginModal: lgSetShowLoginModal } = lemonGridStore;
-  const queueSummary = useLemonGridStore((s) => s.queueSummary);
+  // Login modal is now mounted globally by the AuthGuard in App.tsx — Draw.tsx
+  // only needs read-only access to the auth state for guard checks.
+  const { isConnected: isLemonGridConnected, serverUrl: lemonGridServerUrl } = lemonGridStore;
 
   // Template state (replaces workflow state in Cluster Mode)
   const [clusterTemplates, setClusterTemplates] = useState<LemonGridTemplateSummary[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<LemonGridTemplateDetail | null>(null);
+  const [selectedTemplateGroupKey, setSelectedTemplateGroupKey] = useState<string | null>(null);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
+  const [isTemplatePickerOpen, setIsTemplatePickerOpen] = useState(false);
   const [templateParams, setTemplateParams] = useState<Record<string, unknown>>({});
   const [templateImageInputs, setTemplateImageInputs] = useState<Record<string, string | string[]>>({});
   // Per D-24: WebSocket connection refs for per-task connections
@@ -151,27 +534,13 @@ export const Draw = () => {
   const uploadedImageBase64Ref = useRef<Record<string, string>>({});
   const currentWorkflowKeyRef = useRef<string | null>(null);
   const uploadedImagePreviewsRef = useRef<Record<string, string | string[]>>({});
-
-  // Preset store (only what Draw.tsx uses directly; PresetToolbar accesses the store itself)
-  const {
-    loadPresets,
-    clearSelection,
-    setLastAppliedValues,
-  } = usePresetStore();
+  const templateParamsRef = useRef<Record<string, unknown>>({});
+  const templateImageInputsRef = useRef<Record<string, string | string[]>>({});
+  const templateUploadedImagePreviewsRef = useRef<Record<string, string | string[]>>({});
+  const templateUploadTasksRef = useRef<Record<string, Promise<void>>>({});
 
   // Invalid image references tracking
   const [invalidImageRefs, setInvalidImageRefs] = useState<Set<string>>(new Set());
-
-  // Image filenames derived from inputValues for image-type inputs
-  const currentImageFilenames = useMemo(() => {
-    const filenames: Record<string, string> = {};
-    for (const input of workflowInputs) {
-      if (input.type === 'image' && typeof inputValues[input.name] === 'string') {
-        filenames[input.name] = inputValues[input.name] as string;
-      }
-    }
-    return filenames;
-  }, [workflowInputs, inputValues]);
 
   // Generation
   const [progress, setProgress] = useState<GenerationProgress>({
@@ -189,6 +558,9 @@ export const Draw = () => {
   const [outputImages, setOutputImages] = useState<OutputImageData[]>([]);
   const [activeOutputIndex, setActiveOutputIndex] = useState(0);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
+  const [promptLibraryModal, setPromptLibraryModal] = useState<PromptLibraryModalState | null>(null);
+  const [promptLibraryVersion, setPromptLibraryVersion] = useState(0);
+  const [recentlySavedPromptKey, setRecentlySavedPromptKey] = useState<string | null>(null);
 
   // WebSocket for progress
   // WebSocket for progress
@@ -196,11 +568,259 @@ export const Draw = () => {
   
   // Track if we've handled rerun/edit to avoid duplicate execution
   const hasHandledHistoryAction = useRef(false);
+  const trackedClusterTaskIdsRef = useRef<Set<string>>(new Set());
   const pendingRerunPromptRef = useRef<Record<string, unknown> | null>(null);
+  const templatePickerRef = useRef<HTMLDivElement | null>(null);
 
 
   // Per D-01/D-02: Forward PS keyboard shortcuts when webview has focus
   useKeyboardPassthrough();
+
+  const parseAndEnrichWorkflowInputs = useCallback((
+    workflowData: unknown,
+    effectiveObjectInfo: Record<string, unknown> | null | undefined,
+    modelCatalogOverride?: ExperimentModelCatalog
+  ): WorkflowInput[] => {
+    let inputs = parseWorkflowInputs(
+      workflowData,
+      effectiveObjectInfo ?? null,
+      modelCatalogOverride ?? experimentModels
+    );
+
+    if (effectiveObjectInfo && typeof effectiveObjectInfo === 'object') {
+      const oi = effectiveObjectInfo as Record<string, unknown>;
+      inputs = inputs.map((input) => {
+        if (input.type !== 'text' || (input.options && input.options.length > 0)) {
+          return input;
+        }
+
+        const splitIdx = input.name.lastIndexOf('_');
+        const originalInputName = splitIdx > 0 ? input.name.slice(0, splitIdx) : input.name;
+        const classType = input.classType;
+        if (!classType || !originalInputName) {
+          return input;
+        }
+
+        const nodeInfo = oi[classType];
+        if (!nodeInfo || typeof nodeInfo !== 'object') {
+          return input;
+        }
+
+        const nodeInput = (nodeInfo as Record<string, unknown>).input;
+        if (!nodeInput || typeof nodeInput !== 'object') {
+          return input;
+        }
+
+        const required = (nodeInput as Record<string, unknown>).required;
+        const optional = (nodeInput as Record<string, unknown>).optional;
+        const config = (required && typeof required === 'object')
+          ? (required as Record<string, unknown>)[originalInputName]
+          : undefined;
+        const configAlt = (!config && optional && typeof optional === 'object')
+          ? (optional as Record<string, unknown>)[originalInputName]
+          : undefined;
+        const effectiveConfig = config ?? configAlt;
+        if (!effectiveConfig || !Array.isArray(effectiveConfig as unknown[])) {
+          return input;
+        }
+
+        const cfgArr = effectiveConfig as unknown[];
+        if (Array.isArray(cfgArr[0]) && (cfgArr[0] as unknown[]).length > 0) {
+          const options = (cfgArr[0] as unknown[]).map((v) => String(v));
+          return {
+            ...input,
+            type: 'select' as const,
+            options,
+            default: typeof input.default === 'string' && options.includes(input.default)
+              ? input.default
+              : options[0],
+          };
+        }
+
+        return input;
+      });
+    }
+
+    return inputs;
+  }, [experimentModels]);
+
+  const groupedClusterWorkflowTemplates = useMemo(
+    () => groupClusterTemplatesByVariants(
+      clusterTemplates.filter((template) => (template.template_type || 'COMFYUI') === 'COMFYUI')
+    ),
+    [clusterTemplates]
+  );
+
+  const clusterCloudTemplateGroups = useMemo(() => {
+    const categories = new Map<string, LemonGridTemplateSummary[]>();
+
+    clusterTemplates
+      .filter((template) => (template.template_type || 'COMFYUI') === 'THIRD_PARTY_API')
+      .forEach((template) => {
+        const category = template.category?.trim() || '未分类';
+        const group = categories.get(category);
+        if (group) {
+          group.push(template);
+        } else {
+          categories.set(category, [template]);
+        }
+      });
+
+    return Array.from(categories.entries()).map(([category, templates]) => ({
+      category,
+      templates,
+    }));
+  }, [clusterTemplates]);
+
+  const selectedTemplateGroup = useMemo(
+    () => groupedClusterWorkflowTemplates.find((group) => group.key === selectedTemplateGroupKey) ?? null,
+    [groupedClusterWorkflowTemplates, selectedTemplateGroupKey]
+  );
+
+  const selectedTemplateDisplayName = selectedTemplateGroup?.name ?? selectedTemplate?.name ?? null;
+
+  const promptLibraryEntries = useMemo<PromptLibraryEntry[]>(
+    () => (
+      promptLibraryModal
+        ? getPromptLibraryEntries(promptLibraryModal.storageKey, promptLibraryModal.kind)
+        : []
+    ),
+    [promptLibraryModal, promptLibraryVersion]
+  );
+
+  const buildWorkflowPromptLibraryKey = useCallback(
+    (input: WorkflowInput) => getGlobalPromptLibraryKey(getPromptLibraryScope(input)),
+    []
+  );
+
+  const buildTemplatePromptLibraryKey = useCallback(
+    (field: Pick<ParamSchemaField, 'name' | 'label' | 'description'>) => getGlobalPromptLibraryKey(getPromptLibraryScope(field)),
+    []
+  );
+
+  const openPromptLibraryModal = useCallback((
+    kind: PromptLibraryKind,
+    storageKey: string,
+    label: string,
+    applyValue: (text: string) => void
+  ) => {
+    setPromptLibraryModal({ kind, storageKey, label, applyValue });
+  }, []);
+
+  const closePromptLibraryModal = useCallback(() => {
+    setPromptLibraryModal(null);
+  }, []);
+
+  const applyPromptLibraryEntry = useCallback((text: string) => {
+    if (!promptLibraryModal) {
+      return;
+    }
+    promptLibraryModal.applyValue(text);
+    closePromptLibraryModal();
+  }, [closePromptLibraryModal, promptLibraryModal]);
+
+  const savePromptToCustomLibrary = useCallback((storageKey: string, text: string) => {
+    const normalizedText = text.trim();
+    if (!storageKey.trim() || !normalizedText) {
+      return;
+    }
+    addPromptLibraryEntry(storageKey, 'custom', normalizedText);
+    setPromptLibraryVersion((value) => value + 1);
+    setRecentlySavedPromptKey(storageKey);
+  }, []);
+
+  const deletePromptLibraryEntry = useCallback((text: string) => {
+    if (!promptLibraryModal) {
+      return;
+    }
+    removePromptLibraryEntry(promptLibraryModal.storageKey, promptLibraryModal.kind, text);
+    setPromptLibraryVersion((value) => value + 1);
+  }, [promptLibraryModal]);
+
+  const recordPromptHistory = useCallback((items: Array<{ storageKey: string; text: string }>) => {
+    const payload = items
+      .map(({ storageKey, text }) => ({ key: storageKey.trim(), text: text.trim() }))
+      .filter(({ key, text }) => key !== '' && text !== '');
+
+    if (payload.length === 0) {
+      return;
+    }
+
+    addPromptHistoryEntries(payload);
+    setPromptLibraryVersion((value) => value + 1);
+  }, []);
+
+  const collectTemplatePromptHistory = useCallback((
+    fields: ParamSchemaField[],
+    values: Record<string, unknown>
+  ): Array<{ storageKey: string; text: string }> => (
+    fields
+      .filter((field) => field.type === 'text' && isPromptTemplateField(field))
+      .map((field) => {
+        const fieldKey = getTemplateFieldStateKey(field);
+        return {
+          storageKey: buildTemplatePromptLibraryKey(field),
+          text: String(values[fieldKey] ?? renderParamDefault(field) ?? ''),
+        };
+      })
+  ), [buildTemplatePromptLibraryKey]);
+
+  useEffect(() => {
+    if (!recentlySavedPromptKey) {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => {
+      setRecentlySavedPromptKey((current) => (current === recentlySavedPromptKey ? null : current));
+    }, 1600);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [recentlySavedPromptKey]);
+
+  useEffect(() => {
+    if (!promptLibraryModal) {
+      return undefined;
+    }
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closePromptLibraryModal();
+      }
+    };
+
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [closePromptLibraryModal, promptLibraryModal]);
+
+  useEffect(() => {
+    if (!isTemplatePickerOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!templatePickerRef.current?.contains(event.target as Node)) {
+        setIsTemplatePickerOpen(false);
+      }
+    };
+
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsTemplatePickerOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleEscape);
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [isTemplatePickerOpen]);
 
   // Fetch workflows on mount
   useEffect(() => {
@@ -212,6 +832,18 @@ export const Draw = () => {
   useEffect(() => {
     latestInputValuesRef.current = inputValues;
   }, [inputValues]);
+
+  useEffect(() => {
+    templateParamsRef.current = templateParams;
+  }, [templateParams]);
+
+  useEffect(() => {
+    templateImageInputsRef.current = templateImageInputs;
+  }, [templateImageInputs]);
+
+  useEffect(() => {
+    templateUploadedImagePreviewsRef.current = templateUploadedImagePreviews;
+  }, [templateUploadedImagePreviews]);
 
   // Keep refs in sync for unmount cleanup
   useEffect(() => {
@@ -327,22 +959,6 @@ export const Draw = () => {
     return () => { cancelled = true; };
   }, [connectionMode, isLemonGridConnected, lemonGridServerUrl]);
 
-  // Cluster Mode: Load presets when template changes
-  // Per D-10, D-104: Presets work per-template using template_id as key
-  useEffect(() => {
-    if (connectionMode !== 'cluster') return;
-    if (selectedTemplate) {
-      loadPresets(selectedTemplate.id);
-    } else {
-      clearSelection();
-    }
-  }, [connectionMode, selectedTemplate?.id]);
-
-  // Per T-08-06: Clear preset selection on mode switch to prevent cross-mode data leak
-  useEffect(() => {
-    usePresetStore.getState().clearSelection();
-  }, [connectionMode]);
-
   // Per D-22, D-23, D-37, D-38: WebSocket progress through Bridge + auto-fallback to polling
   useEffect(() => {
     if (connectionMode !== 'cluster') return;
@@ -450,69 +1066,9 @@ export const Draw = () => {
     return () => clearInterval(interval);
   }, [isGenerating, fetchQueue]);
 
-  // Load presets when workflow changes
-  useEffect(() => {
-    if (selectedWorkflow) {
-      const wfName = selectedWorkflow.name;
-      loadPresets(wfName);
-    } else {
-      clearSelection();
-    }
-  }, [selectedWorkflow?.name]);
+  // Check image reference validity on ComfyUI — REMOVED (was preset-only)
 
-  // Check image reference validity on ComfyUI
-  const checkImageReference = async (inputName: string, filename: string) => {
-    try {
-      const comfyUrl = comfyUISettings.baseUrl || 'http://127.0.0.1:8188';
-      const response = await bridgeFetch(`${comfyUrl}/view?filename=${encodeURIComponent(filename)}&type=input`, { method: 'HEAD' });
-      if (!response.ok) {
-        setInvalidImageRefs(prev => new Set(prev).add(inputName));
-      } else {
-        setInvalidImageRefs(prev => {
-          const next = new Set(prev);
-          next.delete(inputName);
-          return next;
-        });
-      }
-    } catch {
-      // Network error -- don't mark as invalid, might be transient
-    }
-  };
-
-  // Apply preset values to Draw state
-  const handleApplyPreset = useCallback((preset: PresetFile) => {
-    const currentInputNames = new Set(workflowInputs.map(i => i.name));
-    const appliedValues: Record<string, string | number | boolean> = { ...inputValues };
-
-    for (const [key, value] of Object.entries(preset.inputValues)) {
-      if (currentInputNames.has(key)) {
-        appliedValues[key] = value;
-      }
-    }
-
-    setInputValues(appliedValues);
-
-    // Apply image filenames: restore uploaded image references
-    for (const [inputName, filename] of Object.entries(preset.imageFilenames)) {
-      if (currentInputNames.has(inputName)) {
-        checkImageReference(inputName, filename);
-      }
-    }
-
-    // Update cache with preset values
-    if (selectedWorkflow) {
-      const cacheKey = selectedWorkflow.path || selectedWorkflow.name;
-      const { saveCache } = useWorkflowCacheStore.getState();
-      saveCache(cacheKey, {
-        inputValues: appliedValues,
-        imageData: uploadedImageBase64Ref.current,
-        imageFilenames: preset.imageFilenames,
-      });
-    }
-
-    // Track applied values for dirty checking
-    setLastAppliedValues(appliedValues, preset.imageFilenames);
-  }, [workflowInputs, inputValues, selectedWorkflow, setLastAppliedValues]);
+  // Apply preset values to Draw state — REMOVED (preset feature deleted)
 
 
 
@@ -521,23 +1077,29 @@ export const Draw = () => {
 
   // Handle rerun/edit from history
   useEffect(() => {
+    // With keep-alive routing (App.tsx KeepAlivePages), Draw no longer remounts on tab switch.
+    // Reset the handled flag whenever a fresh history action arrives so re-clicks from
+    // the History page actually trigger another rerun/edit.
+    const hasFreshAction = Boolean(
+      (location.state as HistoryActionState | null)?.rerunItem ||
+      (location.state as HistoryActionState | null)?.editItem ||
+      sessionStorage.getItem('rerunItem') ||
+      sessionStorage.getItem('editItem')
+    );
+    if (hasFreshAction && hasHandledHistoryAction.current) {
+      hasHandledHistoryAction.current = false;
+    }
+
     console.log('[Draw] History useEffect triggered:', {
       hasHandledHistoryAction: hasHandledHistoryAction.current,
       workflowsLength: workflows.length,
+      clusterTemplatesLength: clusterTemplates.length,
       hasBaseUrl: !!comfyUISettings.baseUrl,
+      connectionMode,
       locationState: location.state,
       sessionStorageRerun: sessionStorage.getItem('rerunItem') ? 'present' : 'empty',
       sessionStorageEdit: sessionStorage.getItem('editItem') ? 'present' : 'empty'
     });
-
-    if (hasHandledHistoryAction.current || workflows.length === 0 || !comfyUISettings.baseUrl) {
-      console.log('[Draw] History useEffect SKIPPED:', {
-        reason: hasHandledHistoryAction.current ? 'already_handled' :
-                workflows.length === 0 ? 'no_workflows' :
-                'no_baseUrl'
-      });
-      return;
-    }
 
     const state = location.state as HistoryActionState | null;
     const storedRerun = (() => {
@@ -560,64 +1122,108 @@ export const Draw = () => {
     const historyItem = state?.rerunItem || state?.editItem || storedRerun || storedEdit;
     if (!historyItem) return;
 
+    const historySource = historyItem.source ?? connectionMode;
+    const isClusterHistoryAction = historySource === 'cluster';
+    const historyReady = isClusterHistoryAction
+      ? isLemonGridConnected && !!lemonGridServerUrl && clusterTemplates.length > 0
+      : workflows.length > 0 && !!comfyUISettings.baseUrl;
+
+    if (hasHandledHistoryAction.current || !historyReady) {
+      console.log('[Draw] History useEffect SKIPPED:', {
+        reason: hasHandledHistoryAction.current
+          ? 'already_handled'
+          : isClusterHistoryAction
+            ? (!isLemonGridConnected || !lemonGridServerUrl ? 'cluster_not_connected' : 'no_templates')
+            : (workflows.length === 0 ? 'no_workflows' : 'no_baseUrl'),
+        historySource,
+      });
+      return;
+    }
+
     hasHandledHistoryAction.current = true;
     const shouldAutoGenerate = Boolean(state?.rerunItem || storedRerun);
 
     const applyHistoryAction = async () => {
-      const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
-      const prefixMode: 'api' | 'oss' = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
       try {
         console.log('[Draw] ========== HISTORY ACTION START ==========');
         console.log('[Draw] History action triggered:', {
+          source: historySource,
+          workflow: historyItem.workflow,
           workflowName: historyItem.workflowName,
           imageName: historyItem.imageName,
           paramsKeys: historyItem.params ? Object.keys(historyItem.params) : 'undefined',
           shouldAutoGenerate
         });
-        console.log('[Draw] Current workflows available:', workflows.length, workflows.map(w => w.name));
-        const targetWorkflow = await findBestMatchingWorkflow(historyItem.params, historyItem.workflowName, workflows, client, prefixMode);
-        console.log('[Draw] ========== MATCHING RESULT ==========');
-        console.log('[Draw] Found target workflow:', targetWorkflow?.name);
-        console.log('[Draw] Expected workflow was:', historyItem.workflowName);
-        if (!targetWorkflow) {
-          console.warn('[Draw] No workflow available for history action');
-          return;
-        }
+        if (isClusterHistoryAction) {
+          const historyTemplateId = historyItem.templateId || historyItem.workflow;
+          // #region debug-point A:cluster-history-input
+          void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'A', location: 'Draw.tsx:1145', msg: '[DEBUG] cluster history action payload', data: { historyTemplateId, workflowName: historyItem.workflowName, paramKeys: historyItem.params ? Object.keys(historyItem.params) : [], imageLikeEntries: Object.entries(historyItem.params || {}).filter(([key]) => /(?:^|\.)(?:image|upload)$/i.test(key)).map(([key, value]) => ({ key, valueType: Array.isArray(value) ? 'array' : typeof value, hasAssetId: Boolean(value && typeof value === 'object' && !Array.isArray(value) && 'asset_id' in (value as Record<string, unknown>)), value })) }, ts: Date.now() }) }).catch(() => {});
+          // #endregion
+          const matchedTemplate = (historyTemplateId
+            ? clusterTemplates.find((template) => template.id === historyTemplateId)
+            : undefined) ?? clusterTemplates.find((template) => template.name === historyItem.workflowName);
 
-        const loadedInputs = await handleWorkflowSelect(targetWorkflow);
-        console.log('[Draw] Loaded inputs:', loadedInputs.map(i => ({ name: i.name, type: i.type, classType: i.classType })));
-
-        if (historyItem.params) {
-          pendingRerunPromptRef.current = historyItem.params;
-          const restored = extractInputValuesFromHistoryParams(historyItem.params, loadedInputs);
-          console.log('[Draw] Restored values from history:', restored);
-          if (Object.keys(restored).length > 0) {
-            setInputValues((prev) => {
-              const next = { ...prev, ...restored };
-              latestInputValuesRef.current = next;
-              return next;
+          if (!matchedTemplate) {
+            console.warn('[Draw] No cluster template available for history action:', {
+              templateId: historyTemplateId,
+              workflowName: historyItem.workflowName,
             });
+            return;
+          }
 
-            // Restore image previews for image inputs
-            const imageInputs = loadedInputs.filter(i => i.type === 'image');
-            const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
-            const newPreviews: Record<string, string> = {};
-            for (const imgInput of imageInputs) {
-              const filename = restored[imgInput.name];
-              if (typeof filename === 'string' && filename.trim() !== '') {
-                // Generate preview URL from ComfyUI
-                const previewUrl = client.getViewUrl({
-                  filename,
-                  type: 'input',
-                  subfolder: '',
-                  preview: true,
-                });
-                newPreviews[imgInput.name] = previewUrl;
-                console.log('[Draw] Restored image preview for', imgInput.name, ':', previewUrl);
+          const matchedGroup = groupedClusterWorkflowTemplates.find((group) =>
+            group.variants.some((variant) => variant.template.id === matchedTemplate.id)
+          );
+          const detail = buildTemplateDetail(matchedTemplate);
+          applyClusterHistoryTemplate(detail, historyItem.params, matchedGroup?.key ?? null);
+          console.log('[Draw] Restored cluster history action with template:', matchedTemplate.id);
+        } else {
+          const client = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
+          const prefixMode: 'api' | 'oss' = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
+          console.log('[Draw] Current workflows available:', workflows.length, workflows.map(w => w.name));
+          const targetWorkflow = await findBestMatchingWorkflow(historyItem.params, historyItem.workflowName, workflows, client, prefixMode);
+          console.log('[Draw] ========== MATCHING RESULT ==========');
+          console.log('[Draw] Found target workflow:', targetWorkflow?.name);
+          console.log('[Draw] Expected workflow was:', historyItem.workflowName);
+          if (!targetWorkflow) {
+            console.warn('[Draw] No workflow available for history action');
+            return;
+          }
+
+          const loadedInputs = await handleWorkflowSelect(targetWorkflow);
+          console.log('[Draw] Loaded inputs:', loadedInputs.map(i => ({ name: i.name, type: i.type, classType: i.classType })));
+
+          if (historyItem.params) {
+            pendingRerunPromptRef.current = historyItem.params;
+            const restored = extractInputValuesFromHistoryParams(historyItem.params, loadedInputs);
+            console.log('[Draw] Restored values from history:', restored);
+            if (Object.keys(restored).length > 0) {
+              setInputValues((prev) => {
+                const next = { ...prev, ...restored };
+                latestInputValuesRef.current = next;
+                return next;
+              });
+
+              // Restore image previews for image inputs
+              const imageInputs = loadedInputs.filter(i => i.type === 'image');
+              const previewClient = new ComfyUIClient({ baseUrl: comfyUISettings.baseUrl });
+              const newPreviews: Record<string, string> = {};
+              for (const imgInput of imageInputs) {
+                const filename = restored[imgInput.name];
+                if (typeof filename === 'string' && filename.trim() !== '') {
+                  const previewUrl = previewClient.getViewUrl({
+                    filename,
+                    type: 'input',
+                    subfolder: '',
+                    preview: true,
+                  });
+                  newPreviews[imgInput.name] = previewUrl;
+                  console.log('[Draw] Restored image preview for', imgInput.name, ':', previewUrl);
+                }
               }
-            }
-            if (Object.keys(newPreviews).length > 0) {
-              setUploadedImagePreviews(prev => ({ ...prev, ...newPreviews }));
+              if (Object.keys(newPreviews).length > 0) {
+                setUploadedImagePreviews(prev => ({ ...prev, ...newPreviews }));
+              }
             }
           }
         }
@@ -637,7 +1243,17 @@ export const Draw = () => {
     };
 
     applyHistoryAction();
-  }, [location.state, workflows, comfyUISettings.baseUrl]);
+  }, [
+    clusterTemplates,
+    comfyUISettings.baseUrl,
+    comfyUISettings.prefixMode,
+    connectionMode,
+    groupedClusterWorkflowTemplates,
+    isLemonGridConnected,
+    lemonGridServerUrl,
+    location.state,
+    workflows,
+  ]);
   const fetchWorkflows = async () => {
     if (!comfyUISettings.isConnected) return;
 
@@ -683,7 +1299,8 @@ export const Draw = () => {
         sessionStorage.getItem('editItem');
 
       if (!selectedWorkflow && !hasPendingHistoryAction) {
-        const defaultWorkflow = getDefaultWorkflow(workflowList);
+        const defaultWorkflowGroup = getDefaultGroupedWorkflow(workflowList);
+        const defaultWorkflow = defaultWorkflowGroup?.representative ?? getDefaultWorkflow(workflowList);
         if (defaultWorkflow) {
           handleWorkflowSelect(defaultWorkflow, loadedObjectInfo, Object.keys(experimentModels).length > 0 ? experimentModels : undefined);
         }
@@ -704,6 +1321,12 @@ export const Draw = () => {
     modelCatalogOverride?: ExperimentModelCatalog
   ): Promise<WorkflowInput[]> => {
     console.log('[Draw] handleWorkflowSelect called for:', workflow.name);
+    const carriedWorkflowImageEntries = extractOrderedWorkflowImageEntries(
+      workflowImageInputs,
+      latestInputValuesRef.current,
+      uploadedImagePreviewsRef.current,
+      uploadedImageBase64Ref.current
+    );
 
     // Save current workflow cache before switching
     const { saveCache, loadCache } = useWorkflowCacheStore.getState();
@@ -729,17 +1352,6 @@ export const Draw = () => {
         imageFilenames,
       });
     }
-
-    // Clean up old blob URLs
-    Object.values(uploadedImagePreviews).forEach((url: string | string[]) => {
-      const urls = Array.isArray(url) ? url : [url];
-      urls.forEach(u => { if (u.startsWith('blob:')) URL.revokeObjectURL(u); });
-    });
-    setUploadedImagePreviews({});
-
-    // Clear image refs
-    uploadedImageBlobsRef.current = {};
-    uploadedImageBase64Ref.current = {};
 
     setSelectedWorkflow(workflow);
     selectedWorkflowRef.current = workflow;
@@ -794,66 +1406,39 @@ export const Draw = () => {
       }
 
       // Parse workflow inputs
-      let inputs = parseWorkflowInputs(
+      const inputs = parseAndEnrichWorkflowInputs(
         workflowData,
         effectiveObjectInfo,
         modelCatalogOverride ?? experimentModels
       );
-
-      // Post-parse enrichment: for text inputs that should be selects,
-      // resolve options from objectInfo using classType
-      if (effectiveObjectInfo && typeof effectiveObjectInfo === 'object') {
-        const oi = effectiveObjectInfo as Record<string, unknown>;
-        inputs = inputs.map(input => {
-          // Only enrich text inputs without options
-          if (input.type !== 'text' || (input.options && input.options.length > 0)) {
-            return input;
-          }
-          // Extract the original input name (strip _nodeId suffix)
-          const splitIdx = input.name.lastIndexOf('_');
-          const originalInputName = splitIdx > 0 ? input.name.slice(0, splitIdx) : input.name;
-          const classType = input.classType;
-          if (!classType || !originalInputName) return input;
-
-          // Look up this node type in objectInfo
-          const nodeInfo = oi[classType];
-          if (!nodeInfo || typeof nodeInfo !== 'object') return input;
-          const nodeInput = (nodeInfo as Record<string, unknown>).input;
-          if (!nodeInput || typeof nodeInput !== 'object') return input;
-
-          const required = (nodeInput as Record<string, unknown>).required;
-          const optional = (nodeInput as Record<string, unknown>).optional;
-          const config = (required && typeof required === 'object')
-            ? (required as Record<string, unknown>)[originalInputName]
-            : undefined;
-          const configAlt = (!config && optional && typeof optional === 'object')
-            ? (optional as Record<string, unknown>)[originalInputName]
-            : undefined;
-          const effectiveConfig = config ?? configAlt;
-          if (!effectiveConfig || !Array.isArray(effectiveConfig as unknown[])) return input;
-
-          const cfgArr = effectiveConfig as unknown[];
-          // Check if config[0] is an array of string options (COMBO type)
-          if (Array.isArray(cfgArr[0]) && (cfgArr[0] as unknown[]).length > 0) {
-            const options = (cfgArr[0] as unknown[]).map(v => String(v));
-            return {
-              ...input,
-              type: 'select' as const,
-              options,
-              default: typeof input.default === 'string' && options.includes(input.default)
-                ? input.default
-                : options[0],
-            };
-          }
-          return input;
-        });
-      }
 
       setWorkflowInputs(inputs);
 
       // Try to load from cache first
       const workflowKey = workflow.path || workflow.name;
       const cached = loadCache(workflowKey);
+      const targetOrderedImageInputs = sortWorkflowImageInputsByOrder(inputs.filter((input) => input.type === 'image'));
+      const appliedCarriedImages = applyWorkflowImageEntriesToInputs(targetOrderedImageInputs, carriedWorkflowImageEntries);
+
+      const retainedPreviewUrls = new Set(
+        Object.values(appliedCarriedImages.previews).filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+      );
+      Object.values(uploadedImagePreviewsRef.current).forEach((url: string | string[]) => {
+        const urls = Array.isArray(url) ? url : [url];
+        urls.forEach((previewUrl) => {
+          if (previewUrl.startsWith('blob:') && !retainedPreviewUrls.has(previewUrl)) {
+            URL.revokeObjectURL(previewUrl);
+          }
+        });
+      });
+
+      uploadedImageBlobsRef.current = {};
+      uploadedImageBase64Ref.current = {};
+      uploadedImagePreviewsRef.current = {};
+
+      let nextInputValues: Record<string, string | number | boolean> = {};
+      let nextPreviews: Record<string, string> = {};
+      let nextBase64: Record<string, string> = {};
 
       if (cached) {
         console.log('[Draw] Restoring from cache for:', workflowKey);
@@ -862,30 +1447,38 @@ export const Draw = () => {
         // Restore input values
         const restoredValues: Record<string, string | number | boolean> = {};
         inputs.forEach(input => {
+          if (input.type === 'image' && carriedWorkflowImageEntries.length > 0) {
+            if (input.default !== undefined) {
+              restoredValues[input.name] = input.default;
+            }
+            return;
+          }
           if (cached.inputValues[input.name] !== undefined) {
             restoredValues[input.name] = cached.inputValues[input.name];
           } else if (input.default !== undefined) {
             restoredValues[input.name] = input.default;
           }
         });
-        setInputValues(restoredValues);
-        latestInputValuesRef.current = restoredValues;
+        nextInputValues = restoredValues;
 
         // Restore image previews from base64 data
         const restoredPreviews: Record<string, string> = {};
         for (const [inputName, base64] of Object.entries(cached.imageData)) {
+          if (carriedWorkflowImageEntries.length > 0 && targetOrderedImageInputs.some((input) => input.name === inputName)) {
+            continue;
+          }
           console.log('[Draw] Restoring image for input:', inputName, 'base64 length:', base64.length);
           const blobUrl = base64ToBlobUrl(base64);
           if (blobUrl) {
             restoredPreviews[inputName] = blobUrl;
-            uploadedImageBase64Ref.current[inputName] = base64;
+            nextBase64[inputName] = base64;
             console.log('[Draw] Created blob URL:', blobUrl);
           } else {
             console.warn('[Draw] Failed to create blob URL for:', inputName);
           }
         }
         console.log('[Draw] Restored previews:', Object.keys(restoredPreviews));
-        setUploadedImagePreviews(restoredPreviews);
+        nextPreviews = restoredPreviews;
       } else {
         // Set default values if no cache
         const defaults: Record<string, string | number | boolean> = {};
@@ -894,9 +1487,29 @@ export const Draw = () => {
             defaults[input.name] = input.default;
           }
         });
-        setInputValues(defaults);
-        latestInputValuesRef.current = defaults;
+        nextInputValues = defaults;
       }
+
+      if (Object.keys(appliedCarriedImages.values).length > 0) {
+        nextInputValues = {
+          ...nextInputValues,
+          ...appliedCarriedImages.values,
+        };
+        nextPreviews = {
+          ...nextPreviews,
+          ...appliedCarriedImages.previews,
+        };
+        nextBase64 = {
+          ...nextBase64,
+          ...appliedCarriedImages.base64,
+        };
+      }
+
+      setInputValues(nextInputValues);
+      latestInputValuesRef.current = nextInputValues;
+      setUploadedImagePreviews(nextPreviews);
+      uploadedImagePreviewsRef.current = nextPreviews;
+      uploadedImageBase64Ref.current = nextBase64;
 
       return inputs;
     } catch (error) {
@@ -944,9 +1557,39 @@ export const Draw = () => {
     });
   }, [workflowInputs]);
 
+  const collectWorkflowPromptHistory = useCallback((
+    values: Record<string, string | number | boolean>
+  ): Array<{ storageKey: string; text: string }> => (
+    sortedWorkflowInputs
+      .filter((input) => input.type === 'text' && isPromptWorkflowField(input))
+      .map((input) => ({
+        storageKey: buildWorkflowPromptLibraryKey(input),
+        text: String(values[input.name] ?? input.default ?? ''),
+      }))
+  ), [buildWorkflowPromptLibraryKey, sortedWorkflowInputs]);
+
+  const workflowImageInputs = useMemo(
+    () => workflowInputs.filter((input) => input.type === 'image'),
+    [workflowInputs]
+  );
+
+  const workflowImageInputNames = useMemo(
+    () => new Set(workflowImageInputs.map((input) => input.name)),
+    [workflowImageInputs]
+  );
+
+  const filledWorkflowImageCount = useMemo(
+    () =>
+      workflowImageInputs.filter((input) => {
+        const value = inputValues[input.name];
+        return typeof value === 'string' && value.trim() !== '';
+      }).length,
+    [workflowImageInputs, inputValues]
+  );
+
   const handleFillPrompt = useCallback((text: string) => {
-    // Find the first text input (CLIPTextEncode node prompt)
-    const firstTextInput = sortedWorkflowInputs.find(input => input.type === 'text');
+    const firstTextInput = sortedWorkflowInputs.find((input) => input.type === 'text' && isPromptWorkflowField(input))
+      ?? sortedWorkflowInputs.find((input) => input.type === 'text');
     if (firstTextInput) {
       handleInputChange(firstTextInput.name, text);
     }
@@ -1096,6 +1739,14 @@ export const Draw = () => {
       throw new Error('请先在设置页面连接 ComfyUI');
     }
 
+    if (workflowImageInputs.length === 0) {
+      throw new Error('当前工作流没有可用的图片输入节点（LoadImage）');
+    }
+
+    if (!workflowImageInputNames.has(inputName)) {
+      throw new Error(`图片输入槽位无效，当前工作流最多支持 ${workflowImageInputs.length} 张参考图`);
+    }
+
     const previewBlob = previewSource ?? file;
     const previewUrl = URL.createObjectURL(previewBlob);
     setUploadedImagePreviews((prev) => ({
@@ -1117,14 +1768,38 @@ export const Draw = () => {
       const uploadPrefixMode = comfyUISettings.prefixMode === 'api' ? 'api' : 'oss';
       const uploadedName = await uploadToComfyUI(file, comfyUISettings.baseUrl, uploadPrefixMode);
       pendingRerunPromptRef.current = null;
-      setInputValues((prev) => {
-        const next = {
-          ...prev,
-          [inputName]: uploadedName
-        };
-        latestInputValuesRef.current = next;
-        return next;
-      });
+      const nextInputValues = {
+        ...latestInputValuesRef.current,
+        [inputName]: uploadedName
+      };
+      latestInputValuesRef.current = nextInputValues;
+      setInputValues(nextInputValues);
+      // #region debug-point A:direct-upload-success
+      {
+        const latestImageValues = Object.fromEntries(
+          Object.entries(nextInputValues).filter(([key, value]) => key.startsWith('image_') && typeof value === 'string')
+        );
+        fetch('http://127.0.0.1:7777/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'direct-image-default',
+            runId: 'pre',
+            hypothesisId: 'A',
+            location: 'Draw.tsx:1188',
+            msg: '[DEBUG] direct image upload stored',
+            data: {
+              inputName,
+              fileName: file.name,
+              uploadedName,
+              imageInputs: workflowImageInputs.map((input) => input.name),
+              latestImageValues,
+            },
+            ts: Date.now(),
+          }),
+        }).catch(() => {});
+      }
+      // #endregion
       // Clear invalid image ref on successful upload
       setInvalidImageRefs(prev => {
         const next = new Set(prev);
@@ -1156,27 +1831,20 @@ export const Draw = () => {
     await uploadImageFileToInput(file, imageInputName, blob);
   };
 
-  // Cluster Mode: Handle template selection
-  // Synchronous — same pattern as direct mode's handleWorkflowSelect.
-  // Deep clone param_schema to prevent shared reference issues across templates.
-  const handleTemplateSelect = (template: LemonGridTemplateSummary) => {
+  const buildTemplateDetail = useCallback((template: LemonGridTemplateSummary): LemonGridTemplateDetail => {
     const raw = template as unknown as Record<string, unknown>;
-    // Deep clone to break any shared references in the list API response
     const cloned = {
       ...raw,
       param_schema: JSON.parse(JSON.stringify(raw.param_schema ?? [])),
     };
     const detail = normalizeTemplateDetail(cloned as Record<string, unknown>);
 
-    // Enrich param_schema: convert COMBO fields that API mis-typed as STRING/text to select
-    // Uses objectInfo to look up actual options for each field
     const oi = objectInfo as Record<string, unknown> | null;
     if (oi) {
       for (const field of detail.param_schema) {
         if (field.type === 'text' && !field.hidden) {
           const classType = field.source_class_type;
           const inputName = field.name;
-          // Try to find options from objectInfo using source_class_type
           if (classType && oi[classType]) {
             const nodeInfo = oi[classType] as Record<string, unknown>;
             const nodeInput = nodeInfo.input as Record<string, unknown> | undefined;
@@ -1187,12 +1855,12 @@ export const Draw = () => {
               if (config && Array.isArray(config as unknown[]) && Array.isArray((config as unknown[])[0])) {
                 const opts = (config as unknown[])[0] as unknown[];
                 field.type = 'select';
-                field.options = opts.map(v => ({ label: String(v), value: v }));
+                field.options = opts.map((v) => ({ label: String(v), value: v }));
               }
             }
           }
         }
-        // Also fix select fields that have no options — enrich from objectInfo
+
         if (field.type === 'select' && (!field.options || field.options.length === 0)) {
           const classType = field.source_class_type;
           const inputName = field.name;
@@ -1205,7 +1873,7 @@ export const Draw = () => {
               const config = required?.[inputName] ?? optional?.[inputName];
               if (config && Array.isArray(config as unknown[]) && Array.isArray((config as unknown[])[0])) {
                 const opts = (config as unknown[])[0] as unknown[];
-                field.options = opts.map(v => ({ label: String(v), value: v }));
+                field.options = opts.map((v) => ({ label: String(v), value: v }));
               }
             }
           }
@@ -1213,67 +1881,542 @@ export const Draw = () => {
       }
     }
 
-    // Per D-09: Initialize templateParams with defaults from param_schema
+    return detail;
+  }, [objectInfo]);
+
+  const remapTemplateStateToDetail = useCallback((
+    sourceDetail: LemonGridTemplateDetail,
+    targetDetail: LemonGridTemplateDetail,
+    sourceParams: Record<string, unknown>,
+    sourceImageInputs: Record<string, string | string[]>,
+    sourcePreviews: Record<string, string | string[]>
+  ) => {
+    const buildSlots = (detail: LemonGridTemplateDetail) => {
+      const slots = new Map<string, ParamSchemaField[]>();
+      detail.param_schema
+        .filter((field) => !field.hidden)
+        .forEach((field) => {
+          const key = `${field.type}::${field.name}`;
+          const existing = slots.get(key);
+          if (existing) {
+            existing.push(field);
+          } else {
+            slots.set(key, [field]);
+          }
+        });
+      slots.forEach((fields, key) => {
+        slots.set(
+          key,
+          [...fields].sort((a, b) => {
+            const aNodeId = Number(a.node_id);
+            const bNodeId = Number(b.node_id);
+            if (Number.isFinite(aNodeId) && Number.isFinite(bNodeId) && aNodeId !== bNodeId) {
+              return aNodeId - bNodeId;
+            }
+            return String(a.node_id).localeCompare(String(b.node_id), 'zh-CN');
+          })
+        );
+      });
+      return slots;
+    };
+
+    const targetParams: Record<string, unknown> = {};
+    targetDetail.param_schema.forEach((field) => {
+      targetParams[getTemplateFieldStateKey(field)] = renderParamDefault(field);
+    });
+
+    const targetImageInputs: Record<string, string | string[]> = {};
+    const targetPreviews: Record<string, string | string[]> = {};
+    const sourceSlots = buildSlots(sourceDetail);
+    const targetSlots = buildSlots(targetDetail);
+
+    targetSlots.forEach((targetFields, slotKey) => {
+      if (targetFields[0]?.type === 'image') {
+        return;
+      }
+      const sourceFields = sourceSlots.get(slotKey) ?? [];
+      const orderedSourceFields = sourceFields;
+      targetFields.forEach((targetField, index) => {
+        const sourceField = orderedSourceFields[index] ?? orderedSourceFields[0];
+        if (!sourceField) {
+          return;
+        }
+
+        const sourceKey = getTemplateFieldStateKey(sourceField);
+        const targetKey = getTemplateFieldStateKey(targetField);
+        if (sourceParams[sourceKey] !== undefined) {
+          targetParams[targetKey] = sourceParams[sourceKey];
+        }
+        if (sourceImageInputs[sourceKey] !== undefined) {
+          targetImageInputs[targetKey] = sourceImageInputs[sourceKey];
+        }
+        if (sourcePreviews[sourceKey] !== undefined) {
+          targetPreviews[targetKey] = sourcePreviews[sourceKey];
+        }
+      });
+    });
+
+    const carriedTemplateImages = extractOrderedTemplateImageEntries(
+      sourceDetail,
+      sourceParams,
+      sourceImageInputs,
+      sourcePreviews
+    );
+    const appliedTemplateImages = applyTemplateImageEntriesToDetail(
+      targetDetail,
+      carriedTemplateImages,
+      targetParams,
+      targetImageInputs,
+      targetPreviews
+    );
+
+    return {
+      targetParams: appliedTemplateImages.targetParams,
+      targetImageInputs: appliedTemplateImages.targetImageInputs,
+      targetPreviews: appliedTemplateImages.targetPreviews,
+    };
+  }, []);
+
+  const applySelectedTemplateDetail = useCallback((
+    detail: LemonGridTemplateDetail,
+    templateGroupKey: string | null
+  ) => {
     const defaults: Record<string, unknown> = {};
     for (const field of detail.param_schema) {
-      defaults[field.name] = renderParamDefault(field);
+      defaults[getTemplateFieldStateKey(field)] = renderParamDefault(field);
     }
     setTemplateParams(defaults);
 
-    // Per D-19: Auto-detect image inputs (skip hidden fields)
     const imageInputs: Record<string, string> = {};
     for (const field of detail.param_schema) {
       if (!field.hidden && isImageParam(field)) {
-        imageInputs[field.name] = '';
+        imageInputs[getTemplateFieldStateKey(field)] = '';
       }
     }
-    setTemplateImageInputs(imageInputs);
+
+    let nextTemplateParams = defaults;
+    let nextTemplateImageInputs: Record<string, string | string[]> = imageInputs;
+    let nextTemplatePreviews: Record<string, string | string[]> = {};
+
+    if (selectedTemplate) {
+      const previousPreviews = templateUploadedImagePreviewsRef.current;
+      const remapped = remapTemplateStateToDetail(
+        selectedTemplate,
+        detail,
+        templateParamsRef.current,
+        templateImageInputsRef.current,
+        previousPreviews
+      );
+
+      nextTemplateParams = remapped.targetParams;
+      nextTemplateImageInputs = {
+        ...imageInputs,
+        ...remapped.targetImageInputs,
+      };
+      nextTemplatePreviews = remapped.targetPreviews;
+
+      const retainedPreviewUrls = new Set(
+        Object.values(nextTemplatePreviews)
+          .flatMap((value) => (Array.isArray(value) ? value : [value]))
+          .filter((value): value is string => typeof value === 'string')
+      );
+
+      Object.values(previousPreviews)
+        .flatMap((value) => (Array.isArray(value) ? value : [value]))
+        .forEach((url) => {
+          if (typeof url === 'string' && url.startsWith('blob:') && !retainedPreviewUrls.has(url)) {
+            URL.revokeObjectURL(url);
+          }
+        });
+    }
+
+    setTemplateParams(nextTemplateParams);
+    templateParamsRef.current = nextTemplateParams;
+    setTemplateImageInputs(nextTemplateImageInputs);
+    templateImageInputsRef.current = nextTemplateImageInputs;
+    setTemplateUploadedImagePreviews(nextTemplatePreviews);
+    templateUploadedImagePreviewsRef.current = nextTemplatePreviews;
+    setSelectedTemplateGroupKey(templateGroupKey);
     setSelectedTemplate(detail);
+    setIsTemplatePickerOpen(false);
     setUploadedImagePreviews({});
-  };
+  }, [remapTemplateStateToDetail, selectedTemplate]);
+
+  // Cluster Mode: Handle template selection
+  // Synchronous — same pattern as direct mode's handleWorkflowSelect.
+  // Deep clone param_schema to prevent shared reference issues across templates.
+  const handleTemplateSelect = useCallback((
+    template: LemonGridTemplateSummary,
+    templateGroupKey: string | null = null
+  ) => {
+    const detail = buildTemplateDetail(template);
+    applySelectedTemplateDetail(detail, templateGroupKey);
+  }, [applySelectedTemplateDetail, buildTemplateDetail]);
+
+  const handleGroupedTemplateSelect = useCallback((group: GroupedClusterTemplateSummary) => {
+    handleTemplateSelect(group.representative, group.key);
+  }, [handleTemplateSelect]);
+
+  const applyClusterHistoryTemplate = useCallback((
+    detail: LemonGridTemplateDetail,
+    historyParams: Record<string, unknown> | undefined,
+    templateGroupKey: string | null
+  ) => {
+    const previousPreviews = templateUploadedImagePreviewsRef.current;
+    const nextTemplateParams: Record<string, unknown> = {};
+    const nextTemplateImageInputs: Record<string, string | string[]> = {};
+    const nextTemplatePreviews: Record<string, string | string[]> = {};
+    const client = lemonGridServerUrl
+      ? new LemonGridClient({ serverUrl: lemonGridServerUrl })
+      : null;
+
+    for (const field of detail.param_schema) {
+      const fieldKey = getTemplateFieldStateKey(field);
+      nextTemplateParams[fieldKey] = renderParamDefault(field);
+      if (!field.hidden && isImageParam(field)) {
+        nextTemplateImageInputs[fieldKey] = '';
+      }
+    }
+
+    if (historyParams) {
+      for (const field of detail.param_schema) {
+        const fieldKey = getTemplateFieldStateKey(field);
+        const historyValue = historyParams[fieldKey];
+        if (historyValue === undefined) {
+          continue;
+        }
+
+        nextTemplateParams[fieldKey] = historyValue;
+        if (!isImageParam(field)) {
+          continue;
+        }
+
+        const normalizedValues = (Array.isArray(historyValue) ? historyValue : [historyValue])
+          .map((value) => (typeof value === 'string' ? value.trim() : ''));
+        const normalizedAssetValues = (Array.isArray(historyValue) ? historyValue : [historyValue])
+          .map((value) => getTemplateAssetIdFromValue(value).trim());
+
+        if (!normalizedValues.some(Boolean) && !normalizedAssetValues.some(Boolean)) {
+          continue;
+        }
+
+        if (normalizedValues.some(Boolean)) {
+          nextTemplateImageInputs[fieldKey] = Array.isArray(historyValue)
+            ? normalizedValues
+            : normalizedValues[0] ?? '';
+        }
+
+        const siblingImageFieldKey = getTemplateFieldStateKey({ node_id: field.node_id, name: 'image' });
+        const siblingUploadFieldKey = getTemplateFieldStateKey({ node_id: field.node_id, name: 'upload' });
+        const previewSourceValues = [
+          historyParams[fieldKey],
+          historyParams[siblingImageFieldKey],
+          historyParams[siblingUploadFieldKey],
+        ]
+          .flatMap((value) => (Array.isArray(value) ? value : [value]))
+          .map((value) => getTemplateAssetIdFromValue(value).trim() || (typeof value === 'string' ? value.trim() : ''))
+          .filter(Boolean);
+
+        const previewBasis = normalizedAssetValues.some(Boolean) ? normalizedAssetValues : normalizedValues;
+        const previewValues = previewBasis.map((value, index) => {
+          const previewSource = previewSourceValues[index] || value;
+          return client && isLikelyLemonGridAssetId(previewSource)
+            ? client.getThumbnailUrlWithToken(previewSource)
+            : '';
+        });
+
+        if (previewValues.some(Boolean)) {
+          nextTemplatePreviews[fieldKey] = Array.isArray(historyValue)
+            ? previewValues
+            : previewValues[0] ?? '';
+        }
+      }
+    }
+
+    const retainedPreviewUrls = new Set(
+      Object.values(nextTemplatePreviews)
+        .flatMap((value) => (Array.isArray(value) ? value : [value]))
+        .filter((value): value is string => typeof value === 'string')
+    );
+
+    Object.values(previousPreviews)
+      .flatMap((value) => (Array.isArray(value) ? value : [value]))
+      .forEach((url) => {
+        if (typeof url === 'string' && url.startsWith('blob:') && !retainedPreviewUrls.has(url)) {
+          URL.revokeObjectURL(url);
+        }
+      });
+
+    // #region debug-point B:cluster-history-restored
+    void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'B', location: 'Draw.tsx:2129', msg: '[DEBUG] cluster history state restored', data: { templateId: detail.id, templateGroupKey, imageFields: detail.param_schema.filter((field) => !field.hidden && isImageParam(field)).map((field) => { const fieldKey = getTemplateFieldStateKey(field); return { fieldKey, fieldName: field.name, fieldLabel: field.label, rawHistoryValue: historyParams?.[fieldKey], paramValue: nextTemplateParams[fieldKey], imageInputValue: nextTemplateImageInputs[fieldKey], previewValue: nextTemplatePreviews[fieldKey] }; }) }, ts: Date.now() }) }).catch(() => {});
+    // #endregion
+
+    setTemplateUploadingFieldKeys(new Set());
+    setTemplateParams(nextTemplateParams);
+    templateParamsRef.current = nextTemplateParams;
+    setTemplateImageInputs(nextTemplateImageInputs);
+    templateImageInputsRef.current = nextTemplateImageInputs;
+    setTemplateUploadedImagePreviews(nextTemplatePreviews);
+    templateUploadedImagePreviewsRef.current = nextTemplatePreviews;
+    setSelectedTemplateGroupKey(templateGroupKey);
+    setSelectedTemplate(detail);
+    setIsTemplatePickerOpen(false);
+    setUploadedImagePreviews({});
+  }, [lemonGridServerUrl]);
 
   // Cluster Mode: Handle template parameter change
   const handleTemplateParamChange = (paramName: string, value: unknown) => {
     setTemplateParams(prev => ({ ...prev, [paramName]: value }));
   };
 
-  // Cluster Mode: Handle image upload for a template image param (supports multi-image)
-  // Per D-18, D-19: Same image input UI, upload target is LemonGrid asset API
-  const handleTemplateImageUpload = async (file: File, paramName: string) => {
-    if (!lemonGridServerUrl) return;
+  const visibleTemplateFields = useMemo(
+    () => selectedTemplate?.param_schema.filter((field) => !field.hidden) ?? [],
+    [selectedTemplate]
+  );
 
-    // Show preview immediately — append to array
+  const templateImageFields = useMemo(
+    () => visibleTemplateFields.filter((field) => field.type === 'image' || isImageParam(field)),
+    [visibleTemplateFields]
+  );
+
+  const templateImageSlots = useMemo(
+    () =>
+      templateImageFields.flatMap((field) => {
+        const fieldKey = getTemplateFieldStateKey(field);
+        const capacity = getTemplateImageFieldCapacity(field, selectedTemplate?.template_type);
+        return Array.from({ length: capacity }, (_, slotIndex) => ({
+          field,
+          fieldKey,
+          slotIndex,
+          slotKey: getTemplateImageSlotKey(fieldKey, slotIndex),
+          capacity,
+        }));
+      }),
+    [selectedTemplate?.template_type, templateImageFields]
+  );
+
+  const templateImageSlotMap = useMemo(
+    () => new Map(templateImageSlots.map((slot) => [slot.slotKey, slot])),
+    [templateImageSlots]
+  );
+
+  const templateNonImageFields = useMemo(
+    () =>
+      visibleTemplateFields
+        .filter((field) => !(field.type === 'image' || isImageParam(field)))
+        .sort((a, b) => {
+          const tierOf = (field: typeof a) => (field.type === 'text' && isPromptTemplateField(field) ? 0 : 1);
+          return tierOf(a) - tierOf(b);
+        }),
+    [visibleTemplateFields]
+  );
+
+  const uploadedTemplateImageItems = useMemo(
+    () =>
+      templateImageSlots
+        .map((slot, index) => {
+          const previewUrl = getTemplateSlotStringValue(
+            templateUploadedImagePreviews[slot.fieldKey],
+            slot.slotIndex
+          );
+          const filename = getTemplateSlotStringValue(
+            templateImageInputs[slot.fieldKey],
+            slot.slotIndex
+          );
+          return {
+            ...slot,
+            index,
+            previewUrl: typeof previewUrl === 'string' ? previewUrl : '',
+            filename: typeof filename === 'string' ? filename : '',
+            isUploading: templateUploadingFieldKeys.has(slot.slotKey),
+          };
+        })
+        .filter((item) => item.previewUrl || item.filename),
+    [templateImageInputs, templateImageSlots, templateUploadedImagePreviews, templateUploadingFieldKeys]
+  );
+
+  const getNextEmptyTemplateImageSlot = useCallback(() => {
+    return templateImageSlots.find((slot) => {
+      const previewValue = getTemplateSlotStringValue(
+        templateUploadedImagePreviews[slot.fieldKey],
+        slot.slotIndex
+      );
+      const filenameValue = getTemplateSlotStringValue(
+        templateImageInputs[slot.fieldKey],
+        slot.slotIndex
+      );
+      const assetValue = getTemplateSlotAssetValue(
+        templateParams[slot.fieldKey],
+        slot.slotIndex
+      );
+      return !(previewValue.trim() || filenameValue.trim() || assetValue.trim());
+    });
+  }, [templateImageInputs, templateImageSlots, templateParams, templateUploadedImagePreviews]);
+
+  const handleTemplateImageRemove = useCallback((slotKey: string) => {
+    const slot = templateImageSlotMap.get(slotKey);
+    if (!slot) {
+      return;
+    }
+
+    const previewValue = getTemplateSlotStringValue(
+      templateUploadedImagePreviewsRef.current[slot.fieldKey],
+      slot.slotIndex
+    );
+    if (previewValue.startsWith('blob:')) {
+      URL.revokeObjectURL(previewValue);
+    }
+
+    const nextTemplatePreviews = updateTemplateStringSlotRecord(
+      templateUploadedImagePreviewsRef.current,
+      slot.fieldKey,
+      slot.slotIndex,
+      ''
+    );
+    const nextTemplateImageInputs = updateTemplateStringSlotRecord(
+      templateImageInputsRef.current,
+      slot.fieldKey,
+      slot.slotIndex,
+      ''
+    );
+    const nextTemplateParams = updateTemplateAssetSlotRecord(
+      templateParamsRef.current,
+      slot.fieldKey,
+      slot.slotIndex,
+      ''
+    );
+
+    templateUploadedImagePreviewsRef.current = nextTemplatePreviews;
+    templateImageInputsRef.current = nextTemplateImageInputs;
+    templateParamsRef.current = nextTemplateParams;
+
+    setTemplateUploadedImagePreviews(nextTemplatePreviews);
+    setTemplateImageInputs(nextTemplateImageInputs);
+    setTemplateParams(nextTemplateParams);
+  }, [templateImageSlotMap]);
+
+  const handleTemplateImageReorder = useCallback((sourceSlotKey: string, targetSlotKey: string) => {
+    if (!sourceSlotKey || !targetSlotKey || sourceSlotKey === targetSlotKey) {
+      return;
+    }
+
+    const sourceSlot = templateImageSlotMap.get(sourceSlotKey);
+    const targetSlot = templateImageSlotMap.get(targetSlotKey);
+    if (!sourceSlot || !targetSlot) {
+      return;
+    }
+
+    if (templateUploadingFieldKeys.has(sourceSlotKey) || templateUploadingFieldKeys.has(targetSlotKey)) {
+      return;
+    }
+
+    const nextTemplatePreviews = swapTemplateStringSlotRecord(
+      templateUploadedImagePreviewsRef.current,
+      sourceSlot,
+      targetSlot
+    );
+    const nextTemplateImageInputs = swapTemplateStringSlotRecord(
+      templateImageInputsRef.current,
+      sourceSlot,
+      targetSlot
+    );
+    const nextTemplateParams = swapTemplateAssetSlotRecord(
+      templateParamsRef.current,
+      sourceSlot,
+      targetSlot
+    );
+
+    templateUploadedImagePreviewsRef.current = nextTemplatePreviews;
+    templateImageInputsRef.current = nextTemplateImageInputs;
+    templateParamsRef.current = nextTemplateParams;
+
+    setTemplateUploadedImagePreviews(nextTemplatePreviews);
+    setTemplateImageInputs(nextTemplateImageInputs);
+    setTemplateParams(nextTemplateParams);
+  }, [templateImageSlotMap, templateUploadingFieldKeys]);
+
+  // Cluster Mode: Handle image upload for a template image param.
+  // ComfyUI keeps one image per field; THIRD_PARTY_API may expand one field into multiple virtual slots.
+  const handleTemplateImageUpload = useCallback(async (file: File, slotKey: string) => {
+    if (!lemonGridServerUrl) return;
+    const slot = templateImageSlotMap.get(slotKey);
+    if (!slot) return;
+
     const previewUrl = URL.createObjectURL(file);
-    setUploadedImagePreviews(prev => {
-      const existing = prev[paramName];
-      const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
-      return { ...prev, [paramName]: [...arr, previewUrl] };
+    setTemplateUploadingFieldKeys((prev) => {
+      const next = new Set(prev);
+      next.add(slotKey);
+      return next;
+    });
+    setTemplateUploadedImagePreviews(prev => {
+      const next = updateTemplateStringSlotRecord(prev, slot.fieldKey, slot.slotIndex, previewUrl);
+      templateUploadedImagePreviewsRef.current = next;
+      return next;
     });
 
+    const uploadTask = (async () => {
+      try {
+        const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+        const result = await client.uploadAsset(file);
+        const stablePreviewUrl = client.getThumbnailUrlWithToken(result.id);
+        setTemplateParams(prev => {
+          const next = updateTemplateAssetSlotRecord(prev, slot.fieldKey, slot.slotIndex, result.id);
+          templateParamsRef.current = next;
+          return next;
+        });
+        setTemplateImageInputs(prev => {
+          const next = updateTemplateStringSlotRecord(prev, slot.fieldKey, slot.slotIndex, result.filename);
+          templateImageInputsRef.current = next;
+          return next;
+        });
+        setTemplateUploadedImagePreviews(prev => {
+          const previousPreview = getTemplateSlotStringValue(prev[slot.fieldKey], slot.slotIndex);
+          if (previousPreview.startsWith('blob:') && previousPreview !== stablePreviewUrl) {
+            URL.revokeObjectURL(previousPreview);
+          }
+          const next = updateTemplateStringSlotRecord(prev, slot.fieldKey, slot.slotIndex, stablePreviewUrl);
+          templateUploadedImagePreviewsRef.current = next;
+          return next;
+        });
+      } catch (error) {
+        console.error('[Draw] Failed to upload image to LemonGrid:', error);
+        setTemplateUploadedImagePreviews(prev => {
+          const previousPreview = getTemplateSlotStringValue(prev[slot.fieldKey], slot.slotIndex);
+          if (previousPreview.startsWith('blob:')) {
+            URL.revokeObjectURL(previousPreview);
+          }
+          const next = updateTemplateStringSlotRecord(prev, slot.fieldKey, slot.slotIndex, '');
+          templateUploadedImagePreviewsRef.current = next;
+          return next;
+        });
+      }
+    })();
+
+    templateUploadTasksRef.current[slotKey] = uploadTask;
     try {
-      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
-      const result = await client.uploadAsset(file);
-      // Store asset_id array as param value
-      setTemplateParams(prev => {
-        const existing = prev[paramName];
-        const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
-        return { ...prev, [paramName]: [...arr, result.id] };
-      });
-      setTemplateImageInputs(prev => {
-        const existing = prev[paramName];
-        const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
-        return { ...prev, [paramName]: [...arr, result.filename] };
-      });
-    } catch (error) {
-      console.error('[Draw] Failed to upload image to LemonGrid:', error);
-      // Remove the failed preview
-      setUploadedImagePreviews(prev => {
-        const existing = prev[paramName];
-        const arr = Array.isArray(existing) ? existing : existing ? [existing] : [];
-        return { ...prev, [paramName]: arr.slice(0, -1) };
+      await uploadTask;
+    } finally {
+      if (templateUploadTasksRef.current[slotKey] === uploadTask) {
+        delete templateUploadTasksRef.current[slotKey];
+      }
+      setTemplateUploadingFieldKeys((prev) => {
+        if (!prev.has(slotKey)) {
+          return prev;
+        }
+        const next = new Set(prev);
+        next.delete(slotKey);
+        return next;
       });
     }
-  };
+  }, [lemonGridServerUrl, templateImageSlotMap]);
+
+  const handleTemplateCombinedImageUpload = useCallback(async (file: File) => {
+    const nextSlot = getNextEmptyTemplateImageSlot();
+    if (!nextSlot) {
+      return;
+    }
+    await handleTemplateImageUpload(file, nextSlot.slotKey);
+  }, [getNextEmptyTemplateImageSlot, handleTemplateImageUpload]);
 
   // Cluster Mode: Submit task stub
   // Per D-50: Same handleGenerate function with connectionMode branch
@@ -1281,15 +2424,71 @@ export const Draw = () => {
   // NOTE: Polling/WS progress tracking and result download are handled by Plan 06-03
   // Per D-39: Support concurrent tasks — no isGenerating lock in Cluster Mode
   const handleClusterSubmit = async () => {
-    if (!isLemonGridConnected || !selectedTemplate || !lemonGridServerUrl) return;
-    if (isSubmittingCluster) return;
+    // #region debug-point D:cluster-submit-entry
+    void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'D', location: 'Draw.tsx:2401', msg: '[DEBUG] cluster submit entered', data: { isLemonGridConnected, hasSelectedTemplate: Boolean(selectedTemplate), lemonGridServerUrlPresent: Boolean(lemonGridServerUrl), isSubmittingCluster }, ts: Date.now() }) }).catch(() => {});
+    // #endregion
+    if (!isLemonGridConnected || !selectedTemplate || !lemonGridServerUrl) {
+      // #region debug-point D:cluster-submit-early-return
+      void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'D', location: 'Draw.tsx:2403', msg: '[DEBUG] cluster submit early return missing connection/template', data: { isLemonGridConnected, hasSelectedTemplate: Boolean(selectedTemplate), lemonGridServerUrlPresent: Boolean(lemonGridServerUrl) }, ts: Date.now() }) }).catch(() => {});
+      // #endregion
+      return;
+    }
+    if (isSubmittingCluster) {
+      // #region debug-point D:cluster-submit-busy
+      void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'D', location: 'Draw.tsx:2406', msg: '[DEBUG] cluster submit ignored because already submitting', data: { selectedTemplateId: selectedTemplate.id }, ts: Date.now() }) }).catch(() => {});
+      // #endregion
+      return;
+    }
 
     setIsSubmittingCluster(true);
     try {
+      const pendingUploadTasks = Object.values(templateUploadTasksRef.current);
+      if (pendingUploadTasks.length > 0) {
+        await Promise.allSettled(pendingUploadTasks);
+      }
+      const currentTemplateParams = templateParamsRef.current;
+      const currentTemplateImageInputs = templateImageInputsRef.current;
+      const currentTemplatePreviews = templateUploadedImagePreviewsRef.current;
+      const uploadedImageCount = templateImageSlots.filter((slot) => {
+        const previewValue = getTemplateSlotStringValue(currentTemplatePreviews[slot.fieldKey], slot.slotIndex);
+        const filenameValue = getTemplateSlotStringValue(currentTemplateImageInputs[slot.fieldKey], slot.slotIndex);
+        const assetValue = getTemplateSlotAssetValue(currentTemplateParams[slot.fieldKey], slot.slotIndex);
+        return previewValue.trim() || filenameValue.trim() || assetValue.trim();
+      }).length;
+      // #region debug-point C:cluster-submit-image-state
+      void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'C', location: 'Draw.tsx:2424', msg: '[DEBUG] cluster submit image state', data: { selectedTemplateId: selectedTemplate.id, usesImageCountVariants: Boolean(selectedTemplateGroup?.usesImageCountVariants), uploadedImageCount, imageSlots: templateImageSlots.map((slot) => ({ slotKey: slot.slotKey, fieldKey: slot.fieldKey, slotIndex: slot.slotIndex, previewValue: getTemplateSlotStringValue(currentTemplatePreviews[slot.fieldKey], slot.slotIndex), filenameValue: getTemplateSlotStringValue(currentTemplateImageInputs[slot.fieldKey], slot.slotIndex), assetValue: getTemplateSlotAssetValue(currentTemplateParams[slot.fieldKey], slot.slotIndex), rawParamValue: currentTemplateParams[slot.fieldKey] })) }, ts: Date.now() }) }).catch(() => {});
+      // #endregion
+      if (selectedTemplateGroup?.usesImageCountVariants && uploadedImageCount === 0) {
+        // #region debug-point C:cluster-submit-zero-images
+        void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'C', location: 'Draw.tsx:2427', msg: '[DEBUG] cluster submit aborted because uploadedImageCount is zero', data: { selectedTemplateId: selectedTemplate.id, selectedTemplateGroupKey, usesImageCountVariants: Boolean(selectedTemplateGroup?.usesImageCountVariants) }, ts: Date.now() }) }).catch(() => {});
+        // #endregion
+        return;
+      }
+
+      const targetTemplateSummary = selectedTemplateGroup
+        ? resolveClusterTemplateVariant(selectedTemplateGroup, uploadedImageCount)
+        : null;
+      const targetTemplateDetail = targetTemplateSummary && targetTemplateSummary.id !== selectedTemplate.id
+        ? buildTemplateDetail(targetTemplateSummary)
+        : selectedTemplate;
+      const effectiveState = selectedTemplateGroup?.usesImageCountVariants && targetTemplateSummary
+        ? remapTemplateStateToDetail(
+            selectedTemplate,
+            targetTemplateDetail,
+            currentTemplateParams,
+            currentTemplateImageInputs,
+            currentTemplatePreviews
+          )
+        : {
+            targetParams: currentTemplateParams,
+            targetImageInputs: currentTemplateImageInputs,
+            targetPreviews: currentTemplatePreviews,
+          };
+
       // Apply seed modes before submitting
       const seedModeUpdates: Record<string, number> = {};
       Object.entries(seedModes).forEach(([fieldName, mode]) => {
-        const currentValue = templateParams[fieldName];
+        const currentValue = effectiveState.targetParams[fieldName];
         if (typeof currentValue !== 'number') return;
         switch (mode) {
           case 'fixed':
@@ -1305,6 +2504,9 @@ export const Draw = () => {
             break;
         }
       });
+      const seededTemplateParams = Object.keys(seedModeUpdates).length > 0
+        ? { ...effectiveState.targetParams, ...seedModeUpdates }
+        : effectiveState.targetParams;
       if (Object.keys(seedModeUpdates).length > 0) {
         setTemplateParams(prev => ({ ...prev, ...seedModeUpdates }));
       }
@@ -1313,20 +2515,43 @@ export const Draw = () => {
       // Per D-41: Snapshot parameter values at submit time
       // Build params with node_id.name keys (e.g. "100.upload") as required by API
       const snapshotParams: Record<string, unknown> = {};
-      for (const field of selectedTemplate.param_schema) {
+      for (const field of targetTemplateDetail.param_schema) {
         // Skip hidden fields — backend uses workflow defaults for those
         if (field.hidden) continue;
 
-        const value = templateParams[field.name] ?? renderParamDefault(field);
+        const fieldKey = getTemplateFieldStateKey(field);
+        const value = seededTemplateParams[fieldKey] ?? renderParamDefault(field);
+        const imageFieldKey = getTemplateFieldStateKey({ node_id: field.node_id, name: 'image' });
+        const uploadFieldKey = getTemplateFieldStateKey({ node_id: field.node_id, name: 'upload' });
 
         // For image fields: only include if user actually uploaded an asset.
         // Default ComfyUI filenames from param_schema are invalid on the cluster server.
         if (field.type === 'image' || isImageParam(field)) {
-          if (Array.isArray(value) && value.length > 0 && typeof value[0] === 'string' && value[0].includes('-')) {
+          const pairedFilenameValue = effectiveState.targetImageInputs[fieldKey]
+            ?? effectiveState.targetImageInputs[imageFieldKey]
+            ?? effectiveState.targetImageInputs[uploadFieldKey];
+          const normalizedFilename = Array.isArray(pairedFilenameValue)
+            ? pairedFilenameValue.find((item) => typeof item === 'string' && item.trim() !== '')
+            : pairedFilenameValue;
+
+          if ((targetTemplateDetail.template_type || 'COMFYUI') === 'COMFYUI' && field.name === 'image') {
+            if (typeof normalizedFilename === 'string' && normalizedFilename.trim() !== '') {
+              snapshotParams[`${field.node_id}.${field.name}`] = normalizedFilename.trim();
+            }
+            continue;
+          }
+
+          const pairedAssetValue = seededTemplateParams[fieldKey]
+            ?? seededTemplateParams[uploadFieldKey]
+            ?? seededTemplateParams[imageFieldKey];
+          const normalizedAssetIds = (Array.isArray(pairedAssetValue) ? pairedAssetValue : [pairedAssetValue])
+            .map((item) => getTemplateAssetIdFromValue(item).trim())
+            .filter((item) => item.includes('-'));
+          if (normalizedAssetIds.length > 0) {
             // Looks like a LemonGrid asset ID array — unwrap single-element arrays
             // to string so backend (workflow_merge_service + agent) can resolve them.
             // Backend only accepts str or dict, not arrays.
-            snapshotParams[`${field.node_id}.${field.name}`] = value.length === 1 ? value[0] : value;
+            snapshotParams[`${field.node_id}.${field.name}`] = normalizedAssetIds.length === 1 ? normalizedAssetIds[0] : normalizedAssetIds;
           }
           // else: no upload yet — skip, let backend use workflow default
           continue;
@@ -1334,14 +2559,23 @@ export const Draw = () => {
 
         snapshotParams[`${field.node_id}.${field.name}`] = value;
       }
-      const result = await client.submitTask(selectedTemplate.id, snapshotParams, selectedTemplate.version, selectedTemplate.template_type || 'COMFYUI');
+      // #region debug-point E:cluster-submit-snapshot
+      void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'E', location: 'Draw.tsx:2520', msg: '[DEBUG] cluster submit snapshot params ready', data: { targetTemplateId: targetTemplateDetail.id, snapshotParamKeys: Object.keys(snapshotParams), imageLikeEntries: Object.entries(snapshotParams).filter(([key]) => /(?:^|\.)(?:image|upload)$/i.test(key)).map(([key, value]) => ({ key, valueType: Array.isArray(value) ? 'array' : typeof value, value })) }, ts: Date.now() }) }).catch(() => {});
+      // #endregion
+      const result = await client.submitTask(
+        targetTemplateDetail.id,
+        snapshotParams,
+        targetTemplateDetail.version,
+        targetTemplateDetail.template_type || 'COMFYUI'
+      );
+      recordPromptHistory(collectTemplatePromptHistory(targetTemplateDetail.param_schema, seededTemplateParams));
 
       // Add task to lemongridStore for tracking
       useLemonGridStore.getState().updateTask(result.id, {
         taskId: result.id,
-        templateId: selectedTemplate.id,
-        templateName: selectedTemplate.name,
-        templateType: selectedTemplate.template_type || 'COMFYUI',
+        templateId: targetTemplateDetail.id,
+        templateName: selectedTemplateDisplayName || targetTemplateDetail.name,
+        templateType: targetTemplateDetail.template_type || 'COMFYUI',
         status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
         progress: 0,
         progressDetail: null,
@@ -1478,58 +2712,103 @@ export const Draw = () => {
     poll();
   };
 
+  useEffect(() => {
+    const state = location.state as HistoryActionState | null;
+    const taskId = state?.trackClusterTaskId;
+    if (!taskId || connectionMode !== 'cluster' || !isLemonGridConnected) {
+      return;
+    }
+    if (trackedClusterTaskIdsRef.current.has(taskId)) {
+      return;
+    }
+
+    trackedClusterTaskIdsRef.current.add(taskId);
+    startClusterWebSocket(taskId);
+    window.history.replaceState({}, document.title);
+  }, [connectionMode, isLemonGridConnected, location.state]);
+
   // Per D-34, D-35, D-44, D-47: Download all outputs and auto-import to PS
   const completingTaskIds = useRef<Set<string>>(new Set());
+  const importedClusterAssetIdsRef = useRef<Record<string, Set<string>>>({});
   const handleTaskCompletion = async (taskId: string) => {
     // Idempotency guard: prevent duplicate downloads from WS + polling races
     if (completingTaskIds.current.has(taskId)) return;
     completingTaskIds.current.add(taskId);
 
-    const serverUrl = useLemonGridStore.getState().serverUrl;
-    const client = new LemonGridClient({ serverUrl });
+    try {
+      const serverUrl = useLemonGridStore.getState().serverUrl;
+      const client = new LemonGridClient({ serverUrl });
 
-    let task = useLemonGridStore.getState().tasks[taskId];
-    // If outputAssetIds is empty (e.g. WebSocket completion without file IDs),
-    // fetch latest status from API to get output_file_ids
-    if (task && !task.outputAssetIds.length) {
-      try {
+      let task = useLemonGridStore.getState().tasks[taskId];
+
+      let resolvedOutputAssetIds = task?.outputAssetIds ?? [];
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        if (attempt > 0) {
+          await new Promise<void>((resolve) => {
+            window.setTimeout(() => resolve(), 1200);
+          });
+        }
+
         const status = await client.getTaskStatus(taskId);
-        if (status.output_file_ids?.length) {
+        const nextOutputAssetIds = status.output_file_ids || [];
+        if (nextOutputAssetIds.length > 0) {
+          resolvedOutputAssetIds = nextOutputAssetIds;
           useLemonGridStore.getState().updateTask(taskId, {
-            outputAssetIds: status.output_file_ids,
+            status: status.status,
+            outputAssetIds: nextOutputAssetIds,
+            completedAt: status.completed_at ? new Date(status.completed_at).getTime() : null,
+            durationSeconds: status.duration_seconds,
           });
           task = useLemonGridStore.getState().tasks[taskId];
         }
-      } catch (e) {
-        console.error('[Draw] Failed to fetch task status for output files:', e);
+
+        if (status.status === 'COMPLETED' && nextOutputAssetIds.length > 0) {
+          break;
+        }
       }
-    }
 
-    if (!task || !task.outputAssetIds.length) {
-      return;
-    }
-
-    for (const assetId of task.outputAssetIds) {
-      try {
-        const blob = await client.downloadAsset(assetId);
-        const filename = `cluster-${assetId.substring(0, 8)}.png`;
-        // Per D-35: Auto-import to PS as separate layer
-        await syncGeneratedImageToPsLayer(blob, filename);
-        // Per D-51: Store in clusterOutputImages
-        useLemonGridStore.getState().addClusterOutputImage({
-          url: URL.createObjectURL(blob),
-          blob,
-          filename,
-          assetId,
+      task = useLemonGridStore.getState().tasks[taskId] || task;
+      if (task && resolvedOutputAssetIds.length > 0 && task.outputAssetIds.length === 0) {
+        useLemonGridStore.getState().updateTask(taskId, {
+          outputAssetIds: resolvedOutputAssetIds,
         });
-        // Also add to outputImages for preview strip and prompt reverse data-asset-id
-        setOutputImages(prev => [...prev, { previewUrl: URL.createObjectURL(blob), blob, filename, assetId }]);
-      } catch (e) {
-        console.error('[Draw] Download/import failed for asset:', assetId, e);
+        task = useLemonGridStore.getState().tasks[taskId];
       }
+
+      if (!task || !task.outputAssetIds.length) {
+        return;
+      }
+
+      const importedAssetIds = importedClusterAssetIdsRef.current[taskId] || new Set<string>();
+      importedClusterAssetIdsRef.current[taskId] = importedAssetIds;
+      const pendingAssetIds = task.outputAssetIds.filter((assetId) => !importedAssetIds.has(assetId));
+
+      for (const assetId of pendingAssetIds) {
+        try {
+          const blob = await client.downloadAsset(assetId);
+          const filename = `cluster-${assetId.substring(0, 8)}.png`;
+          // Per D-35: Auto-import to PS as separate layer
+          await syncGeneratedImageToPsLayer(blob, filename);
+          importedAssetIds.add(assetId);
+          // Per D-51: Store in clusterOutputImages
+          useLemonGridStore.getState().addClusterOutputImage({
+            url: URL.createObjectURL(blob),
+            blob,
+            filename,
+            assetId,
+          });
+          // Also add to outputImages for preview strip and prompt reverse data-asset-id
+          setOutputImages(prev => [...prev, { previewUrl: URL.createObjectURL(blob), blob, filename, assetId }]);
+        } catch (e) {
+          console.error('[Draw] Download/import failed for asset:', assetId, e);
+        }
+      }
+      // Per D-47: Auto-display results
+      closeTaskWebSocket(taskId);
+      await useHistoryStore.getState().fetchFromCluster(serverUrl);
+    } finally {
+      completingTaskIds.current.delete(taskId);
     }
-    // Per D-47: Auto-display results
-    closeTaskWebSocket(taskId);
   };
 
   // Per D-43: Retry failed task with same params
@@ -1589,9 +2868,17 @@ export const Draw = () => {
   const handleGenerate = async () => {
     // Per D-50: Branch on connectionMode for cluster vs direct
     const currentConnectionMode = useSettingsStore.getState().connectionMode;
+    // #region debug-point D:generate-click
+    void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'D', location: 'Draw.tsx:2816', msg: '[DEBUG] generate button clicked', data: { currentConnectionMode, isLemonGridConnected, hasSelectedTemplate: Boolean(selectedTemplate), selectedTemplateId: selectedTemplate?.id ?? null, isSubmittingCluster }, ts: Date.now() }) }).catch(() => {});
+    // #endregion
     if (currentConnectionMode === 'cluster') {
       // Per D-15: Must be connected to LemonGrid
-      if (!isLemonGridConnected || !selectedTemplate) return;
+      if (!isLemonGridConnected || !selectedTemplate) {
+        // #region debug-point D:generate-cluster-early-return
+        void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'D', location: 'Draw.tsx:2821', msg: '[DEBUG] generate cluster early return missing connection/template', data: { isLemonGridConnected, hasSelectedTemplate: Boolean(selectedTemplate), selectedTemplateId: selectedTemplate?.id ?? null }, ts: Date.now() }) }).catch(() => {});
+        // #endregion
+        return;
+      }
       await handleClusterSubmit();
       return;
     }
@@ -1656,11 +2943,87 @@ export const Draw = () => {
         wsRef.current = null;
       }
 
-      const workflowData = await client.readWorkflow(currentWorkflow.path || currentWorkflow.name, prefixMode);
+      const currentWorkflowGroup = selectedGroupedWorkflow;
+      const currentWorkflowImageEntries = extractOrderedWorkflowImageEntries(
+        workflowImageInputs,
+        latestInputValuesRef.current,
+        uploadedImagePreviewsRef.current,
+        uploadedImageBase64Ref.current
+      );
+      const currentFilledWorkflowImageCount = currentWorkflowImageEntries.length;
+      const targetWorkflow = currentWorkflowGroup?.usesImageCountVariants
+        ? resolveGroupedWorkflowVariant(currentWorkflowGroup, currentFilledWorkflowImageCount)
+        : currentWorkflow;
+
+      if (!targetWorkflow) {
+        throw new Error('未找到匹配当前上传数量的工作流变体');
+      }
+
+      const workflowData = await client.readWorkflow(targetWorkflow.path || targetWorkflow.name, prefixMode);
+      const isResolvedVariant = (targetWorkflow.path || targetWorkflow.name) !== (currentWorkflow.path || currentWorkflow.name);
+      const targetWorkflowInputs = isResolvedVariant
+        ? parseAndEnrichWorkflowInputs(workflowData, objectInfo, experimentModels)
+        : workflowInputs;
+      const targetDefaults = targetWorkflowInputs.reduce<Record<string, string | number | boolean>>((acc, input) => {
+        if (input.default !== undefined) {
+          acc[input.name] = input.default;
+        }
+        return acc;
+      }, {});
+      let workingInputValues = isResolvedVariant
+        ? {
+            ...targetDefaults,
+            ...remapInputValuesToWorkflowInputs(workflowInputs, targetWorkflowInputs, latestInputValuesRef.current),
+          }
+        : { ...latestInputValuesRef.current };
+      if (isResolvedVariant && currentWorkflowImageEntries.length > 0) {
+        const appliedVariantImages = applyWorkflowImageEntriesToInputs(
+          targetWorkflowInputs.filter((input) => input.type === 'image'),
+          currentWorkflowImageEntries
+        );
+        workingInputValues = {
+          ...workingInputValues,
+          ...appliedVariantImages.values,
+        };
+      }
+      // #region debug-point B:direct-variant-remap
+      {
+        const sourceImageValues = Object.fromEntries(
+          Object.entries(latestInputValuesRef.current).filter(([key, value]) => key.startsWith('image_') && typeof value === 'string')
+        );
+        const workingImageValues = Object.fromEntries(
+          Object.entries(workingInputValues).filter(([key, value]) => key.startsWith('image_') && typeof value === 'string')
+        );
+        fetch('http://127.0.0.1:7777/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'direct-image-default',
+            runId: 'pre',
+            hypothesisId: 'B',
+            location: 'Draw.tsx:1944',
+            msg: '[DEBUG] direct workflow variant resolved',
+            data: {
+              currentWorkflowName: currentWorkflow.name,
+              targetWorkflowName: targetWorkflow.name,
+              isResolvedVariant,
+              currentFilledWorkflowImageCount,
+              sourceImageValues,
+              targetWorkflowImageInputs: targetWorkflowInputs.filter((input) => input.type === 'image').map((input) => input.name),
+              workingImageValues,
+            },
+            ts: Date.now(),
+          }),
+        }).catch(() => {});
+      }
+      // #endregion
+      const effectiveSeedModes = isResolvedVariant
+        ? remapInputValuesToWorkflowInputs(workflowInputs, targetWorkflowInputs, seedModes)
+        : seedModes;
 
       // Save original seed values before applying workflow's control_after_generate
       const originalSeedValues: Record<string, number> = {};
-      Object.entries(latestInputValuesRef.current).forEach(([key, value]) => {
+      Object.entries(workingInputValues).forEach(([key, value]) => {
         if (key.toLowerCase().includes('seed') && typeof value === 'number') {
           originalSeedValues[key] = value;
         }
@@ -1703,17 +3066,20 @@ export const Draw = () => {
         // Update inputValues with generated random seeds
         if (Object.keys(randomSeedUpdates).length > 0) {
           console.log('[Draw] Updating inputValues with random seeds:', randomSeedUpdates);
-          setInputValues(prev => {
-            const next = { ...prev, ...randomSeedUpdates };
-            latestInputValuesRef.current = next;
-            return next;
-          });
+          workingInputValues = { ...workingInputValues, ...randomSeedUpdates };
+          if (!isResolvedVariant) {
+            setInputValues((prev) => {
+              const next = { ...prev, ...randomSeedUpdates };
+              latestInputValuesRef.current = next;
+              return next;
+            });
+          }
         }
       }
 
       // Apply seed modes (override workflow's control_after_generate)
       const seedModeUpdates: Record<string, number> = {};
-      Object.entries(seedModes).forEach(([fieldName, mode]) => {
+      Object.entries(effectiveSeedModes).forEach(([fieldName, mode]) => {
         const original = originalSeedValues[fieldName];
         if (typeof original !== 'number') return;
         switch (mode) {
@@ -1735,15 +3101,18 @@ export const Draw = () => {
         }
       });
       if (Object.keys(seedModeUpdates).length > 0) {
-        setInputValues(prev => {
-          const next = { ...prev, ...seedModeUpdates };
-          latestInputValuesRef.current = next;
-          return next;
-        });
+        workingInputValues = { ...workingInputValues, ...seedModeUpdates };
+        if (!isResolvedVariant) {
+          setInputValues((prev) => {
+            const next = { ...prev, ...seedModeUpdates };
+            latestInputValuesRef.current = next;
+            return next;
+          });
+        }
       }
 
       const historyPrompt = pendingRerunPromptRef.current;
-      const currentInputValues = latestInputValuesRef.current;
+      const currentInputValues = workingInputValues;
 
       // DIAGNOSTIC: log the rerun path taken
       console.log('[Draw-RERUN-DIAG] historyPrompt is', historyPrompt ? 'PRESENT (rerun path)' : 'NULL (fresh compile path)');
@@ -1793,7 +3162,46 @@ export const Draw = () => {
       const compiledPrompt = historyPrompt
         ? sanitizePromptGraph(applyInputValuesToPrompt(historyPrompt, effectiveValues))
         : compileWorkflowToPrompt(workflowData, effectiveValues, objectInfo);
-      const finalPrompt = enforceLatestImageInputs(compiledPrompt, effectiveValues, workflowInputs);
+      const finalPrompt = enforceLatestImageInputs(compiledPrompt, effectiveValues, targetWorkflowInputs);
+      // #region debug-point C:direct-final-prompt
+      {
+        const effectiveImageValues = Object.fromEntries(
+          Object.entries(effectiveValues).filter(([key, value]) => key.startsWith('image_') && typeof value === 'string')
+        );
+        const loadImageNodes = Object.fromEntries(
+          Object.entries(finalPrompt)
+            .filter(([, nodeValue]) => {
+              if (!nodeValue || typeof nodeValue !== 'object' || Array.isArray(nodeValue)) {
+                return false;
+              }
+              const record = nodeValue as Record<string, unknown>;
+              const classType = String(record.class_type ?? record.type ?? '').toLowerCase();
+              return classType.includes('loadimage');
+            })
+            .map(([nodeId, nodeValue]) => {
+              const record = nodeValue as Record<string, unknown>;
+              const inputs = (record.inputs ?? {}) as Record<string, unknown>;
+              return [nodeId, { image: inputs.image ?? null, upload: inputs.upload ?? null }];
+            })
+        );
+        fetch('http://127.0.0.1:7777/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'direct-image-default',
+            runId: 'pre',
+            hypothesisId: 'C',
+            location: 'Draw.tsx:2090',
+            msg: '[DEBUG] direct final prompt prepared',
+            data: {
+              effectiveImageValues,
+              loadImageNodes,
+            },
+            ts: Date.now(),
+          }),
+        }).catch(() => {});
+      }
+      // #endregion
       pendingRerunPromptRef.current = null;
 
       // DIAGNOSTIC: log final prompt dimensions
@@ -1920,6 +3328,7 @@ export const Draw = () => {
       })
         : null;
 
+      const submittedInputValues = { ...latestInputValuesRef.current };
       const fetcher = isUXPWebView()
         ? (u: string, o: RequestInit) => bridgeFetch(u, o)
         : (u: string, o: RequestInit) => fetch.call(window, u, o);
@@ -1939,10 +3348,26 @@ export const Draw = () => {
 
       const responseData = await response.json();
       if (!response.ok) {
+        // #region debug-point D:direct-prompt-error
+        fetch('http://127.0.0.1:7777/event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: 'direct-image-default',
+            runId: 'pre',
+            hypothesisId: 'D',
+            location: 'Draw.tsx:2234',
+            msg: '[DEBUG] direct prompt request failed',
+            data: { status: response.status, responseData },
+            ts: Date.now(),
+          }),
+        }).catch(() => {});
+        // #endregion
         throw new Error(responseData?.error?.message || `HTTP ${response.status}`);
       }
 
       promptId = responseData.prompt_id;
+      recordPromptHistory(collectWorkflowPromptHistory(submittedInputValues));
       setProgress(prev => ({
         ...prev,
         promptId,
@@ -2043,6 +3468,17 @@ export const Draw = () => {
       }),
     }))
     .sort((a, b) => {
+      // Explicit ordering: image upload groups first, then text/prompt groups, then everything else.
+      // Within each tier, preserve original node order.
+      const tierOf = (g: typeof a) => {
+        if (g.items.some(item => item.type === 'image')) return 0;
+        if (g.items.some(item => item.type === 'text' && isPromptWorkflowField(item))) return 1;
+        return 2;
+      };
+      const aTier = tierOf(a);
+      const bTier = tierOf(b);
+      if (aTier !== bTier) return aTier - bTier;
+
       const aMin = a.items.reduce((min, item) => Math.min(min, getInputNodeOrder(item)), Number.MAX_SAFE_INTEGER);
       const bMin = b.items.reduce((min, item) => Math.min(min, getInputNodeOrder(item)), Number.MAX_SAFE_INTEGER);
       if (aMin !== bMin) {
@@ -2089,25 +3525,28 @@ export const Draw = () => {
     return filtered;
   }, [inputGroups, shouldDisplayNode, getAllowedInputs, config]);
 
-  const workflowGroups = useMemo<WorkflowDirectoryGroup[]>(() => {
-    const files = workflows.filter((workflow) => !workflow.isDirectory);
-    const map = new Map<string, ComfyUIWorkflowInfo[]>();
+  const groupedWorkflows = useMemo(
+    () => groupWorkflowsByImageVariants(workflows),
+    [workflows]
+  );
 
-    files.forEach((workflow) => {
-      const meta = getWorkflowDisplayMeta(workflow);
-      const bucket = map.get(meta.directory);
+  const workflowGroups = useMemo<WorkflowDirectoryGroup[]>(() => {
+    const map = new Map<string, GroupedWorkflowEntry[]>();
+
+    groupedWorkflows.forEach((workflow) => {
+      const bucket = map.get(workflow.directory);
       if (bucket) {
         bucket.push(workflow);
       } else {
-        map.set(meta.directory, [workflow]);
+        map.set(workflow.directory, [workflow]);
       }
     });
 
     const groups = Array.from(map.entries()).map(([directory, items]) => ({
       directory,
       workflows: [...items].sort((a, b) => {
-        const aMeta = getWorkflowDisplayMeta(a);
-        const bMeta = getWorkflowDisplayMeta(b);
+        const aMeta = getWorkflowDisplayMeta(a.representative);
+        const bMeta = getWorkflowDisplayMeta(b.representative);
         return aMeta.sortKey.localeCompare(bMeta.sortKey, 'zh-CN');
       }),
     }));
@@ -2117,9 +3556,87 @@ export const Draw = () => {
       if (b.directory === ROOT_WORKFLOW_GROUP && a.directory !== ROOT_WORKFLOW_GROUP) return -1;
       return a.directory.localeCompare(b.directory, 'zh-CN');
     });
-  }, [workflows]);
+  }, [groupedWorkflows]);
+
+  const selectedGroupedWorkflow = useMemo(() => {
+    if (!selectedWorkflow) {
+      return null;
+    }
+
+    const workflowKey = selectedWorkflow.path || selectedWorkflow.name;
+    return groupedWorkflows.find((group) =>
+      group.variants.some((variant) => (variant.workflow.path || variant.workflow.name) === workflowKey)
+    ) ?? null;
+  }, [groupedWorkflows, selectedWorkflow]);
 
   const selectedWorkflowMeta = selectedWorkflow ? getWorkflowDisplayMeta(selectedWorkflow) : null;
+  const selectedWorkflowDisplayName = selectedGroupedWorkflow?.name ?? selectedWorkflowMeta?.fileLabel ?? null;
+  const selectedWorkflowDirectory = selectedGroupedWorkflow?.directory ?? selectedWorkflowMeta?.directory ?? null;
+  const selectedWorkflowImageLimit = selectedGroupedWorkflow?.maxImageCount ?? workflowImageInputs.length;
+
+  const renderTextControl = ({
+    key,
+    label,
+    value,
+    onChange,
+    placeholder,
+    isLongText,
+    required = false,
+    promptActions,
+  }: {
+    key: string;
+    label: string;
+    value: string;
+    onChange: (value: string) => void;
+    placeholder: string;
+    isLongText: boolean;
+    required?: boolean;
+    promptActions?: {
+      storageKey: string;
+      onOpenHistory: () => void;
+      onOpenCustom: () => void;
+      onSaveCustom: () => void;
+    };
+  }) => (
+    <div key={key} className={`form-field${isLongText ? ' long-text-field' : ''}`}>
+      <div className="field-label">{label}{required && <span className="required-mark">*</span>}</div>
+      {isLongText ? (
+        <textarea
+          className="text-input"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+          placeholder={placeholder}
+        />
+      ) : (
+        <input
+          type="text"
+          className="text-input"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+        />
+      )}
+      {promptActions && (
+        <div className="prompt-library-actions">
+          <button type="button" className="prompt-library-btn" onClick={promptActions.onOpenHistory}>
+            历史
+          </button>
+          <button type="button" className="prompt-library-btn" onClick={promptActions.onOpenCustom}>
+            自定义
+          </button>
+          <button
+            type="button"
+            className="prompt-library-btn prompt-library-btn-primary"
+            onClick={promptActions.onSaveCustom}
+            disabled={value.trim() === ''}
+          >
+            {recentlySavedPromptKey === promptActions.storageKey ? '已保存' : '保存'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 
   const renderInput = (input: WorkflowInput) => {
     const value = inputValues[input.name] ?? input.default ?? '';
@@ -2143,34 +3660,37 @@ export const Draw = () => {
             </div>
           );
         }
-        // Long-text (prompt) → textarea; short-text → input
-        const isLongText = /prompt|提示词|description|描述/i.test(input.label);
-        if (isLongText) {
-          return (
-            <div key={input.name} className="form-field">
-              <div className="field-label">{input.label}</div>
-              <textarea
-                className="text-input"
-                value={value as string}
-                onChange={(e) => handleInputChange(input.name, e.target.value)}
-                rows={2}
-                placeholder={`输入${input.label}...`}
-              />
-            </div>
-          );
-        }
-        return (
-          <div key={input.name} className="form-field">
-            <div className="field-label">{input.label}</div>
-            <input
-              type="text"
-              className="text-input"
-              value={value as string}
-              onChange={(e) => handleInputChange(input.name, e.target.value)}
-              placeholder={`输入${input.label}...`}
-            />
-          </div>
-        );
+        const isLongText = isLongTextWorkflowField(input);
+        const isPromptField = isPromptWorkflowField(input);
+        const promptLibraryKey = buildWorkflowPromptLibraryKey(input);
+        console.log('[Draw] text input:', {
+          name: input.name,
+          label: input.label,
+          classType: input.classType,
+          isLongText,
+          prompt: isPromptField,
+        });
+        return renderTextControl({
+          key: input.name,
+          label: input.label,
+          value: String(value),
+          onChange: (nextValue) => handleInputChange(input.name, nextValue),
+          placeholder: input.description || `输入${input.label}...`,
+          isLongText,
+          required: input.required,
+          promptActions: isPromptField
+            ? {
+                storageKey: promptLibraryKey,
+                onOpenHistory: () => openPromptLibraryModal('history', promptLibraryKey, input.label, (text) => {
+                  handleInputChange(input.name, text);
+                }),
+                onOpenCustom: () => openPromptLibraryModal('custom', promptLibraryKey, input.label, (text) => {
+                  handleInputChange(input.name, text);
+                }),
+                onSaveCustom: () => savePromptToCustomLibrary(promptLibraryKey, String(value)),
+              }
+            : undefined,
+        });
       }
 
       case 'number':
@@ -2343,35 +3863,9 @@ export const Draw = () => {
       case 'image':
         return (
           <div key={input.name} className="form-field image-field">
-            <label>{input.label}</label>
-            {isUXPWebView() && (
-              <div className="image-upload-ps-buttons">
-                <div className="image-upload-ps-item">
-                  <span className="image-upload-ps-label">选区</span>
-                  <PsExportButton
-                    mode="selection"
-                    label="从 PS 选区加载"
-                    iconOnly
-                    compact
-                    onExport={(blob) => handlePsExportToWorkflow(blob, input.name)}
-                    onError={(err) => console.error('Selection export error:', err)}
-                  />
-                </div>
-                <div className="image-upload-ps-item">
-                  <span className="image-upload-ps-label">图层</span>
-                  <PsExportButton
-                    mode="layer"
-                    label="从 PS 图层加载"
-                    iconOnly
-                    compact
-                    onExport={(blob) => handlePsExportToWorkflow(blob, input.name)}
-                    onError={(err) => console.error('Layer export error:', err)}
-                  />
-                </div>
-              </div>
-            )}
+            {input.label !== '参考图片' && <label>{input.label}</label>}
             <div className="image-upload-area">
-              {uploadedImagePreviews[input.name] ? (
+              {uploadedImagePreviews[input.name] && (
                 <div className="image-preview-container">
                   <img
                     src={Array.isArray(uploadedImagePreviews[input.name]) ? (uploadedImagePreviews[input.name] as string[])[0] : (uploadedImagePreviews[input.name] as string)}
@@ -2381,7 +3875,7 @@ export const Draw = () => {
                   />
                   <div className="image-preview-info">
                     <span className="image-filename">{inputValues[input.name] as string}</span>
-                    <button 
+                    <button
                       type="button"
                       className="remove-image-btn"
                       onClick={() => {
@@ -2397,8 +3891,27 @@ export const Draw = () => {
                     </button>
                   </div>
                 </div>
-              ) : (
-                <>
+              )}
+              <div className="image-upload-actions">
+                {isUXPWebView() && (
+                  <PsExportButton
+                    mode="layer"
+                    label="上传图层"
+                    fullWidth
+                    onExport={(blob) => handlePsExportToWorkflow(blob, input.name)}
+                    onError={(err) => console.error('Layer export error:', err)}
+                  />
+                )}
+                {isUXPWebView() && (
+                  <PsExportButton
+                    mode="selection"
+                    label="上传选区"
+                    fullWidth
+                    onExport={(blob) => handlePsExportToWorkflow(blob, input.name)}
+                    onError={(err) => console.error('Selection export error:', err)}
+                  />
+                )}
+                <label className="image-upload-local-btn">
                   <input
                     type="file"
                     accept="image/*"
@@ -2416,9 +3929,9 @@ export const Draw = () => {
                       }
                     }}
                   />
-                  <span className="upload-hint">点击或拖拽上传图片</span>
-                </>
-              )}
+                  <span>上传本地图片</span>
+                </label>
+              </div>
             </div>
             {invalidImageRefs.has(input.name) && (
               <div className="image-ref-warning">
@@ -2435,87 +3948,7 @@ export const Draw = () => {
 
   return (
     <div className="draw-page">
-      {/* Upper Section: Preview Area */}
-      <div className="preview-section">
-        {/* Queue status badge */}
-        {connectionMode !== 'cluster' && comfyUISettings.isConnected && (queueRunning.length > 0 || queuePending.length > 0) && (
-          <div className="queue-status-badge">
-            <span className="queue-dot"></span>
-            <span className="queue-text">
-              {queueRunning.length > 0 && `${queueRunning.length} 运行中`}
-              {queueRunning.length > 0 && queuePending.length > 0 && ' · '}
-              {queuePending.length > 0 && `${queuePending.length} 排队中`}
-            </span>
-          </div>
-        )}
-        {/* Cluster Mode: Platform queue status badge */}
-        {connectionMode === 'cluster' && isLemonGridConnected && queueSummary && (queueSummary.queued_count > 0 || queueSummary.running_count > 0) && (
-          <div className="queue-status-badge cluster-queue-badge">
-            <span className="queue-dot"></span>
-            <span className="queue-text cluster-queue-text">
-              平台: {queueSummary.running_count > 0 && `${queueSummary.running_count} 运行中`}
-              {queueSummary.running_count > 0 && queueSummary.queued_count > 0 && ' · '}
-              {queueSummary.queued_count > 0 && `${queueSummary.queued_count} 排队中`}
-              {queueSummary.avg_wait_seconds != null && queueSummary.queued_count > 0 && ` · ~${Math.ceil(queueSummary.avg_wait_seconds / 60)}分钟`}
-            </span>
-          </div>
-        )}
-        <div className="preview-content">
-          {progress.previewImage ? (
-            <img
-              src={progress.previewImage}
-              alt="Preview"
-              className="preview-image"
-              data-prompt-reverse
-              {...(outputImages[activeOutputIndex]?.assetId ? { 'data-asset-id': outputImages[activeOutputIndex].assetId } : {})}
-            />
-          ) : (
-            <div className="preview-placeholder">
-              <div className="placeholder-icon"><svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></div>
-              <p>选择工作流并生成图像</p>
-            </div>
-          )}
-        </div>
-
-        {outputImages.length > 1 && (
-          <div className="preview-strip">
-            {outputImages.map((image, index) => (
-              <OutputImageItem
-                key={`draw-output-${index}`}
-                image={image}
-                index={index}
-                isActive={index === activeOutputIndex}
-                onSelect={openOutputViewer}
-                assetId={image.assetId}
-              />
-            ))}
-          </div>
-        )}
-
-        {/* Progress Bar */}
-        {progress.status !== 'idle' && (
-          <div className="progress-container">
-            <div className="progress-bar">
-              <div 
-                className="progress-fill" 
-                style={{ width: `${progress.percentage}%` }}
-              />
-            </div>
-            <div className="progress-info">
-              <span className="progress-percentage">{progress.percentage}%</span>
-              {progress.currentNode && (
-                <span className="current-node">{progress.currentNode}</span>
-              )}
-            </div>
-            {progress.error && (
-              <div className="progress-error">
-                <span className="error-icon">⚠</span>
-                {progress.error}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      {/* Queue status moved to global topbar (App.tsx). Draw page starts directly with viewer/picker modals + control panel. */}
 
       {isViewerOpen && activeOutput?.previewUrl && (
         <div className="draw-viewer-overlay" onClick={closeOutputViewer}>
@@ -2566,20 +3999,28 @@ export const Draw = () => {
                       <span>{group.workflows.length} 个</span>
                     </header>
                     <div className="workflow-toolkit-grid">
-                      {group.workflows.map((workflow) => {
-                        const meta = getWorkflowDisplayMeta(workflow);
-                        const isActive = selectedWorkflow?.name === workflow.name;
+                      {group.workflows.map((workflowGroup) => {
+                        const isActive = selectedGroupedWorkflow?.key === workflowGroup.key;
+                        const variantLabel = workflowGroup.usesImageCountVariants
+                          ? workflowGroup.variants
+                              .map((variant) => variant.imageCount)
+                              .filter((count): count is number => count !== null)
+                              .join(' / ')
+                          : '';
                         return (
                           <button
-                            key={workflow.path || workflow.name}
+                            key={workflowGroup.key}
                             type="button"
                             className={`workflow-toolkit-item ${isActive ? 'active' : ''}`}
                             onClick={() => {
-                              handleWorkflowSelect(workflow);
+                              handleWorkflowSelect(workflowGroup.representative);
                               setIsWorkflowPickerOpen(false);
                             }}
                           >
-                            <span className="workflow-item-name">{meta.fileLabel}</span>
+                            <span className="workflow-item-name">{workflowGroup.name}</span>
+                            {variantLabel && (
+                              <span className="workflow-item-meta">{variantLabel} 图</span>
+                            )}
                           </button>
                         );
                       })}
@@ -2611,52 +4052,22 @@ export const Draw = () => {
                 </div>
               ) : (
                 <>
-                  <div className="workflow-dropdown">
-                    <select
-                      className="template-select"
-                      value={selectedTemplate?.id || ''}
-                      onChange={(e) => {
-                        const template = clusterTemplates.find(t => t.id === e.target.value);
-                        if (template) handleTemplateSelect(template);
-                      }}
-                      disabled={isLoadingTemplates}
+                  <div className="workflow-dropdown" ref={templatePickerRef}>
+                    <button
+                      type="button"
+                      className="workflow-picker-trigger template-picker-trigger"
+                      onClick={() => setIsTemplatePickerOpen((open) => !open)}
+                      disabled={isLoadingTemplates || clusterTemplates.length === 0}
+                      aria-haspopup="listbox"
+                      aria-expanded={isTemplatePickerOpen}
                     >
-                      <option value="">
-                        {isLoadingTemplates ? '加载模板中...' : '选择模板'}
-                      </option>
-                      {/* Group by template_type first, then by category — flat optgroups */}
-                      {(['COMFYUI', 'THIRD_PARTY_API'] as const).filter(
-                        type => clusterTemplates.some(t => (t.template_type || 'COMFYUI') === type)
-                      ).flatMap(type => {
-                        const typeLabel = type === 'COMFYUI' ? '工作流模板' : '云端模型';
-                        const typeTemplates = clusterTemplates.filter(t => (t.template_type || 'COMFYUI') === type);
-                        const categories = Array.from(new Set(typeTemplates.map(t => t.category || '未分类')));
-                        // Single category: use type label directly
-                        if (categories.length <= 1) {
-                          return [(
-                            <optgroup key={type} label={typeLabel}>
-                              {typeTemplates.map(template => (
-                                <option key={template.id} value={template.id}>
-                                  {template.name}
-                                </option>
-                              ))}
-                            </optgroup>
-                          )];
-                        }
-                        // Multiple categories: one optgroup per category with type prefix
-                        return categories.map(category => (
-                          <optgroup key={`${type}-${category}`} label={`${typeLabel} - ${category}`}>
-                            {typeTemplates
-                              .filter(t => (t.category || '未分类') === category)
-                              .map(template => (
-                                <option key={template.id} value={template.id}>
-                                  {template.name}
-                                </option>
-                              ))}
-                          </optgroup>
-                        ));
-                      })}
-                    </select>
+                      <span className="workflow-picker-title">
+                        {selectedTemplateDisplayName || (isLoadingTemplates ? '加载模板中...' : '选择模板')}
+                      </span>
+                      <span className="workflow-picker-subtitle">
+                        {selectedTemplate?.template_type === 'THIRD_PARTY_API' ? '云端模型' : '工作流模板'}
+                      </span>
+                    </button>
                     <button
                       type="button"
                       className="workflow-refresh-btn"
@@ -2678,6 +4089,60 @@ export const Draw = () => {
                     >
                       {isLoadingTemplates ? '...' : '\u21BB'}
                     </button>
+                    {isTemplatePickerOpen && (
+                      <div className="template-picker-panel" role="listbox">
+                        <div className="template-picker-columns">
+                          <section className="template-picker-column">
+                            <header className="template-picker-column-header">工作流模板</header>
+                            <div className="template-picker-column-body">
+                              {groupedClusterWorkflowTemplates.length === 0 ? (
+                                <div className="template-picker-empty">暂无可用工作流模板</div>
+                              ) : (
+                                <div className="template-picker-group">
+                                  <div className="template-picker-list">
+                                    {groupedClusterWorkflowTemplates.map((templateGroup) => (
+                                      <button
+                                        key={templateGroup.key}
+                                        type="button"
+                                        className={`template-picker-item ${selectedTemplateGroupKey === templateGroup.key ? 'active' : ''}`}
+                                        onClick={() => handleGroupedTemplateSelect(templateGroup)}
+                                      >
+                                        {templateGroup.name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </section>
+                          <section className="template-picker-column">
+                            <header className="template-picker-column-header">云端模型</header>
+                            <div className="template-picker-column-body">
+                              {clusterCloudTemplateGroups.length === 0 ? (
+                                <div className="template-picker-empty">暂无可用云端模型</div>
+                              ) : (
+                                clusterCloudTemplateGroups.map((group) => (
+                                  <div key={`cloud-${group.category}`} className="template-picker-group">
+                                    <div className="template-picker-list">
+                                      {group.templates.map((template) => (
+                                        <button
+                                          key={template.id}
+                                          type="button"
+                                          className={`template-picker-item ${selectedTemplate?.id === template.id ? 'active' : ''}`}
+                                          onClick={() => handleTemplateSelect(template, null)}
+                                        >
+                                          {template.name}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </section>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   {/* Per D-11: Show template thumbnail */}
                   {selectedTemplate?.thumbnail_url && (
@@ -2717,13 +4182,13 @@ export const Draw = () => {
                       <span className="workflow-picker-title">
                         {isLoadingWorkflows
                           ? '加载工作流中...'
-                          : selectedWorkflowMeta
-                            ? selectedWorkflowMeta.fileLabel
+                          : selectedWorkflowDisplayName
+                            ? selectedWorkflowDisplayName
                             : '选择工作流'}
                       </span>
                       <span className="workflow-picker-subtitle">
-                        {selectedWorkflowMeta
-                          ? `${selectedWorkflowMeta.directory}`
+                        {selectedWorkflowDirectory
+                          ? `${selectedWorkflowDirectory}`
                           : '点击打开工具集面板'}
                       </span>
                     </button>
@@ -2752,46 +4217,165 @@ export const Draw = () => {
 
         {/* Dynamic Form + Generate */}
         <div className="control-section dynamic-form">
-          <div className="section-label">参数</div>
+          <div className="section-label">
+            参考图片
+            {connectionMode !== 'cluster' && selectedWorkflow && (
+              <span className="section-label-note">
+                {workflowImageInputs.length > 0
+                  ? `当前工作流最多 ${selectedWorkflowImageLimit} 张，已上传 ${filledWorkflowImageCount} 张`
+                  : '当前工作流无图片输入节点'}
+              </span>
+            )}
+          </div>
 
           {connectionMode === 'cluster' ? (
             // Cluster Mode: Dynamic parameter UI from param_schema per D-02, D-09
             <>
-              {/* Preset Toolbar - per D-10, D-104: template_id as key */}
-              <PresetToolbar
-                workflowName={selectedTemplate?.id ?? null}
-                workflowPath={undefined}
-                inputValues={templateParams as Record<string, string | number | boolean>}
-                imageFilenames={templateImageInputs as Record<string, string>}
-                onApplyPreset={(preset) => {
-                  // Apply preset values to template params
-                  const applied: Record<string, unknown> = { ...templateParams };
-                  for (const [key, value] of Object.entries(preset.inputValues)) {
-                    if (key in applied) {
-                      applied[key] = value;
-                    }
-                  }
-                  setTemplateParams(applied);
-                }}
-              />
-
               {!selectedTemplate ? (
                 <div className="form-placeholder">
                   <span className="placeholder-icon">📝</span>
                   <p>请先选择一个模板</p>
                 </div>
-              ) : selectedTemplate.param_schema.filter(f => !f.hidden).length === 0 ? (
+              ) : visibleTemplateFields.length === 0 ? (
                 <div className="form-placeholder">
                   <span className="placeholder-icon">✓</span>
                   <p>此模板无需配置参数</p>
                 </div>
               ) : (
                 <div className="form-fields" key={selectedTemplate.id}>
-                  {selectedTemplate.param_schema
-                    .filter(f => !f.hidden)
-                    .filter((field, idx, arr) => arr.findIndex(f => f.label === field.label) === idx)
-                    .map((field) => {
-                    const value = templateParams[field.name] ?? renderParamDefault(field);
+                  {templateImageFields.length > 0 && (
+                    <div key={`${selectedTemplate.id}-image-group`} className="form-field image-field">
+                      <div className="field-label">
+                        参考图片
+                        <span className="section-label-note">
+                          {`已上传 ${uploadedTemplateImageItems.length}/${selectedTemplate?.template_type === 'THIRD_PARTY_API' ? templateImageSlots.length : selectedTemplateGroup?.maxImageCount ?? templateImageSlots.length} 张`}
+                        </span>
+                      </div>
+                      <div className="image-upload-area multi-image-area">
+                        {uploadedTemplateImageItems.length > 0 && (
+                          <div className="multi-image-list">
+                            {uploadedTemplateImageItems.map((item) => (
+                              <div
+                                key={item.slotKey}
+                                className={`multi-image-item${draggingTemplateImageFieldKey === item.slotKey ? ' dragging' : ''}${templateImageDropTargetKey === item.slotKey ? ' drop-target' : ''}${item.isUploading ? ' uploading' : ''}`}
+                                draggable={!item.isUploading}
+                                onDragStart={(event) => {
+                                  if (item.isUploading) {
+                                    event.preventDefault();
+                                    return;
+                                  }
+                                  event.dataTransfer.effectAllowed = 'move';
+                                  event.dataTransfer.setData('text/plain', item.slotKey);
+                                  setDraggingTemplateImageFieldKey(item.slotKey);
+                                  setTemplateImageDropTargetKey(item.slotKey);
+                                }}
+                                onDragOver={(event) => {
+                                  if (!draggingTemplateImageFieldKey || draggingTemplateImageFieldKey === item.slotKey || item.isUploading) {
+                                    return;
+                                  }
+                                  event.preventDefault();
+                                  event.dataTransfer.dropEffect = 'move';
+                                  if (templateImageDropTargetKey !== item.slotKey) {
+                                    setTemplateImageDropTargetKey(item.slotKey);
+                                  }
+                                }}
+                                onDragLeave={() => {
+                                  if (templateImageDropTargetKey === item.slotKey && draggingTemplateImageFieldKey !== item.slotKey) {
+                                    setTemplateImageDropTargetKey(null);
+                                  }
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  const sourceSlotKey = event.dataTransfer.getData('text/plain') || draggingTemplateImageFieldKey;
+                                  if (!sourceSlotKey || sourceSlotKey === item.slotKey || item.isUploading) {
+                                    setDraggingTemplateImageFieldKey(null);
+                                    setTemplateImageDropTargetKey(null);
+                                    return;
+                                  }
+                                  handleTemplateImageReorder(sourceSlotKey, item.slotKey);
+                                  setDraggingTemplateImageFieldKey(null);
+                                  setTemplateImageDropTargetKey(null);
+                                }}
+                                onDragEnd={() => {
+                                  setDraggingTemplateImageFieldKey(null);
+                                  setTemplateImageDropTargetKey(null);
+                                }}
+                                title={item.isUploading ? '上传中，暂不可拖动' : '拖动可调换映射位置'}
+                              >
+                                <img src={item.previewUrl} alt={`图片 ${item.index + 1}`} className="multi-image-preview" />
+                                <button
+                                  type="button"
+                                  className="multi-image-remove"
+                                  onClick={() => handleTemplateImageRemove(item.slotKey)}
+                                  title="移除"
+                                >
+                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                    <line x1="18" y1="6" x2="6" y2="18" />
+                                    <line x1="6" y1="6" x2="18" y2="18" />
+                                  </svg>
+                                </button>
+                                <span className="multi-image-name">{item.filename || `图片 ${item.index + 1}`}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="image-upload-actions">
+                          {isUXPWebView() && (
+                            <PsExportButton
+                              mode="layer"
+                              label="上传图层"
+                              fullWidth
+                              onExport={(blob) => {
+                                const file = new File([blob], `ps-export-${Date.now()}.png`, { type: 'image/png' });
+                                handleTemplateCombinedImageUpload(file).catch((error) => {
+                                  console.error('[Draw] 上传图片到 LemonGrid 失败:', error);
+                                  alert(error instanceof Error ? error.message : '上传图片失败');
+                                });
+                              }}
+                              onError={(err) => console.error('Layer export error:', err)}
+                            />
+                          )}
+                          {isUXPWebView() && (
+                            <PsExportButton
+                              mode="selection"
+                              label="上传选区"
+                              fullWidth
+                              onExport={(blob) => {
+                                const file = new File([blob], `ps-export-${Date.now()}.png`, { type: 'image/png' });
+                                handleTemplateCombinedImageUpload(file).catch((error) => {
+                                  console.error('[Draw] 上传图片到 LemonGrid 失败:', error);
+                                  alert(error instanceof Error ? error.message : '上传图片失败');
+                                });
+                              }}
+                              onError={(err) => console.error('Selection export error:', err)}
+                            />
+                          )}
+                          <label className="image-upload-local-btn">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  try {
+                                    await handleTemplateCombinedImageUpload(file);
+                                  } catch (error) {
+                                    console.error('[Draw] 上传图片到 LemonGrid 失败:', error);
+                                    alert(error instanceof Error ? error.message : '上传图片失败');
+                                  }
+                                }
+                                e.target.value = '';
+                              }}
+                            />
+                            <span>上传本地图片</span>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                  {templateNonImageFields.map((field) => {
+                    const fieldKey = getTemplateFieldStateKey(field);
+                    const value = templateParams[fieldKey] ?? renderParamDefault(field);
 
                     // Per D-09: Render inputs based on param_schema type
                     switch (field.type) {
@@ -2799,12 +4383,12 @@ export const Draw = () => {
                         // If field has options, render as select dropdown
                         if (field.options && field.options.length > 0) {
                           return (
-                            <div key={field.name} className="form-field">
+                            <div key={fieldKey} className="form-field">
                               <div className="field-label">{field.label}{field.required && <span className="required-mark">*</span>}</div>
                               <select
                                 className="workflow-select"
                                 value={String(value)}
-                                onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
+                                onChange={(e) => handleTemplateParamChange(fieldKey, e.target.value)}
                               >
                                 {field.options.map((opt) => (
                                   <option key={String(opt.value)} value={String(opt.value)}>
@@ -2815,35 +4399,29 @@ export const Draw = () => {
                             </div>
                           );
                         }
-                        // Determine if this is a long-text (prompt) field or short-text field
-                        const isLongText = /prompt|提示词|description|描述/i.test(field.label + (field.description || ''));
-                        if (isLongText) {
-                          return (
-                            <div key={field.name} className="form-field">
-                              <div className="field-label">{field.label}{field.required && <span className="required-mark">*</span>}</div>
-                              <textarea
-                                className="text-input"
-                                value={String(value)}
-                                onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
-                                rows={2}
-                                placeholder={field.description || `输入${field.label}...`}
-                              />
-                            </div>
-                          );
-                        }
-                        // Short text: model names, paths, etc. → single-line input
-                        return (
-                          <div key={field.name} className="form-field">
-                            <div className="field-label">{field.label}{field.required && <span className="required-mark">*</span>}</div>
-                            <input
-                              type="text"
-                              className="text-input"
-                              value={String(value)}
-                              onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
-                              placeholder={field.description || ''}
-                            />
-                          </div>
-                        );
+                        const isPromptField = isPromptTemplateField(field);
+                        const promptLibraryKey = buildTemplatePromptLibraryKey(field);
+                        return renderTextControl({
+                          key: fieldKey,
+                          label: field.label,
+                          value: String(value),
+                          onChange: (nextValue) => handleTemplateParamChange(fieldKey, nextValue),
+                          placeholder: field.description || `输入${field.label}...`,
+                          isLongText: isPromptField,
+                          required: field.required,
+                          promptActions: isPromptField
+                            ? {
+                                storageKey: promptLibraryKey,
+                                onOpenHistory: () => openPromptLibraryModal('history', promptLibraryKey, field.label, (text) => {
+                                  handleTemplateParamChange(fieldKey, text);
+                                }),
+                                onOpenCustom: () => openPromptLibraryModal('custom', promptLibraryKey, field.label, (text) => {
+                                  handleTemplateParamChange(fieldKey, text);
+                                }),
+                                onSaveCustom: () => savePromptToCustomLibrary(promptLibraryKey, String(value)),
+                              }
+                            : undefined,
+                        });
                       }
 
                       case 'number': {
@@ -2851,9 +4429,9 @@ export const Draw = () => {
                         const isSeedField = field.name.toLowerCase().includes('seed');
 
                         if (isSeedField) {
-                          const currentSeedMode = seedModes[field.name] || 'randomize';
+                          const currentSeedMode = seedModes[fieldKey] || 'randomize';
                           return (
-                            <div key={field.name} className="form-field seed-field">
+                            <div key={fieldKey} className="form-field seed-field">
                               <div className="field-label">
                                 <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
                                 <div className="seed-control">
@@ -2867,7 +4445,7 @@ export const Draw = () => {
                                         decrement: '递减值',
                                         randomize: '随机值',
                                       }[currentSeedMode]}
-                                      onClick={() => setOpenSeedDropdown(openSeedDropdown === field.name ? null : field.name)}
+                                      onClick={() => setOpenSeedDropdown(openSeedDropdown === fieldKey ? null : fieldKey)}
                                     >
                                       {currentSeedMode === 'fixed' && (
                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -2883,21 +4461,21 @@ export const Draw = () => {
                                       )}
                                       <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
                                     </button>
-                                    {openSeedDropdown === field.name && (
+                                    {openSeedDropdown === fieldKey && (
                                       <div className="seed-mode-menu" onClick={() => setOpenSeedDropdown(null)}>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'fixed' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'fixed' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'fixed' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'fixed' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                                           <span>固定值</span>
                                         </button>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'increment' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'increment' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'increment' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'increment' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
                                           <span>递增值</span>
                                         </button>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'decrement' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'decrement' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'decrement' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'decrement' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
                                           <span>递减值</span>
                                         </button>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'randomize' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'randomize' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'randomize' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'randomize' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
                                           <span>随机值</span>
                                         </button>
@@ -2912,7 +4490,7 @@ export const Draw = () => {
                                       const raw = e.target.value;
                                       if (raw === '' || raw === '-') return;
                                       const v = Number(raw);
-                                      if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                      if (!Number.isNaN(v)) handleTemplateParamChange(fieldKey, v);
                                     }}
                                   />
                                 </div>
@@ -2928,7 +4506,7 @@ export const Draw = () => {
                           : Math.max(min + step * 100, numericValue + step * 10);
                         const sliderValue = Math.min(max, Math.max(min, numericValue));
                         return (
-                          <div key={field.name} className="form-field slider-field">
+                          <div key={fieldKey} className="form-field slider-field">
                             <div className="field-label">
                               <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
                               <div className="number-stepper">
@@ -2937,7 +4515,7 @@ export const Draw = () => {
                                   className="stepper-btn stepper-minus"
                                   onClick={() => {
                                     const next = Math.max(min, sliderValue - step);
-                                    handleTemplateParamChange(field.name, next);
+                                    handleTemplateParamChange(fieldKey, next);
                                   }}
                                   disabled={sliderValue <= min}
                                 >−</button>
@@ -2949,12 +4527,12 @@ export const Draw = () => {
                                     const raw = e.target.value;
                                     if (raw === '' || raw === '-') return;
                                     const v = Number(raw);
-                                    if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                    if (!Number.isNaN(v)) handleTemplateParamChange(fieldKey, v);
                                   }}
                                   onBlur={(e) => {
                                     const v = Number(e.target.value);
                                     const clamped = Number.isNaN(v) ? min : Math.min(max, Math.max(min, v));
-                                    handleTemplateParamChange(field.name, clamped);
+                                    handleTemplateParamChange(fieldKey, clamped);
                                   }}
                                   step={step}
                                 />
@@ -2963,7 +4541,7 @@ export const Draw = () => {
                                   className="stepper-btn stepper-plus"
                                   onClick={() => {
                                     const next = Math.min(max, sliderValue + step);
-                                    handleTemplateParamChange(field.name, next);
+                                    handleTemplateParamChange(fieldKey, next);
                                   }}
                                   disabled={sliderValue >= max}
                                 >+</button>
@@ -2973,7 +4551,7 @@ export const Draw = () => {
                               type="range"
                               className="range-track"
                               value={sliderValue}
-                              onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
+                              onChange={(e) => handleTemplateParamChange(fieldKey, Number(e.target.value))}
                               min={min}
                               max={max}
                               step={step}
@@ -2987,9 +4565,9 @@ export const Draw = () => {
                         const isSeedField = field.name.toLowerCase().includes('seed');
 
                         if (isSeedField) {
-                          const currentSeedMode = seedModes[field.name] || 'randomize';
+                          const currentSeedMode = seedModes[fieldKey] || 'randomize';
                           return (
-                            <div key={field.name} className="form-field seed-field">
+                            <div key={fieldKey} className="form-field seed-field">
                               <div className="field-label">
                                 <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
                                 <div className="seed-control">
@@ -3003,7 +4581,7 @@ export const Draw = () => {
                                         decrement: '递减值',
                                         randomize: '随机值',
                                       }[currentSeedMode]}
-                                      onClick={() => setOpenSeedDropdown(openSeedDropdown === field.name ? null : field.name)}
+                                      onClick={() => setOpenSeedDropdown(openSeedDropdown === fieldKey ? null : fieldKey)}
                                     >
                                       {currentSeedMode === 'fixed' && (
                                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
@@ -3019,21 +4597,21 @@ export const Draw = () => {
                                       )}
                                       <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="6 9 12 15 18 9"/></svg>
                                     </button>
-                                    {openSeedDropdown === field.name && (
+                                    {openSeedDropdown === fieldKey && (
                                       <div className="seed-mode-menu" onClick={() => setOpenSeedDropdown(null)}>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'fixed' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'fixed' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'fixed' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'fixed' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
                                           <span>固定值</span>
                                         </button>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'increment' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'increment' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'increment' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'increment' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="18 11 12 5 6 11"/></svg>
                                           <span>递增值</span>
                                         </button>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'decrement' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'decrement' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'decrement' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'decrement' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="18 13 12 19 6 13"/></svg>
                                           <span>递减值</span>
                                         </button>
-                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'randomize' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [field.name]: 'randomize' })); }}>
+                                        <button type="button" className={`seed-mode-option ${currentSeedMode === 'randomize' ? 'active' : ''}`} onClick={() => { setSeedModes(prev => ({ ...prev, [fieldKey]: 'randomize' })); }}>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>
                                           <span>随机值</span>
                                         </button>
@@ -3048,7 +4626,7 @@ export const Draw = () => {
                                       const raw = e.target.value;
                                       if (raw === '' || raw === '-') return;
                                       const v = Number(raw);
-                                      if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                      if (!Number.isNaN(v)) handleTemplateParamChange(fieldKey, v);
                                     }}
                                   />
                                 </div>
@@ -3064,7 +4642,7 @@ export const Draw = () => {
                           : Math.max(min + step * 100, sliderValue + step * 10);
                         const clampedValue = Math.min(max, Math.max(min, sliderValue));
                         return (
-                          <div key={field.name} className="form-field slider-field">
+                          <div key={fieldKey} className="form-field slider-field">
                             <div className="field-label">
                               <span>{field.label}{field.required && <span className="required-mark">*</span>}</span>
                               <div className="number-stepper">
@@ -3073,7 +4651,7 @@ export const Draw = () => {
                                   className="stepper-btn stepper-minus"
                                   onClick={() => {
                                     const next = Math.max(min, clampedValue - step);
-                                    handleTemplateParamChange(field.name, next);
+                                    handleTemplateParamChange(fieldKey, next);
                                   }}
                                   disabled={clampedValue <= min}
                                 >−</button>
@@ -3085,12 +4663,12 @@ export const Draw = () => {
                                     const raw = e.target.value;
                                     if (raw === '' || raw === '-') return;
                                     const v = Number(raw);
-                                    if (!Number.isNaN(v)) handleTemplateParamChange(field.name, v);
+                                    if (!Number.isNaN(v)) handleTemplateParamChange(fieldKey, v);
                                   }}
                                   onBlur={(e) => {
                                     const v = Number(e.target.value);
                                     const clamped = Number.isNaN(v) ? min : Math.min(max, Math.max(min, v));
-                                    handleTemplateParamChange(field.name, clamped);
+                                    handleTemplateParamChange(fieldKey, clamped);
                                   }}
                                   step={step}
                                 />
@@ -3099,7 +4677,7 @@ export const Draw = () => {
                                   className="stepper-btn stepper-plus"
                                   onClick={() => {
                                     const next = Math.min(max, clampedValue + step);
-                                    handleTemplateParamChange(field.name, next);
+                                    handleTemplateParamChange(fieldKey, next);
                                   }}
                                   disabled={clampedValue >= max}
                                 >+</button>
@@ -3109,7 +4687,7 @@ export const Draw = () => {
                               type="range"
                               className="range-track"
                               value={clampedValue}
-                              onChange={(e) => handleTemplateParamChange(field.name, Number(e.target.value))}
+                              onChange={(e) => handleTemplateParamChange(fieldKey, Number(e.target.value))}
                               min={min}
                               max={max}
                               step={step}
@@ -3120,11 +4698,11 @@ export const Draw = () => {
 
                       case 'select':
                         return (
-                          <div key={field.name} className="form-field">
+                          <div key={fieldKey} className="form-field">
                             <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
                             <select
                               value={String(value)}
-                              onChange={(e) => handleTemplateParamChange(field.name, e.target.value)}
+                              onChange={(e) => handleTemplateParamChange(fieldKey, e.target.value)}
                             >
                               {field.options?.map((opt) => (
                                 <option key={String(opt.value)} value={String(opt.value)}>
@@ -3137,123 +4715,15 @@ export const Draw = () => {
 
                       case 'boolean':
                         return (
-                          <div key={field.name} className="toggle-wrap">
+                          <div key={fieldKey} className="toggle-wrap">
                             <span className="toggle-label">{field.label}{field.required && <span className="required-mark">*</span>}</span>
                             <button
                               type="button"
                               className={`toggle ${Boolean(value) ? 'on' : ''}`}
-                              onClick={() => handleTemplateParamChange(field.name, !Boolean(value))}
+                              onClick={() => handleTemplateParamChange(fieldKey, !Boolean(value))}
                             />
                           </div>
                         );
-
-                      case 'image': {
-                        // Per D-18, D-19: Multi-image upload UI, target is LemonGrid asset API
-                        const previews = uploadedImagePreviews[field.name];
-                        const previewArr: string[] = Array.isArray(previews) ? previews : previews ? [previews] : [];
-                        const filenames = templateImageInputs[field.name];
-                        const filenameArr: string[] = Array.isArray(filenames) ? filenames : filenames ? [filenames] : [];
-                        return (
-                          <div key={field.name} className="form-field image-field">
-                            <label>{field.label}{field.required && <span className="required-mark">*</span>}</label>
-                            {isUXPWebView() && (
-                              <div className="image-upload-ps-buttons">
-                                <div className="image-upload-ps-item">
-                                  <span className="image-upload-ps-label">选区</span>
-                                  <PsExportButton
-                                    mode="selection"
-                                    label="从 PS 选区加载"
-                                    iconOnly
-                                    compact
-                                    onExport={(blob) => {
-                                      const file = new File([blob], `ps-export-${Date.now()}.png`, { type: 'image/png' });
-                                      handleTemplateImageUpload(file, field.name);
-                                    }}
-                                    onError={(err) => console.error('Selection export error:', err)}
-                                  />
-                                </div>
-                                <div className="image-upload-ps-item">
-                                  <span className="image-upload-ps-label">图层</span>
-                                  <PsExportButton
-                                    mode="layer"
-                                    label="从 PS 图层加载"
-                                    iconOnly
-                                    compact
-                                    onExport={(blob) => {
-                                      const file = new File([blob], `ps-export-${Date.now()}.png`, { type: 'image/png' });
-                                      handleTemplateImageUpload(file, field.name);
-                                    }}
-                                    onError={(err) => console.error('Layer export error:', err)}
-                                  />
-                                </div>
-                              </div>
-                            )}
-                            <div className="image-upload-area multi-image-area">
-                              {previewArr.length > 0 && (
-                                <div className="multi-image-list">
-                                  {previewArr.map((previewUrl, idx) => (
-                                    <div key={idx} className="multi-image-item">
-                                      <img src={previewUrl} alt={`图片 ${idx + 1}`} className="multi-image-preview" />
-                                      <button
-                                        type="button"
-                                        className="multi-image-remove"
-                                        onClick={() => {
-                                          setUploadedImagePreviews(prev => {
-                                            const arr = Array.isArray(prev[field.name]) ? [...(prev[field.name] as string[])] : [];
-                                            arr.splice(idx, 1);
-                                            return { ...prev, [field.name]: arr };
-                                          });
-                                          setTemplateImageInputs(prev => {
-                                            const arr = Array.isArray(prev[field.name]) ? [...(prev[field.name] as string[])] : [];
-                                            arr.splice(idx, 1);
-                                            return { ...prev, [field.name]: arr };
-                                          });
-                                          setTemplateParams(prev => {
-                                            const arr = Array.isArray(prev[field.name]) ? [...(prev[field.name] as string[])] : [];
-                                            arr.splice(idx, 1);
-                                            return { ...prev, [field.name]: arr };
-                                          });
-                                        }}
-                                        title="移除"
-                                      >
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                          <line x1="18" y1="6" x2="6" y2="18" />
-                                          <line x1="6" y1="6" x2="18" y2="18" />
-                                        </svg>
-                                      </button>
-                                      <span className="multi-image-name">{filenameArr[idx] || `图片 ${idx + 1}`}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                              <label className="multi-image-add">
-                                <input
-                                  type="file"
-                                  accept="image/*"
-                                  onChange={async (e) => {
-                                    const file = e.target.files?.[0];
-                                    if (file) {
-                                      try {
-                                        await handleTemplateImageUpload(file, field.name);
-                                      } catch (error) {
-                                        console.error('[Draw] 上传图片到 LemonGrid 失败:', error);
-                                      }
-                                    }
-                                    // Reset so same file can be re-selected
-                                    e.target.value = '';
-                                  }}
-                                />
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                                  <rect x="3" y="3" width="18" height="18" rx="3" />
-                                  <line x1="12" y1="8" x2="12" y2="16" />
-                                  <line x1="8" y1="12" x2="16" y2="12" />
-                                </svg>
-                                <span>添加图片</span>
-                              </label>
-                            </div>
-                          </div>
-                        );
-                      }
 
                       default:
                         return null;
@@ -3265,15 +4735,6 @@ export const Draw = () => {
           ) : (
             // Direct Mode: Existing form rendering (unchanged)
             <>
-              {/* Preset Toolbar */}
-              <PresetToolbar
-                workflowName={selectedWorkflow?.name ?? null}
-                workflowPath={selectedWorkflow?.path}
-                inputValues={inputValues}
-                imageFilenames={currentImageFilenames}
-                onApplyPreset={handleApplyPreset}
-              />
-
               {!selectedWorkflow ? (
                 <div className="form-placeholder">
                   <span className="placeholder-icon">📝</span>
@@ -3294,6 +4755,29 @@ export const Draw = () => {
             </>
           )}
           <div className="action-buttons">
+            {/* Inline generation progress (replaces removed preview-section progress bar) */}
+            {progress.status !== 'idle' && (
+              <div className="inline-progress">
+                <div className="progress-bar">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${progress.percentage}%` }}
+                  />
+                </div>
+                <div className="progress-info">
+                  <span className="progress-percentage">{progress.percentage}%</span>
+                  {progress.currentNode && (
+                    <span className="current-node">{progress.currentNode}</span>
+                  )}
+                </div>
+                {progress.error && (
+                  <div className="progress-error">
+                    <span className="error-icon">⚠</span>
+                    {progress.error}
+                  </div>
+                )}
+              </div>
+            )}
             <button
               className={`generate-btn ${connectionMode === 'cluster' ? (isSubmittingCluster ? 'generating' : '') : isGenerating ? 'generating' : ''}`}
               onClick={handleGenerate}
@@ -3360,15 +4844,80 @@ export const Draw = () => {
               />
             </>
           )}
+
+          {/* Output thumbnails strip — compact entry into the viewer modal,
+              replaces the removed 180px preview-section. Click to enlarge. */}
+          {outputImages.length > 0 && (
+            <div className="output-strip">
+              {outputImages.map((image, index) => (
+                <OutputImageItem
+                  key={`draw-output-${index}`}
+                  image={image}
+                  index={index}
+                  isActive={index === activeOutputIndex}
+                  onSelect={openOutputViewer}
+                  assetId={image.assetId}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
       <PromptReverseFlow onFillPrompt={handleFillPrompt} />
-      {connectionMode === 'cluster' && (
-        <LoginModal
-          isOpen={lgShowLoginModal}
-          onClose={() => lgSetShowLoginModal(false)}
-          onLoginSuccess={() => lgSetShowLoginModal(false)}
-        />
+      {promptLibraryModal && (
+        <div className="prompt-library-modal-overlay" onClick={closePromptLibraryModal}>
+          <div className="prompt-library-modal-card" onClick={(event) => event.stopPropagation()}>
+            <div className="prompt-library-modal-header">
+              <div>
+                <h3>{promptLibraryModal.kind === 'history' ? '历史提示词' : '自定义提示词'}</h3>
+                <p>{promptLibraryModal.label}</p>
+              </div>
+              <button
+                type="button"
+                className="prompt-library-modal-close"
+                onClick={closePromptLibraryModal}
+                title="关闭弹窗"
+                aria-label="关闭弹窗"
+              >
+                X
+              </button>
+            </div>
+            <div className="prompt-library-modal-body">
+              {promptLibraryEntries.length === 0 ? (
+                <div className="prompt-library-empty">
+                  {promptLibraryModal.kind === 'history' ? '暂无历史提示词' : '暂无自定义提示词'}
+                </div>
+              ) : (
+                <div className="prompt-library-list">
+                  {promptLibraryEntries.map((entry) => (
+                    <div
+                      key={entry.text}
+                      className="prompt-library-item"
+                    >
+                      <button
+                        type="button"
+                        className="prompt-library-item-main"
+                        onClick={() => applyPromptLibraryEntry(entry.text)}
+                        title="点击载入到输入框"
+                      >
+                        <span className="prompt-library-item-text">{entry.text}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="prompt-library-item-delete"
+                        onClick={() => deletePromptLibraryEntry(entry.text)}
+                        title="删除这条提示词"
+                        aria-label="删除这条提示词"
+                      >
+                        X
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

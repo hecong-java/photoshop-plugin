@@ -82,9 +82,24 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
     return Object.values(tasks).sort((a, b) => b.submittedAt - a.submittedAt);
   }, [tasks]);
 
+  const queuedTaskIdsSignature = useMemo(() => (
+    sortedTasks
+      .filter((task) => task.status === 'QUEUED')
+      .map((task) => task.taskId)
+      .join('|')
+  ), [sortedTasks]);
+
+  const activeTaskIdsSignature = useMemo(() => (
+    sortedTasks
+      .filter((task) => isActiveStatus(task.status))
+      .map((task) => task.taskId)
+      .join('|')
+  ), [sortedTasks]);
+
   // Per-task ETA polling: fetch ETA for QUEUED tasks every 30 seconds
   useEffect(() => {
-    const queuedTasks = sortedTasks.filter(t => t.status === 'QUEUED');
+    const queuedTasks = Object.values(useLemonGridStore.getState().tasks)
+      .filter((task) => task.status === 'QUEUED');
     if (queuedTasks.length === 0) return;
 
     const serverUrl = useLemonGridStore.getState().serverUrl;
@@ -114,7 +129,7 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
     fetchETAs();
     const interval = setInterval(fetchETAs, 30000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [sortedTasks]);
+  }, [queuedTaskIdsSignature]);
 
   // Poll active task status every 5 seconds to recover from WS drops / navigation
   const refreshActiveTasks = useCallback(() => {
@@ -146,7 +161,7 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
     refreshActiveTasks();
     const interval = setInterval(refreshActiveTasks, 5000);
     return () => clearInterval(interval);
-  }, [refreshActiveTasks, sortedTasks]);
+  }, [activeTaskIdsSignature, refreshActiveTasks]);
 
   const [refreshing, setRefreshing] = useState(false);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);

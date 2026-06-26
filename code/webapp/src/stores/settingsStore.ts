@@ -38,6 +38,11 @@ interface SettingsState {
   setDashScopeModel: (model: string) => void;
 }
 
+type PersistedSettingsState = Pick<
+  SettingsState,
+  'theme' | 'autoSave' | 'psImportMode' | 'connectionMode' | 'comfyUI' | 'dashScope'
+>;
+
 const DEFAULT_COMFYUI_SETTINGS: ComfyUISettings = {
   baseUrl: 'http://192.168.0.50:8188',
   isConnected: false,
@@ -56,8 +61,8 @@ export const useSettingsStore = create<SettingsState>()(
     (set) => ({
       theme: 'dark',
       autoSave: true,
-      psImportMode: 'pixel',
-      connectionMode: 'direct' as const,
+      psImportMode: 'smartObject',
+      connectionMode: 'cluster' as const,
       comfyUI: DEFAULT_COMFYUI_SETTINGS,
       dashScope: DEFAULT_DASHSCOPE_SETTINGS,
       setTheme: (theme) => set({ theme }),
@@ -85,6 +90,32 @@ export const useSettingsStore = create<SettingsState>()(
     }),
     {
       name: 'LemonGrid-settings',
+      version: 1,
+      migrate: (persistedState: unknown, version) => {
+        const state =
+          persistedState && typeof persistedState === 'object'
+            ? (persistedState as Partial<PersistedSettingsState>)
+            : {};
+        if (version < 1) {
+          return {
+            theme: state.theme ?? 'dark',
+            autoSave: state.autoSave ?? true,
+            psImportMode: 'smartObject' as const,
+            connectionMode: state.connectionMode ?? 'cluster',
+            comfyUI: state.comfyUI ?? DEFAULT_COMFYUI_SETTINGS,
+            dashScope: state.dashScope ?? DEFAULT_DASHSCOPE_SETTINGS,
+          };
+        }
+
+        return {
+          theme: state.theme ?? 'dark',
+          autoSave: state.autoSave ?? true,
+          psImportMode: state.psImportMode ?? 'smartObject',
+          connectionMode: state.connectionMode ?? 'cluster',
+          comfyUI: state.comfyUI ?? DEFAULT_COMFYUI_SETTINGS,
+          dashScope: state.dashScope ?? DEFAULT_DASHSCOPE_SETTINGS,
+        };
+      },
       partialize: (state) => ({
         theme: state.theme,
         autoSave: state.autoSave,

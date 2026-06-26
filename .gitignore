@@ -4,6 +4,9 @@
 # Claude Code agent worktrees（工具内部工作目录，勿入库）
 .claude/worktrees/
 
+# Trae / 调试运行时日志（.dbg 目录，勿入库）
+.dbg/
+
 # 操作系统产生的文件
 .DS_Store
 Thumbs.db

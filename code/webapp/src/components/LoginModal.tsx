@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useLemonGridStore } from '../stores/lemongridStore';
-import { loginToLemonGrid, getUserProfile, syncAuthToBridge, encryptPassword, getDingTalkLoginUrl } from '../services/lemongrid-auth';
+import { loginToLemonGrid, getUserProfile, syncAuthToBridge, encryptPassword, decryptPassword, getDingTalkLoginUrl } from '../services/lemongrid-auth';
 import { DingTalkQRView } from './DingTalkQRView';
+import { ServerUrlSettingsModal } from './ServerUrlSettingsModal';
 import { isUXPWebView } from '../services/upload';
 import './LoginModal.css';
 
@@ -9,46 +10,32 @@ interface LoginModalProps {
   isOpen: boolean;
   onClose: () => void;
   onLoginSuccess: () => void;
+  /**
+   * 强制模式：禁止任何关闭途径（×/ESC/遮罩点击/取消按钮）。
+   * 仅在登录成功后才允许关闭。用于插件启动 / token 失效场景。
+   */
+  force?: boolean;
 }
 
-export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps) => {
+export const LoginModal = ({ isOpen, onClose, onLoginSuccess, force = false }: LoginModalProps) => {
   const serverUrl = useLemonGridStore((state) => state.serverUrl);
   const storedUsername = useLemonGridStore((state) => state.username);
+  const storedRememberMe = useLemonGridStore((state) => state.rememberMe);
+  const storedEncryptedPassword = useLemonGridStore((state) => state.encryptedPassword);
   const setAuth = useLemonGridStore((state) => state.setAuth);
-  const setServerUrl = useLemonGridStore((state) => state.setServerUrl);
   const setConnected = useLemonGridStore((state) => state.setConnected);
   const setEncryptedPassword = useLemonGridStore((state) => state.setEncryptedPassword);
   const setRememberMe = useLemonGridStore((state) => state.setRememberMe);
 
-  const [inputServerUrl, setInputServerUrl] = useState('');
   const [inputUsername, setInputUsername] = useState('');
   const [inputPassword, setInputPassword] = useState('');
   const [inputRememberMe, setInputRememberMe] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loginView, setLoginView] = useState<'password' | 'dingtalk'>('password');
+  const [showServerSettings, setShowServerSettings] = useState(false);
   const authProvider = useLemonGridStore((state) => state.authProvider);
   const tokenExpiresAt = useLemonGridStore((state) => state.tokenExpiresAt);
-
-  // Pre-fill from stored values on mount
-  useEffect(() => {
-    if (isOpen) {
-      setInputServerUrl(serverUrl || '');
-      setInputUsername(storedUsername || '');
-      setInputPassword('');
-      setInputRememberMe(false);
-      setError(null);
-      setIsLoading(false);
-
-      // Per D-14: If authProvider is dingtalk and token is expired, show QR view directly
-      const isTokenValid = tokenExpiresAt && tokenExpiresAt > Date.now() + 120000;
-      if (authProvider === 'dingtalk' && !isTokenValid) {
-        setLoginView('dingtalk');
-      } else {
-        setLoginView('password');
-      }
-    }
-  }, [isOpen, serverUrl, storedUsername, authProvider, tokenExpiresAt]);
 
   // Normalize URL: auto-prepend http:// for bare IP/hostname
   const normalizeUrl = (raw: string): string => {
@@ -59,14 +46,58 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
     return url;
   };
 
+  // 集群服务器地址由后台注入到 store，这里取标准化后的值用于 API 调用
+  const effectiveServerUrl = normalizeUrl(serverUrl);
+
+  // Pre-fill from stored values on mount / when modal opens
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let cancelled = false;
+
+    setInputUsername(storedUsername || '');
+    setInputPassword('');
+    // Restore the previous "remember me" state so the checkbox reflects
+    // what was persisted. Hard-coding false here would overwrite the
+    // persisted rememberMe/encryptedPassword on the next login submit
+    // (because handleSubmit calls setRememberMe(false) + setEncryptedPassword(null)
+    // when inputRememberMe is false).
+    setInputRememberMe(storedRememberMe);
+    setError(null);
+    setIsLoading(false);
+
+    // If a password was previously saved ("记住密码" + encryptedPassword present),
+    // decrypt it and pre-fill the input so the user can just click "登录".
+    // If decryption fails (e.g. the encryption key rotated, or the payload is
+    // corrupted by a bad store migration), drop the checkbox too so we don't
+    // leave the UI in a state where rememberMe=true but encryptedPassword is
+    // un-decryptable.
+    if (storedRememberMe && storedEncryptedPassword) {
+      decryptPassword(storedEncryptedPassword)
+        .then((pwd) => {
+          if (!cancelled) setInputPassword(pwd);
+        })
+        .catch((err) => {
+          console.warn('[LoginModal] Failed to decrypt stored password:', err);
+          if (!cancelled) setInputRememberMe(false);
+        });
+    }
+
+    // Per D-14: If authProvider is dingtalk and token is expired, show QR view directly
+    const isTokenValid = tokenExpiresAt && tokenExpiresAt > Date.now() + 120000;
+    if (authProvider === 'dingtalk' && !isTokenValid) {
+      setLoginView('dingtalk');
+    } else {
+      setLoginView('password');
+    }
+
+    return () => { cancelled = true; };
+  }, [isOpen, storedUsername, storedRememberMe, storedEncryptedPassword, authProvider, tokenExpiresAt]);
+
   // Validate inputs per D-83
   const validateInputs = (): string | null => {
-    if (!inputServerUrl.trim()) {
-      return '请输入服务器地址';
-    }
-    const url = normalizeUrl(inputServerUrl);
-    if (!/^https?:\/\/.+/.test(url)) {
-      return '无效的服务器地址';
+    if (!effectiveServerUrl || !/^https?:\/\/.+/.test(effectiveServerUrl)) {
+      return '集群服务器地址未配置，请联系管理员';
     }
     if (!inputUsername.trim()) {
       return '请输入用户名';
@@ -78,9 +109,9 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
   };
 
   const handleDingTalkClick = async () => {
-    const url = normalizeUrl(inputServerUrl || serverUrl || '');
-    if (!url) {
-      setError('请先输入服务器地址');
+    const url = effectiveServerUrl;
+    if (!url || !/^https?:\/\/.+/.test(url)) {
+      setError('集群服务器地址未配置，请联系管理员');
       return;
     }
 
@@ -102,6 +133,11 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
   };
 
   const handleClose = () => {
+    // 强制模式下：禁止关闭，仅重置视图状态以便重新输入
+    if (force) {
+      setLoginView('password');
+      return;
+    }
     setLoginView('password');
     onClose();
   };
@@ -123,9 +159,7 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
 
     try {
       // Use normalized URL (with protocol) for all API calls
-      const url = normalizeUrl(inputServerUrl);
-      // Also update input state so user sees the corrected URL
-      setInputServerUrl(url);
+      const url = effectiveServerUrl;
 
       // Login per D-85
       const loginResult = await loginToLemonGrid(url, inputUsername.trim(), inputPassword);
@@ -137,9 +171,6 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
         username: loginResult.user.username,
         role: loginResult.user.role,
       });
-
-      // Update server URL
-      setServerUrl(url);
 
       // Handle Remember Me per D-77
       if (inputRememberMe) {
@@ -197,45 +228,81 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
       handleSubmit();
     }
     if (e.key === 'Escape') {
+      // 强制模式下吞掉 ESC，避免误关弹窗
+      if (force) {
+        e.stopPropagation();
+        return;
+      }
       handleClose();
     }
   };
 
   if (!isOpen) return null;
 
-  const isSubmitDisabled = isLoading || !inputServerUrl.trim() || !inputUsername.trim() || !inputPassword;
+  const isSubmitDisabled = isLoading || !effectiveServerUrl || !inputUsername.trim() || !inputPassword;
 
   return (
-    <div className="login-modal-overlay" onClick={handleClose}>
+    <div
+      className="login-modal-overlay"
+      onClick={(e) => {
+        // 强制模式下禁用遮罩点击关闭，且阻止冒泡避免触发路由/外层组件
+        if (force) {
+          e.stopPropagation();
+          return;
+        }
+        handleClose();
+      }}
+    >
       <div className="login-modal-card" onClick={(e) => e.stopPropagation()} onKeyDown={handleKeyDown}>
-        <h2 className="login-modal-title">LemonGrid 登录</h2>
+        <h2 className="login-modal-title">
+          LemonGrid 登录
+          {/* Top-right settings button — opens the ServerUrlSettingsModal
+              for manually configuring the server URL override. Only shown
+              on the password view. */}
+          {loginView === 'password' && (
+            <button
+              type="button"
+              className="login-modal-settings-btn"
+              onClick={() => setShowServerSettings(true)}
+              aria-label="服务器地址设置"
+            >
+              设置
+            </button>
+          )}
+          {/* DingTalk QR view needs a close affordance to switch back to the
+              password view. Force mode just resets the view; non-force closes
+              the entire modal. */}
+          {loginView === 'dingtalk' && (
+            <button
+              type="button"
+              className="login-modal-close-btn"
+              onClick={() => {
+                if (force) {
+                  setLoginView('password');
+                } else {
+                  handleClose();
+                }
+              }}
+              aria-label={force ? '返回密码登录' : '关闭'}
+            >
+              ×
+            </button>
+          )}
+        </h2>
 
         {loginView === 'password' && (
         <div className="login-modal-form">
           <div className="form-group">
-            <label htmlFor="lg-server-url">服务器地址</label>
-            <input
-              id="lg-server-url"
-              type="text"
-              value={inputServerUrl}
-              onChange={(e) => setInputServerUrl(e.target.value)}
-              placeholder="192.168.0.105 或 https://lemongrid.example.com"
-              className="text-input"
-              disabled={isLoading}
-              autoFocus
-            />
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="lg-username">用户名</label>
+            <label htmlFor="lg-username">账号</label>
             <input
               id="lg-username"
               type="text"
               value={inputUsername}
               onChange={(e) => setInputUsername(e.target.value)}
-              placeholder="请输入用户名"
+              placeholder="请输入账号"
               className="text-input"
               disabled={isLoading}
+              autoFocus
             />
           </div>
 
@@ -278,13 +345,15 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
             >
               {isLoading ? '登录中...' : '登录'}
             </button>
-            <button
-              className="login-modal-btn cancel-btn"
-              onClick={handleClose}
-              disabled={isLoading}
-            >
-              取消
-            </button>
+            {!force && (
+              <button
+                className="login-modal-btn cancel-btn"
+                onClick={handleClose}
+                disabled={isLoading}
+              >
+                取消
+              </button>
+            )}
           </div>
 
           <div className="dingtalk-divider">
@@ -306,18 +375,8 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
 
         {loginView === 'dingtalk' && (
           <div className="dingtalk-qrcode-view">
-            <a
-              className="dingtalk-back-link"
-              href="#"
-              onClick={(e) => {
-                e.preventDefault();
-                setLoginView('password');
-              }}
-            >
-              返回密码登录
-            </a>
             <DingTalkQRView
-              serverUrl={normalizeUrl(inputServerUrl || serverUrl || '')}
+              serverUrl={effectiveServerUrl}
               onSuccess={handleDingTalkSuccess}
               onError={(err) => {
                 // Errors are displayed inside DingTalkQRView per D-29
@@ -328,6 +387,16 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess }: LoginModalProps)
           </div>
         )}
       </div>
+
+      {/* Server URL override dialog — opens from the title-bar "设置" button.
+          Renders at z-index 1600 (above this modal's 1500) so users can edit
+          the server URL even when this modal is forced open (token-expired /
+          first-boot scenarios). Closing it returns the user to this modal so
+          they can resume logging in. */}
+      <ServerUrlSettingsModal
+        isOpen={showServerSettings}
+        onClose={() => setShowServerSettings(false)}
+      />
     </div>
   );
 };

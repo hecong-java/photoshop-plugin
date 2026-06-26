@@ -3,6 +3,47 @@
 import { sendBridgeMessage, isUXPWebView, hasBridgeTransport } from './upload';
 import { shapeBridgeResponse } from './bridgeTransport';
 import { useLemonGridStore } from '../stores/lemongridStore';
+import { withUrlFailoverResponse } from './lemongrid-url';
+
+/**
+ * Flag set while the user is actively submitting credentials through LoginModal.
+ * While true, a 401 response is treated as "bad credentials" and returned directly
+ * to the caller (so the inline error message renders) instead of triggering the
+ * global re-login modal — otherwise we'd recurse into an infinite login loop.
+ */
+let isExplicitLoginInFlight = false;
+
+/**
+ * Flag set while a /auth/refresh request is in flight.
+ *
+ * Without this guard the refresh request itself would hit the 401 branch in
+ * lemongridFetch and recurse back into tryRefreshOn401 — infinite loop until
+ * the browser eventually rate-limits us. With this flag, a 401 on the refresh
+ * endpoint is returned to the caller verbatim so refreshAccessToken can
+ * inspect it and decide whether to retry (network blip) or give up
+ * (refresh token is truly invalid).
+ */
+let isRefreshInFlight = false;
+
+/**
+ * Typed error thrown by refreshAccessToken so callers can distinguish:
+ *   - 'network' : fetch failed (DNS / TCP / TLS / timeout) → worth retrying
+ *   - 'auth'    : server returned 401 (refresh token revoked or expired) → fatal
+ *   - 'server'  : other 4xx / 5xx → may or may not be worth retrying
+ *
+ * Used by withRefreshRetry to skip retries on auth failures.
+ */
+export class RefreshError extends Error {
+  readonly kind: 'network' | 'auth' | 'server';
+  readonly status?: number;
+
+  constructor(kind: 'network' | 'auth' | 'server', message: string, status?: number) {
+    super(message);
+    this.name = 'RefreshError';
+    this.kind = kind;
+    this.status = status;
+  }
+}
 
 interface LemonGridLoginResponse {
   access_token: string;
@@ -147,54 +188,112 @@ export async function decryptPassword(encrypted: string): Promise<string> {
 }
 
 /**
+ * Trigger the global forced re-login flow.
+ * Called whenever any LemonGrid API returns 401 and we cannot silently refresh
+ * the token. The AuthGuard in App.tsx observes `isConnected` flipping to false
+ * and opens the modal in `force` mode.
+ */
+function triggerForcedRelogin(): void {
+  const store = useLemonGridStore.getState();
+  // Idempotent: AuthGuard will re-open the modal anyway, but this keeps the
+  // store state consistent so any other listeners (Draw.tsx submit guards,
+  // queue badge, etc.) reflect the disconnected state immediately.
+  if (store.isConnected) {
+    store.setConnected(false);
+  }
+}
+
+/**
  * LemonGrid fetch - mirrors bridgeFetch pattern but uses lemongrid.fetch Bridge handler.
  * In UXP mode, the Bridge handler injects JWT Authorization header from settingsStorage.
  * In browser mode, reads token from lemongridStore and adds Authorization header manually.
+ *
+ * On 401: tries a silent refresh first; if that fails, flips `isConnected` to false so
+ * the global AuthGuard pops the login modal. The 401 is still returned to the caller
+ * so they can render an inline error and abort the in-flight operation.
  */
 export async function lemongridFetch(
   url: string,
   options: RequestInit = {},
   timeout: number = 30000
 ): Promise<Response> {
-  if (isUXPWebView() && hasBridgeTransport()) {
-    // Use Bridge proxy - JWT header injected by main.js handler
-    const method = options.method || 'GET';
-    const headers: Record<string, string> = {};
+  // Extract the base server URL from the input URL so the failover wrapper
+  // can rebuild the request against the alternate URL on infrastructure errors.
+  const base = extractBase(url);
+  const pathAndQuery = url.slice(base.length);
 
-    if (options.headers) {
-      const headersObj = options.headers as Record<string, string>;
-      for (const [key, value] of Object.entries(headersObj)) {
-        headers[key] = value;
+  return withUrlFailoverResponse<Response>(async (resolvedBase) => {
+    const target = `${resolvedBase}${pathAndQuery}`;
+
+    if (isUXPWebView() && hasBridgeTransport()) {
+      // Use Bridge proxy - JWT header injected by main.js handler
+      const method = options.method || 'GET';
+      const headers: Record<string, string> = {};
+
+      if (options.headers) {
+        const headersObj = options.headers as Record<string, string>;
+        for (const [key, value] of Object.entries(headersObj)) {
+          headers[key] = value;
+        }
       }
-    }
 
-    const result = await sendBridgeMessage('lemongrid.fetch', {
-      url,
-      method,
-      headers,
-      body: options.body as string | undefined,
-      timeout,
-    }) as {
-      ok: boolean;
-      status: number;
-      statusText: string;
-      headers: Record<string, string>;
-      data: unknown;
-    };
+      const result = await sendBridgeMessage('lemongrid.fetch', {
+        url: target,
+        method,
+        headers,
+        body: options.body as string | undefined,
+        timeout,
+      }) as {
+        ok: boolean;
+        status: number;
+        statusText: string;
+        headers: Record<string, string>;
+        data: unknown;
+      };
 
-    // Shape response into Response-like object
-    return shapeBridgeResponse(result, url);
-  } else {
-    // Browser mode - add Authorization header and handle 401 auto-retry
-    const response = await doBrowserFetch(url, options, timeout);
+      // Shape response into Response-like object
+      const response = shapeBridgeResponse(result, target);
 
-    if (response.status === 401) {
-      const refreshed = await tryRefreshOn401();
-      if (refreshed) {
-        return doBrowserFetch(url, options, timeout);
+      // UXP mode: Bridge cannot silently refresh tokens, so a 401 here means the
+      // session is gone — kick the global re-login flow.
+      // Skip when this fetch is itself the refresh call (isRefreshInFlight),
+      // so refreshAccessToken can decide whether to retry.
+      if (response.status === 401 && !isExplicitLoginInFlight && !isRefreshInFlight) {
+        triggerForcedRelogin();
       }
+      return response;
+    } else {
+      // Browser mode - add Authorization header and handle 401 auto-retry
+      const response = await doBrowserFetch(target, options, timeout);
+
+      if (response.status === 401) {
+        // Active login attempt: return 401 so the modal can render an inline error.
+        if (isExplicitLoginInFlight) return response;
+        // Refresh attempt itself: return 401 so refreshAccessToken can inspect it.
+        if (isRefreshInFlight) return response;
+        const refreshed = await tryRefreshOn401();
+        if (refreshed) {
+          return doBrowserFetch(target, options, timeout);
+        }
+        // Refresh failed → session is unrecoverable, force the user to re-login.
+        triggerForcedRelogin();
+      }
+      return response;
     }
-    return response;
+  });
+}
+
+/**
+ * Extract the scheme + host (and optional port) from a full URL.
+ * E.g. "http://8.163.4.73:8080/api/v1/x" → "http://8.163.4.73:8080".
+ * Returns the original string if it can't be parsed (defensive).
+ */
+function extractBase(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return url;
   }
 }
 
@@ -228,7 +327,13 @@ async function tryRefreshOn401(): Promise<boolean> {
 
   isRefreshing = true;
   try {
-    const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
+    // Wrap with retry so transient network blips during refresh don't kick
+    // the user out. withRefreshRetry only retries 'network' errors; 'auth'
+    // (401) and 'server' (5xx) bubble up immediately and we fall through
+    // to triggerForcedRelogin in lemongridFetch.
+    const refreshResult = await withRefreshRetry(() =>
+      refreshAccessToken(lgState.serverUrl, lgState.refreshToken!)
+    );
     useLemonGridStore.getState().setAuth({
       accessToken: refreshResult.access_token,
       refreshToken: refreshResult.refresh_token || lgState.refreshToken,
@@ -257,6 +362,10 @@ async function tryRefreshOn401(): Promise<boolean> {
  * Login to LemonGrid.
  * POST to {serverUrl}/api/v1/auth/login with { username, password }.
  * Per D-72: Returns token response, then syncs auth to Bridge.
+ *
+ * Sets `isExplicitLoginInFlight` for the duration so that any 401 surfaced by
+ * this fetch is treated as bad-credentials rather than triggering the global
+ * re-login modal (which would race with the inline error rendering).
  */
 export async function loginToLemonGrid(
   serverUrl: string,
@@ -265,28 +374,38 @@ export async function loginToLemonGrid(
 ): Promise<LemonGridLoginResponse> {
   const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/login`;
 
-  const response = await lemongridFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
-  });
+  isExplicitLoginInFlight = true;
+  try {
+    const response = await lemongridFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
 
-  if (!response.ok) {
-    if (response.status === 401) {
-      throw new Error('AUTH_INVALID_CREDENTIALS');
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new Error('AUTH_INVALID_CREDENTIALS');
+      }
+      const errorText = await response.text();
+      throw new Error(`Login failed: ${response.status} - ${errorText}`);
     }
-    const errorText = await response.text();
-    throw new Error(`Login failed: ${response.status} - ${errorText}`);
-  }
 
-  const data = (await response.json()) as LemonGridLoginResponse;
-  return data;
+    const data = (await response.json()) as LemonGridLoginResponse;
+    return data;
+  } finally {
+    isExplicitLoginInFlight = false;
+  }
 }
 
 /**
  * Refresh access token using refresh token.
  * POST to {serverUrl}/api/v1/auth/refresh with { refresh_token }.
  * Per D-79: Returns new access token.
+ *
+ * Throws RefreshError so callers (withRefreshRetry) can decide whether to retry.
+ *  - 'network' : fetch itself threw (DNS/TCP/TLS/timeout) → worth retrying
+ *  - 'auth'    : server rejected the refresh token (401) → fatal, ask user to login
+ *  - 'server'  : other 4xx/5xx → not retried (rare; usually needs human attention)
  */
 export async function refreshAccessToken(
   serverUrl: string,
@@ -294,18 +413,82 @@ export async function refreshAccessToken(
 ): Promise<LemonGridRefreshResponse> {
   const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/refresh`;
 
-  const response = await lemongridFetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-  });
+  let response: Response;
+  isRefreshInFlight = true;
+  try {
+    try {
+      response = await lemongridFetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+    } catch (err) {
+      // Fetch threw → network-level failure (DNS/TCP/TLS/timeout/aborted).
+      throw new RefreshError(
+        'network',
+        err instanceof Error ? err.message : 'Network error during token refresh'
+      );
+    }
+  } finally {
+    isRefreshInFlight = false;
+  }
 
+  if (response.status === 401) {
+    throw new RefreshError('auth', 'Refresh token invalid or expired', 401);
+  }
   if (!response.ok) {
-    throw new Error(`Token refresh failed: ${response.status}`);
+    throw new RefreshError('server', `Token refresh failed: ${response.status}`, response.status);
   }
 
   const data = (await response.json()) as LemonGridRefreshResponse;
   return data;
+}
+
+/**
+ * Retry policy for silent token refresh — protects users from transient
+ * network blips forcing a manual re-login.
+ *
+ *   attempt 1: immediate
+ *   attempt 2: +1s
+ *   attempt 3: +3s
+ *
+ * Network errors are retried (DNS/TCP/TLS hiccups, brief WiFi drops).
+ * 'auth' failures are fatal — the refresh token is truly invalid, no point
+ * hammering the server. 'server' (5xx) failures are not retried either; we
+ * assume the server is reachable and returning an honest error code.
+ */
+async function withRefreshRetry<T>(fn: () => Promise<T>): Promise<T> {
+  const delays = [0, 1000, 3000];
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < delays.length; attempt++) {
+    if (delays[attempt] > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    }
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (err instanceof RefreshError) {
+        if (err.kind === 'auth') {
+          // Refresh token rejected → no amount of retrying will help.
+          console.warn('[Auth] refresh failed: refresh token rejected (401), giving up');
+          throw err;
+        }
+        if (err.kind === 'server') {
+          // 5xx — server told us something, just respect it.
+          console.warn(`[Auth] refresh failed: server returned ${err.status}, giving up`);
+          throw err;
+        }
+        // 'network' falls through to retry
+      }
+      console.warn(
+        `[Auth] refresh attempt ${attempt + 1}/${delays.length} failed (${err instanceof Error ? err.message : String(err)}), retrying...`
+      );
+    }
+  }
+
+  throw lastError;
 }
 
 /**
@@ -556,7 +739,15 @@ async function doProactiveRefresh(): Promise<void> {
   }
 
   try {
-    const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
+    // Same retry policy as the 401 path — proactive refresh that fails
+    // because of a transient network hiccup should not stop the timer
+    // (which would leave the user to discover the token is dead on the
+    // next API call, often mid-action). Only fatal auth/server errors
+    // stop the timer; on 'network' we reschedule the next attempt via
+    // startTokenRefreshTimer after success.
+    const refreshResult = await withRefreshRetry(() =>
+      refreshAccessToken(lgState.serverUrl, lgState.refreshToken!)
+    );
     useLemonGridStore.getState().setAuth({
       accessToken: refreshResult.access_token,
       refreshToken: refreshResult.refresh_token || lgState.refreshToken,
@@ -568,9 +759,16 @@ async function doProactiveRefresh(): Promise<void> {
     await syncAuthToBridge();
     // Restart timer for the new token
     startTokenRefreshTimer();
-  } catch {
+  } catch (err) {
     stopTokenRefreshTimer();
-    // Next API call will hit ensureValidToken() which handles the failure
+    if (err instanceof RefreshError && err.kind === 'network') {
+      // Three attempts and still nothing — the connection is genuinely
+      // broken. Don't pop the login modal here (would be jarring); let
+      // the next API call surface the failure through tryRefreshOn401 →
+      // triggerForcedRelogin. User can still keep working in direct mode.
+      console.warn('[Auth] proactive refresh failed after retries, next API call will surface the error');
+    }
+    // Next API call will hit ensureValidToken() / tryRefreshOn401 which handles the failure
   }
 }
 
@@ -599,7 +797,11 @@ export async function ensureValidToken(): Promise<string> {
     const refreshStillValid = !lgState.refreshTokenExpiresAt || lgState.refreshTokenExpiresAt > Date.now();
     if (refreshStillValid) {
       try {
-        const refreshResult = await refreshAccessToken(lgState.serverUrl, lgState.refreshToken);
+        // Same retry policy: tolerate transient network blips during refresh
+        // instead of immediately forcing the user back to the login screen.
+        const refreshResult = await withRefreshRetry(() =>
+          refreshAccessToken(lgState.serverUrl!, lgState.refreshToken!)
+        );
 
         // Update store with new token
         useLemonGridStore.getState().setAuth({
@@ -616,7 +818,7 @@ export async function ensureValidToken(): Promise<string> {
 
         return refreshResult.access_token;
       } catch {
-        // Refresh failed, try re-login if possible
+        // Refresh failed (auth/server error after retries), try re-login if possible
       }
     }
   }

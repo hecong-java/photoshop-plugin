@@ -1,0 +1,199 @@
+/* ========================================
+   Server URL Settings Modal
+   Smaller card nested above (or instead of) the LoginModal.
+   z-index 1600 puts it above LoginModal (1500) so users can see
+   the settings dialog even when the login modal is forced open.
+   ======================================== */
+
+.server-url-settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 8, 12, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1600;
+}
+
+.server-url-settings-card {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--r-3);
+  overflow: hidden;
+  width: calc(100% - 48px);
+  max-width: 360px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.server-url-settings-card,
+.server-url-settings-card * {
+  box-sizing: border-box;
+}
+
+.server-url-settings-title {
+  margin: 0;
+  padding: var(--sp-3);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg);
+  border-bottom: 1px solid var(--border);
+  text-align: center;
+  position: relative;
+}
+
+.server-url-settings-close-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--fg2);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+
+.server-url-settings-close-btn:hover {
+  background: var(--surface3);
+  color: var(--fg);
+}
+
+.server-url-settings-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-3) calc(var(--sp-3) + 15px);
+}
+
+.server-url-settings-form .form-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-1);
+  width: 100%;
+  max-width: 280px;
+}
+
+.server-url-settings-form .form-group label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg2);
+}
+
+.server-url-settings-form .text-input {
+  width: 100%;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-2);
+  background: var(--surface2);
+  color: var(--fg);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  text-align: left;
+}
+
+.server-url-settings-form .text-input:focus {
+  border-color: var(--accent);
+}
+
+.server-url-hint {
+  font-size: 11px;
+  color: var(--fg3);
+  margin-top: 2px;
+  text-align: left;
+}
+
+.server-url-error {
+  width: 100%;
+  max-width: 280px;
+  color: var(--danger);
+  font-size: 12px;
+  padding: var(--sp-1) var(--sp-2);
+  background: var(--danger-bg);
+  border: 1px solid #6e2222;
+  border-radius: var(--r-1);
+  text-align: center;
+}
+
+.server-url-status {
+  width: 100%;
+  max-width: 280px;
+  font-size: 12px;
+  padding: var(--sp-1) var(--sp-2);
+  border-radius: var(--r-1);
+  text-align: center;
+  border: 1px solid transparent;
+}
+
+.server-url-status-success {
+  color: #6ee7b7;
+  background: rgba(110, 231, 183, 0.1);
+  border-color: rgba(110, 231, 183, 0.3);
+}
+
+.server-url-status-failure {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: #6e2222;
+}
+
+.server-url-status-info {
+  color: var(--fg2);
+  background: var(--surface2);
+  border-color: var(--border);
+}
+
+.server-url-actions {
+  display: flex;
+  gap: var(--sp-2);
+  width: 100%;
+  max-width: 280px;
+}
+
+.server-url-btn {
+  flex: 1;
+  padding: var(--sp-2) var(--sp-3);
+  border: none;
+  border-radius: var(--r-2);
+  font-size: 13px;
+  font-weight: 600;
+  transition: opacity 0.15s;
+  cursor: pointer;
+}
+
+.server-url-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.server-url-btn-primary {
+  background: var(--accent);
+  color: #111118;
+}
+
+.server-url-btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.server-url-btn-secondary {
+  background: var(--surface2);
+  color: var(--fg2);
+  border: 1px solid var(--border);
+}
+
+.server-url-btn-secondary:hover:not(:disabled) {
+  background: var(--surface3);
+  border-color: var(--border2);
+  color: var(--fg);
+}

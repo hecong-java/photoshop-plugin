@@ -10,6 +10,7 @@ export interface PsExportButtonProps {
   label?: string;
   iconOnly?: boolean;
   compact?: boolean;
+  fullWidth?: boolean;
 }
 
 export const PsExportButton: React.FC<PsExportButtonProps> = ({
@@ -18,7 +19,8 @@ export const PsExportButton: React.FC<PsExportButtonProps> = ({
   mode = 'layer',
   label,
   iconOnly = false,
-  compact = false
+  compact = false,
+  fullWidth = false
 }) => {
   const [isExporting, setIsExporting] = useState(false);
 
@@ -56,9 +58,9 @@ export const PsExportButton: React.FC<PsExportButtonProps> = ({
   };
 
   return (
-    <div className="ps-export-button-container">
+    <div className={`ps-export-button-container ${fullWidth ? 'full-width' : ''}`.trim()}>
       <button
-        className={`ps-export-button ${iconOnly ? 'icon-only' : ''} ${compact ? 'compact' : ''}`.trim()}
+        className={`ps-export-button ${iconOnly ? 'icon-only' : ''} ${compact ? 'compact' : ''} ${fullWidth ? 'full-width' : ''}`.trim()}
         onClick={handleExport}
         disabled={isExporting}
         title={mode === 'selection' ? '从 Photoshop 加载选区' : '从 Photoshop 加载当前选中图层'}

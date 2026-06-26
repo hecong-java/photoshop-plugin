@@ -14,6 +14,31 @@ interface DingTalkQRViewProps {
   onError: (error: string) => void;
 }
 
+/**
+ * Map a raw error message coming back from the auth/bridge layer to a
+ * user-friendly Chinese message. The bridge often returns noisy JSON like
+ * `{"code":"FETCH_ERROR","message":"Already read","url":"..."}` for
+ * infrastructure failures — we don't want that surfaced verbatim to the
+ * user, just a clean "服务器连接失败".
+ */
+const classifyError = (raw: string): string => {
+  if (!raw) return '服务器连接失败';
+  // Network / fetch / DNS / TLS / connection-reset / "Already read" (bridge
+  // body-stream re-read on error) all collapse to one user-friendly line.
+  if (
+    raw.includes('FETCH_ERROR') ||
+    raw.includes('Failed to fetch') ||
+    raw.includes('NetworkError') ||
+    raw.includes('Network request failed') ||
+    raw.includes('Already read') ||
+    raw.includes('net::') ||
+    /^\s*\{/.test(raw) // any JSON-shaped error string
+  ) {
+    return '服务器连接失败';
+  }
+  return raw;
+};
+
 export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRViewProps) => {
   const [phase, setPhase] = useState<QRPhase>('loading');
   const [authUrl, setAuthUrl] = useState('');
@@ -80,24 +105,18 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
 
             const msg = pollErr instanceof Error ? pollErr.message : 'Unknown error';
 
-            // Per D-28: Poll timeout
+            // Per D-28: Poll timeout keeps its dedicated copy.
             if (msg === 'POLL_TIMEOUT') {
               setErrorMessage('登录超时，请重试');
-            }
-            // Per D-27: Network errors
-            else if (
-              msg.includes('NetworkError') ||
-              msg.includes('Failed to fetch') ||
-              msg.includes('fetch')
-            ) {
-              setErrorMessage('网络连接失败');
-            }
-            // Per D-25: DingTalk service errors; Per D-26: Authorization cancelled
-            else {
-              setErrorMessage(msg);
+            } else {
+              // Everything else (network failures, JSON-shaped bridge errors,
+              // service errors) collapses to a user-friendly line via
+              // classifyError. Avoids surfacing `{"code":"FETCH_ERROR",...}`
+              // verbatim to the user.
+              setErrorMessage(classifyError(msg));
             }
             setPhase('error');
-            onError(msg);
+            onError(classifyError(msg));
           });
 
         // Per D-10: Auto-refresh after 3 minutes (180000ms)
@@ -110,9 +129,10 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
       } catch (err) {
         if (cancelled) return;
         const msg = err instanceof Error ? err.message : 'Unknown error';
-        setErrorMessage(msg);
+        const friendly = classifyError(msg);
+        setErrorMessage(friendly);
         setPhase('error');
-        onError(msg);
+        onError(friendly);
       }
     };
 
@@ -166,11 +186,13 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
   }, [phase, authUrl]);
 
   if (phase === 'loading') {
+    // Same outer dimensions as the QR phase below so the LoginModal card
+    // doesn't jump height when the QR arrives. Just renders a spinner
+    // inside the same 256x312 box.
     return (
-      <div className="dingtalk-qr-container" style={{ textAlign: 'center', padding: '40px 0' }}>
-        <div style={{ fontSize: '14px', color: 'var(--color-text-secondary, #999)' }}>
-          正在获取登录二维码...
-        </div>
+      <div className="dingtalk-qr-placeholder" aria-busy="true" aria-live="polite">
+        <div className="dingtalk-qr-spinner" />
+        <div className="dingtalk-qr-placeholder-text">正在获取登录二维码...</div>
       </div>
     );
   }
@@ -186,16 +208,19 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
   }
 
   if (phase === 'error') {
+    // Dedicated error container — does NOT use .dingtalk-qr-container
+    // because that one has a hard white background meant for the QR code
+    // surface. On the error path we want a clean dark-themed card with
+    // the retry button visually centered.
     return (
-      <div className="dingtalk-qr-container" style={{ textAlign: 'center', padding: '20px 0' }}>
-        <div style={{ fontSize: '13px', color: '#e74c3c', marginBottom: '12px' }}>
-          {errorMessage || '未知错误'}
+      <div className="dingtalk-qr-error">
+        <div className="dingtalk-qr-error-message">
+          {errorMessage || '服务器连接失败'}
         </div>
         <button
-          className="dingtalk-btn"
+          className="dingtalk-btn dingtalk-btn-inline"
           onClick={handleRetry}
           type="button"
-          style={{ width: 'auto', padding: '8px 24px' }}
         >
           重新获取
         </button>
@@ -223,14 +248,12 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
 
   // phase === 'qrcode' -- fallback or primary
   if (authUrl) {
+    // Identical outer dimensions to the loading placeholder so swapping
+    // in the QR doesn't resize the LoginModal.
     return (
-      <div className="dingtalk-qr-container" style={{ textAlign: 'center', padding: '8px 0' }}>
+      <div className="dingtalk-qr-placeholder">
         <QRCodeSVG value={authUrl} size={256} level="H" bgColor="#ffffff" fgColor="#1a1a22" />
-        <div style={{
-          fontSize: '12px',
-          color: 'var(--color-text-secondary, #999)',
-          marginTop: '12px',
-        }}>
+        <div className="dingtalk-qr-hint">
           请使用钉钉扫描二维码登录
         </div>
       </div>

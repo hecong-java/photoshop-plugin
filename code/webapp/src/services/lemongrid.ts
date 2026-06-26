@@ -24,12 +24,135 @@ export interface LemonGridTemplateSummary {
   param_schema?: unknown[];
 }
 
+const TEMPLATE_IMAGE_VARIANT_PATTERN = /^(.*)_([1-9]\d*)图$/;
+
+export interface ClusterTemplateVariantInfo {
+  baseName: string;
+  imageCount: number;
+}
+
+export interface GroupedClusterTemplateSummary {
+  key: string;
+  name: string;
+  category: string;
+  templateType: TemplateType;
+  representative: LemonGridTemplateSummary;
+  variants: Array<{
+    template: LemonGridTemplateSummary;
+    imageCount: number | null;
+  }>;
+  maxImageCount: number | null;
+  usesImageCountVariants: boolean;
+}
+
 export interface TemplateListParams {
   status_filter?: string;
   template_type?: TemplateType;
   page_size?: number;
   category?: string;
   search?: string;
+}
+
+export function getClusterTemplateVariantInfo(
+  template: Pick<LemonGridTemplateSummary, 'name'>
+): ClusterTemplateVariantInfo | null {
+  const match = template.name.match(TEMPLATE_IMAGE_VARIANT_PATTERN);
+  if (!match) {
+    return null;
+  }
+
+  const imageCount = Number(match[2]);
+  if (!Number.isFinite(imageCount) || imageCount <= 0) {
+    return null;
+  }
+
+  return {
+    baseName: match[1],
+    imageCount,
+  };
+}
+
+export function groupClusterTemplatesByVariants(
+  templates: LemonGridTemplateSummary[]
+): GroupedClusterTemplateSummary[] {
+  const groups = new Map<string, GroupedClusterTemplateSummary>();
+
+  templates.forEach((template) => {
+    const templateType = template.template_type || 'COMFYUI';
+    const variantInfo = getClusterTemplateVariantInfo(template);
+    const displayName = variantInfo?.baseName || template.name;
+    const category = (template.category || '未分类').trim() || '未分类';
+    const key = `${templateType}::${category}::${displayName.toLowerCase()}`;
+    const existing = groups.get(key);
+
+    if (existing) {
+      existing.variants.push({
+        template,
+        imageCount: variantInfo?.imageCount ?? null,
+      });
+      if (variantInfo) {
+        existing.usesImageCountVariants = true;
+        existing.maxImageCount = Math.max(existing.maxImageCount ?? 0, variantInfo.imageCount);
+      }
+      return;
+    }
+
+    groups.set(key, {
+      key,
+      name: displayName,
+      category,
+      templateType,
+      representative: template,
+      variants: [{
+        template,
+        imageCount: variantInfo?.imageCount ?? null,
+      }],
+      maxImageCount: variantInfo?.imageCount ?? null,
+      usesImageCountVariants: Boolean(variantInfo),
+    });
+  });
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const sortedVariants = [...group.variants].sort((a, b) => {
+        const aCount = a.imageCount ?? Number.MAX_SAFE_INTEGER;
+        const bCount = b.imageCount ?? Number.MAX_SAFE_INTEGER;
+        if (aCount !== bCount) {
+          return aCount - bCount;
+        }
+        return a.template.name.localeCompare(b.template.name, 'zh-CN');
+      });
+
+      return {
+        ...group,
+        variants: sortedVariants,
+        representative: sortedVariants[sortedVariants.length - 1]?.template ?? group.representative,
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+}
+
+export function resolveClusterTemplateVariant(
+  group: GroupedClusterTemplateSummary,
+  imageCount: number
+): LemonGridTemplateSummary | null {
+  if (!group.usesImageCountVariants) {
+    return group.representative;
+  }
+
+  const exact = group.variants.find((variant) => variant.imageCount === imageCount)?.template;
+  if (exact) {
+    return exact;
+  }
+
+  const fallbackHigher = group.variants.find(
+    (variant) => variant.imageCount !== null && variant.imageCount >= imageCount
+  )?.template;
+  if (fallbackHigher) {
+    return fallbackHigher;
+  }
+
+  return group.representative;
 }
 
 export interface ParamSchemaField {
@@ -44,6 +167,7 @@ export interface ParamSchemaField {
   options?: Array<{ label: string; value: unknown }>;
   min?: number;
   max?: number;
+  max_images?: number;
   step?: number;
   description?: string;
   source_class_type?: string | null;
@@ -92,10 +216,12 @@ export interface LemonGridTaskHistoryItem {
   created_at: string;
   completed_at: string | null;
   template_id: string;
+  template_version?: number;
   template_category: string;
   param_schema: unknown[];
   output_file_ids: string[];
   workflow_name: string;
+  task_type?: TemplateType;
   error_code: string | null;
   error_message: string | null;
   duration_seconds: number | null;
@@ -156,6 +282,7 @@ interface RawParamSchemaField {
   visible?: boolean | null;
   min?: number | null;
   max?: number | null;
+  max_images?: number | null;
   step?: number | null;
   description?: string | null;
   source_class_type?: string | null;
@@ -215,6 +342,7 @@ function normalizeParamField(raw: RawParamSchemaField): ParamSchemaField {
     options: normalizeOptions(raw.options as Array<{ label: string; value: unknown } | string> | null | undefined),
     min: raw.min ?? undefined,
     max: raw.max ?? undefined,
+    max_images: raw.max_images ?? undefined,
     step: raw.step ?? undefined,
     description: raw.description ?? undefined,
     source_class_type: raw.source_class_type ?? undefined,
@@ -234,7 +362,25 @@ function normalizeParamSchema(rawSchema: RawParamSchemaField[]): ParamSchemaFiel
  * Per D-19: Auto-detect image inputs from param_schema.
  */
 export function isImageParam(field: ParamSchemaField): boolean {
-  return field.type === 'image';
+  if (field.type === 'image') {
+    return true;
+  }
+
+  // Some COMFYUI templates expose LoadImage references as COMBO/select fields
+  // instead of IMAGEUPLOAD. Treat those "image-like select" fields as image inputs
+  // so history restore and upload UI can still work.
+  if (field.type !== 'select') {
+    return false;
+  }
+
+  const fieldName = field.name.trim().toLowerCase();
+  const fieldLabel = field.label.trim().toLowerCase();
+  const classType = (field.source_class_type || '').trim().toLowerCase();
+
+  const isImageNamedField = fieldName === 'image' || fieldName === 'upload' || fieldLabel === 'image';
+  const isImageContext = /loadimage|image/.test(classType) || /加载图像|图像|图片/.test(field.group || '');
+
+  return isImageNamedField && isImageContext;
 }
 
 /**

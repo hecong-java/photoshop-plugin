@@ -72,6 +72,244 @@ export const getDefaultWorkflow = (workflowList: ComfyUIWorkflowInfo[]): ComfyUI
   })[0] ?? null;
 };
 
+const WORKFLOW_IMAGE_VARIANT_PATTERN = /^(.*)_([1-9]\d*)图$/;
+
+export interface WorkflowImageVariantInfo {
+  baseName: string;
+  imageCount: number;
+}
+
+export interface GroupedWorkflowEntry {
+  key: string;
+  name: string;
+  directory: string;
+  representative: ComfyUIWorkflowInfo;
+  variants: Array<{
+    workflow: ComfyUIWorkflowInfo;
+    imageCount: number | null;
+  }>;
+  maxImageCount: number | null;
+  usesImageCountVariants: boolean;
+}
+
+const getWorkflowInputBaseName = (name: string): string => {
+  const splitIndex = name.lastIndexOf('_');
+  if (splitIndex <= 0 || splitIndex >= name.length - 1) {
+    return name;
+  }
+
+  const suffix = name.slice(splitIndex + 1);
+  return /^\d+$/.test(suffix) ? name.slice(0, splitIndex) : name;
+};
+
+const getWorkflowInputOrder = (input: WorkflowInput): number => {
+  if (typeof input.nodeId === 'string' && input.nodeId.trim() !== '' && !Number.isNaN(Number(input.nodeId))) {
+    return Number(input.nodeId);
+  }
+
+  const splitIndex = input.name.lastIndexOf('_');
+  if (splitIndex > 0 && splitIndex < input.name.length - 1) {
+    const parsed = Number(input.name.slice(splitIndex + 1));
+    if (!Number.isNaN(parsed)) {
+      return parsed;
+    }
+  }
+
+  return Number.MAX_SAFE_INTEGER;
+};
+
+export const getWorkflowImageVariantInfo = (
+  workflow: Pick<ComfyUIWorkflowInfo, 'name' | 'path'>
+): WorkflowImageVariantInfo | null => {
+  const fileLabel = getWorkflowDisplayMeta(workflow as ComfyUIWorkflowInfo).fileLabel;
+  const match = fileLabel.match(WORKFLOW_IMAGE_VARIANT_PATTERN);
+  if (!match) {
+    return null;
+  }
+
+  const imageCount = Number(match[2]);
+  if (!Number.isFinite(imageCount) || imageCount <= 0) {
+    return null;
+  }
+
+  return {
+    baseName: match[1],
+    imageCount,
+  };
+};
+
+export const groupWorkflowsByImageVariants = (
+  workflowList: ComfyUIWorkflowInfo[]
+): GroupedWorkflowEntry[] => {
+  const groups = new Map<string, GroupedWorkflowEntry>();
+
+  workflowList
+    .filter((workflow) => !workflow.isDirectory)
+    .forEach((workflow) => {
+      const meta = getWorkflowDisplayMeta(workflow);
+      const variantInfo = getWorkflowImageVariantInfo(workflow);
+      const displayName = variantInfo?.baseName || meta.fileLabel;
+      const key = `${meta.directory}::${displayName.toLowerCase()}`;
+      const existing = groups.get(key);
+
+      if (existing) {
+        existing.variants.push({
+          workflow,
+          imageCount: variantInfo?.imageCount ?? null,
+        });
+        if (variantInfo) {
+          existing.usesImageCountVariants = true;
+          existing.maxImageCount = Math.max(existing.maxImageCount ?? 0, variantInfo.imageCount);
+        }
+        return;
+      }
+
+      groups.set(key, {
+        key,
+        name: displayName,
+        directory: meta.directory,
+        representative: workflow,
+        variants: [{
+          workflow,
+          imageCount: variantInfo?.imageCount ?? null,
+        }],
+        maxImageCount: variantInfo?.imageCount ?? null,
+        usesImageCountVariants: Boolean(variantInfo),
+      });
+    });
+
+  return Array.from(groups.values())
+    .map((group) => {
+      const sortedVariants = [...group.variants].sort((a, b) => {
+        const aCount = a.imageCount ?? Number.MAX_SAFE_INTEGER;
+        const bCount = b.imageCount ?? Number.MAX_SAFE_INTEGER;
+        if (aCount !== bCount) {
+          return aCount - bCount;
+        }
+
+        const aMeta = getWorkflowDisplayMeta(a.workflow);
+        const bMeta = getWorkflowDisplayMeta(b.workflow);
+        return aMeta.sortKey.localeCompare(bMeta.sortKey, 'zh-CN');
+      });
+
+      return {
+        ...group,
+        variants: sortedVariants,
+        representative: sortedVariants[sortedVariants.length - 1]?.workflow ?? group.representative,
+      };
+    })
+    .sort((a, b) => {
+      if (a.directory === ROOT_WORKFLOW_GROUP && b.directory !== ROOT_WORKFLOW_GROUP) return 1;
+      if (b.directory === ROOT_WORKFLOW_GROUP && a.directory !== ROOT_WORKFLOW_GROUP) return -1;
+      if (a.directory !== b.directory) {
+        return a.directory.localeCompare(b.directory, 'zh-CN');
+      }
+
+      const aMeta = getWorkflowDisplayMeta(a.representative);
+      const bMeta = getWorkflowDisplayMeta(b.representative);
+      return aMeta.sortKey.localeCompare(bMeta.sortKey, 'zh-CN');
+    });
+};
+
+export const getDefaultGroupedWorkflow = (
+  workflowList: ComfyUIWorkflowInfo[]
+): GroupedWorkflowEntry | null => {
+  const grouped = groupWorkflowsByImageVariants(workflowList);
+  return grouped[0] ?? null;
+};
+
+export const resolveGroupedWorkflowVariant = (
+  group: GroupedWorkflowEntry,
+  imageCount: number
+): ComfyUIWorkflowInfo | null => {
+  if (!group.usesImageCountVariants) {
+    return group.representative;
+  }
+
+  const exact = group.variants.find((variant) => variant.imageCount === imageCount)?.workflow;
+  if (exact) {
+    return exact;
+  }
+
+  const fallbackHigher = group.variants.find(
+    (variant) => variant.imageCount !== null && variant.imageCount >= imageCount
+  )?.workflow;
+  if (fallbackHigher) {
+    return fallbackHigher;
+  }
+
+  return group.representative;
+};
+
+export const remapInputValuesToWorkflowInputs = <T extends string | number | boolean>(
+  sourceInputs: WorkflowInput[],
+  targetInputs: WorkflowInput[],
+  sourceValues: Record<string, T>
+): Record<string, T> => {
+  const sourceGroups = new Map<string, WorkflowInput[]>();
+
+  sourceInputs.forEach((input) => {
+    const key = `${input.type}::${getWorkflowInputBaseName(input.name)}`;
+    const existing = sourceGroups.get(key);
+    if (existing) {
+      existing.push(input);
+    } else {
+      sourceGroups.set(key, [input]);
+    }
+  });
+
+  sourceGroups.forEach((inputs, key) => {
+    sourceGroups.set(
+      key,
+      [...inputs].sort((a, b) => {
+        const nodeDiff = getWorkflowInputOrder(a) - getWorkflowInputOrder(b);
+        if (nodeDiff !== 0) {
+          return nodeDiff;
+        }
+        return a.name.localeCompare(b.name, 'zh-CN');
+      })
+    );
+  });
+
+  const targetGroups = new Map<string, WorkflowInput[]>();
+  targetInputs.forEach((input) => {
+    const key = `${input.type}::${getWorkflowInputBaseName(input.name)}`;
+    const existing = targetGroups.get(key);
+    if (existing) {
+      existing.push(input);
+    } else {
+      targetGroups.set(key, [input]);
+    }
+  });
+
+  const remapped: Record<string, T> = {};
+
+  targetGroups.forEach((inputs, key) => {
+    const sortedTargets = [...inputs].sort((a, b) => {
+      const nodeDiff = getWorkflowInputOrder(a) - getWorkflowInputOrder(b);
+      if (nodeDiff !== 0) {
+        return nodeDiff;
+      }
+      return a.name.localeCompare(b.name, 'zh-CN');
+    });
+
+    const sortedSources = sourceGroups.get(key) ?? [];
+    sortedTargets.forEach((targetInput, index) => {
+      const sourceInput = sortedSources[index] ?? sortedSources[0];
+      if (!sourceInput) {
+        return;
+      }
+
+      const sourceValue = sourceValues[sourceInput.name];
+      if (sourceValue !== undefined) {
+        remapped[targetInput.name] = sourceValue;
+      }
+    });
+  });
+
+  return remapped;
+};
+
 // ---------------------------------------------------------------------------
 // Prompt compilation
 // ---------------------------------------------------------------------------
@@ -144,15 +382,23 @@ export const enforceLatestImageInputs = (
   values: Record<string, string | number | boolean>,
   inputsMeta: WorkflowInput[]
 ): Record<string, unknown> => {
-  const imageInputs = inputsMeta.filter((input) => input.type === 'image');
-
-  imageInputs.forEach((inputMeta) => {
-    const rawValue = values[inputMeta.name];
-    if (typeof rawValue !== 'string') {
-      return;
+  const imageInputs = [...inputsMeta.filter((input) => input.type === 'image')].sort((a, b) => {
+    const nodeDiff = getWorkflowInputOrder(a) - getWorkflowInputOrder(b);
+    if (nodeDiff !== 0) {
+      return nodeDiff;
     }
+    return a.name.localeCompare(b.name, 'zh-CN');
+  });
+  const orderedImageValues = imageInputs
+    .map((input) => values[input.name])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim())
+    .filter((value) => value !== '');
 
-    const imageValue = rawValue.trim();
+  imageInputs.forEach((inputMeta, index) => {
+    const rawValue = values[inputMeta.name];
+    const directImageValue = typeof rawValue === 'string' ? rawValue.trim() : '';
+    const imageValue = directImageValue || orderedImageValues[index] || '';
     if (!imageValue) {
       return;
     }
@@ -528,6 +774,49 @@ export const findBestMatchingWorkflow = async (
 // ---------------------------------------------------------------------------
 // Workflow input parsing
 // ---------------------------------------------------------------------------
+
+const PROMPT_TEXT_PATTERN = /prompt|提示词|description|描述/i;
+const PROMPT_CLASS_TYPE_PATTERN = /TextEncode|TextInput|ShowText|String/i;
+
+const isPromptLikeTextField = ({
+  classType,
+  label,
+  name,
+  nodeDisplayName,
+}: {
+  classType?: string;
+  label?: string;
+  name?: string;
+  nodeDisplayName?: string;
+}): boolean => {
+  if (typeof classType === 'string' && PROMPT_CLASS_TYPE_PATTERN.test(classType)) {
+    return true;
+  }
+
+  return [label, name, nodeDisplayName]
+    .filter((value): value is string => typeof value === 'string' && value.trim() !== '')
+    .some((value) => PROMPT_TEXT_PATTERN.test(value));
+};
+
+const isMultilineTextField = ({
+  classType,
+  label,
+  name,
+  nodeDisplayName,
+  defaultValue,
+}: {
+  classType?: string;
+  label?: string;
+  name?: string;
+  nodeDisplayName?: string;
+  defaultValue?: string;
+}): boolean => {
+  if (isPromptLikeTextField({ classType, label, name, nodeDisplayName })) {
+    return true;
+  }
+
+  return typeof defaultValue === 'string' && /\n/.test(defaultValue);
+};
 
 export const parseWorkflowInputs = (
   workflowData: unknown,
@@ -909,6 +1198,9 @@ export const parseWorkflowInputs = (
             label: promptLabel,
             default: (widgetValues?.[0] as string) || '',
             required: true,
+            multiline: true,
+            prompt: true,
+            description: `输入${promptLabel}...`,
           });
         }
 
@@ -997,11 +1289,26 @@ export const parseWorkflowInputs = (
           }
 
           if (typeof defaultValue === 'string' || typeof configDefault === 'string') {
+            const resolvedLabel = resolveInputLabel(widgetName, widget.label);
+            const resolvedDefault = typeof defaultValue === 'string' ? defaultValue : (configDefault as string);
             inputs.push({
               name: generatedName,
               type: 'text',
-              label: resolveInputLabel(widgetName, widget.label),
-              default: typeof defaultValue === 'string' ? defaultValue : (configDefault as string),
+              label: resolvedLabel,
+              default: resolvedDefault,
+              multiline: isMultilineTextField({
+                classType: classTypeStr,
+                label: resolvedLabel,
+                name: widgetName,
+                nodeDisplayName,
+                defaultValue: resolvedDefault,
+              }),
+              prompt: isPromptLikeTextField({
+                classType: classTypeStr,
+                label: resolvedLabel,
+                name: widgetName,
+                nodeDisplayName,
+              }),
             });
           }
         });
@@ -1185,11 +1492,25 @@ export const parseWorkflowInputs = (
             }
 
             if (typeof defaultValue === 'string') {
+              const resolvedLabel = resolveInputLabel(inputName);
               inputs.push({
                 name: generatedName,
                 type: 'text',
-                label: resolveInputLabel(inputName),
+                label: resolvedLabel,
                 default: defaultValue,
+                multiline: isMultilineTextField({
+                  classType: classTypeStr,
+                  label: resolvedLabel,
+                  name: inputName,
+                  nodeDisplayName,
+                  defaultValue,
+                }),
+                prompt: isPromptLikeTextField({
+                  classType: classTypeStr,
+                  label: resolvedLabel,
+                  name: inputName,
+                  nodeDisplayName,
+                }),
               });
             }
           });

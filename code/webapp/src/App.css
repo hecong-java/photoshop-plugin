@@ -46,6 +46,53 @@
   background: var(--success);
 }
 
+/* Always-on queue badge in topbar */
+.topbar-queue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.topbar-queue-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.topbar-queue-dot.idle {
+  background: var(--success);
+}
+
+.topbar-queue-dot.busy {
+  background: var(--accent);
+  animation: topbar-queue-pulse 1.5s ease-in-out infinite;
+}
+
+.topbar-queue-dot.off {
+  background: var(--fg3);
+  opacity: 0.5;
+}
+
+@keyframes topbar-queue-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.topbar-queue-label {
+  line-height: 1;
+}
+
 /* Content — scrollable middle */
 .content {
   flex: 1;

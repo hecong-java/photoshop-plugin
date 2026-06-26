@@ -56,7 +56,7 @@ export async function downloadAndSaveImage(
         bodyUsed: false,
         text: async () => '',
         json: async () => ({}),
-        blob: async () => new Blob([preloaded.data]),
+        blob: async () => new Blob([preloaded.data as unknown as BlobPart]),
         clone() { return this; },
         redirected: false,
         type: 'basic',

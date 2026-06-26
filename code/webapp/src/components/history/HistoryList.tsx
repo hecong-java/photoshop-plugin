@@ -6,7 +6,7 @@ import './HistoryList.css';
 interface HistoryListProps {
   items: HistoryItem[];
   onView: (item: HistoryItem) => Promise<void>;
-  onRerun: (item: HistoryItem) => void;
+  onRerun: (item: HistoryItem) => Promise<void>;
   onReEdit: (item: HistoryItem) => void;
   onDelete: (id: string) => void;
   onSyncToPS?: (item: HistoryItem) => Promise<void>;

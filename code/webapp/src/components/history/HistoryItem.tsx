@@ -5,7 +5,7 @@ import './HistoryItem.css';
 interface HistoryItemProps {
   item: HistoryItem;
   onView: (item: HistoryItem) => Promise<void>;
-  onRerun: (item: HistoryItem) => void;
+  onRerun: (item: HistoryItem) => Promise<void>;
   onReEdit: (item: HistoryItem) => void;
   onDelete: (id: string) => void;
   onSyncToPS?: (item: HistoryItem) => Promise<void>;
@@ -21,6 +21,7 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
 }) => {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [isRerunning, setIsRerunning] = useState(false);
   const [isSyncingPS, setIsSyncingPS] = useState(false);
   const [activePreviewIndex, setActivePreviewIndex] = useState(0);
   const [isViewerOpen, setIsViewerOpen] = useState(false);
@@ -66,6 +67,19 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
       setDownloadError(msg);
     } finally {
       setIsSyncingPS(false);
+    }
+  };
+
+  const handleRerun = async () => {
+    setDownloadError(null);
+    setIsRerunning(true);
+    try {
+      await onRerun(item);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      setDownloadError(msg);
+    } finally {
+      setIsRerunning(false);
     }
   };
 
@@ -146,8 +160,8 @@ export const HistoryItemComponent: React.FC<HistoryItemProps> = ({
             {isSyncingPS ? '同步中...' : '同步到PS'}
           </button>
         )}
-        <button onClick={() => onRerun(item)} className="btn btn-info">
-          重新运行
+        <button onClick={() => { void handleRerun(); }} className="btn btn-info" disabled={isRerunning}>
+          {isRerunning ? '重新运行中...' : '重新运行'}
         </button>
         <button onClick={() => onReEdit(item)} className="btn btn-warning">
           重新编辑

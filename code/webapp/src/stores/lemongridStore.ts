@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { TemplateType, TaskQueueSummary } from '../services/lemongrid';
+import { setLockedUrl } from '../services/lemongrid-url';
 
 export interface LemonGridTaskState {
   taskId: string;
@@ -44,6 +45,11 @@ interface LemonGridState {
   encryptedPassword: string | null;
   rememberMe: boolean;
 
+  // User-provided server URL override. Higher priority than the built-in
+  // PRIMARY/FALLBACK candidates when present. Persisted like the other
+  // user-preference fields so it survives across sessions.
+  customServerUrl: string | null;
+
   // Task tracking (transient - not persisted) per D-102
   tasks: Record<string, LemonGridTaskState>;
   clusterOutputImages: ClusterOutputImage[];
@@ -73,11 +79,43 @@ interface LemonGridState {
   removeTask: (taskId: string) => void;
   setEncryptedPassword: (pwd: string | null) => void;
   setRememberMe: (enabled: boolean) => void;
+  setCustomServerUrl: (url: string | null) => void;
   addClusterOutputImage: (image: ClusterOutputImage) => void;
   clearClusterOutputImages: () => void;
   setShowLoginModal: (show: boolean) => void;
   setQueueSummary: (summary: TaskQueueSummary | null) => void;
   setAuthProvider: (provider: 'password' | 'dingtalk' | null) => void;
+}
+
+function createDefaultTaskState(taskId: string): LemonGridTaskState {
+  return {
+    taskId,
+    templateId: '',
+    templateName: '',
+    templateType: 'COMFYUI',
+    status: 'PENDING',
+    progress: 0,
+    progressDetail: null,
+    queuePosition: null,
+    etaMinutes: null,
+    errorCode: null,
+    errorMessage: null,
+    outputAssetIds: [],
+    submittedAt: Date.now(),
+    completedAt: null,
+    durationSeconds: null,
+    params: {},
+    thumbnail: null,
+  };
+}
+
+function areTaskFieldValuesEqual(previousValue: unknown, nextValue: unknown): boolean {
+  if (Array.isArray(previousValue) && Array.isArray(nextValue)) {
+    return previousValue.length === nextValue.length
+      && previousValue.every((value, index) => Object.is(value, nextValue[index]));
+  }
+
+  return Object.is(previousValue, nextValue);
 }
 
 export const useLemonGridStore = create<LemonGridState>()(
@@ -96,6 +134,9 @@ export const useLemonGridStore = create<LemonGridState>()(
       // Remember me defaults
       encryptedPassword: null,
       rememberMe: false,
+
+      // User-provided server URL override (default: none).
+      customServerUrl: null,
 
       // Task tracking defaults
       tasks: {},
@@ -136,7 +177,12 @@ export const useLemonGridStore = create<LemonGridState>()(
           refreshTokenExpiresAt: null,
           userRole: null,
           isConnected: false,
-          encryptedPassword: null,
+          // Deliberately NOT clearing encryptedPassword / rememberMe / username /
+          // serverUrl / customServerUrl here — those are user preferences,
+          // not session state. Clearing encryptedPassword on logout would
+          // defeat the whole point of "记住密码" since clearAuth is invoked
+          // on every manual logout. Same goes for customServerUrl — the
+          // user's manual server override should survive logout.
           authProvider: null,
           tasks: {},
           clusterOutputImages: [],
@@ -145,36 +191,36 @@ export const useLemonGridStore = create<LemonGridState>()(
 
       setConnected: (connected) => set({ isConnected: connected }),
 
-      setServerUrl: (url) => set({ serverUrl: url.trim().replace(/\/+$/, '') }),
+      setServerUrl: (url) => {
+        const normalized = url.trim().replace(/\/+$/, '');
+        // Keep the URL failover module in sync so subsequent requests
+        // route to the same server the user has selected.
+        setLockedUrl(normalized);
+        set({ serverUrl: normalized });
+      },
 
       updateTask: (taskId, update) =>
-        set((state) => ({
-          tasks: {
-            ...state.tasks,
-            [taskId]: {
-              ...(state.tasks[taskId] || {
-                taskId,
-                templateId: '',
-                templateName: '',
-                templateType: 'COMFYUI' as const,
-                status: 'PENDING' as const,
-                progress: 0,
-                progressDetail: null,
-                queuePosition: null,
-                etaMinutes: null,
-                errorCode: null,
-                errorMessage: null,
-                outputAssetIds: [],
-                submittedAt: Date.now(),
-                completedAt: null,
-                durationSeconds: null,
-                params: {},
-                thumbnail: null,
-              }),
-              ...update,
+        set((state) => {
+          const currentTask = state.tasks[taskId];
+          const baseTask = currentTask || createDefaultTaskState(taskId);
+          const hasChanges = !currentTask || Object.entries(update).some(([key, value]) => (
+            !areTaskFieldValuesEqual(baseTask[key as keyof LemonGridTaskState], value)
+          ));
+
+          if (!hasChanges) {
+            return state;
+          }
+
+          return {
+            tasks: {
+              ...state.tasks,
+              [taskId]: {
+                ...baseTask,
+                ...update,
+              },
             },
-          },
-        })),
+          };
+        }),
 
       removeTask: (taskId) =>
         set((state) => {
@@ -185,6 +231,16 @@ export const useLemonGridStore = create<LemonGridState>()(
       setEncryptedPassword: (pwd) => set({ encryptedPassword: pwd }),
 
       setRememberMe: (enabled) => set({ rememberMe: enabled }),
+
+      setCustomServerUrl: (url) => {
+        // Trim trailing slashes and normalize empty strings to null so the
+        // server-URL module treats "user cleared the field" the same as
+        // "user never set a field" (falls back to PRIMARY/FALLBACK).
+        const normalized = typeof url === 'string' && url.trim()
+          ? url.trim().replace(/\/+$/, '')
+          : null;
+        set({ customServerUrl: normalized });
+      },
 
       addClusterOutputImage: (image) =>
         set((state) => ({
@@ -201,7 +257,7 @@ export const useLemonGridStore = create<LemonGridState>()(
     }),
     {
       name: 'LemonGrid-lemongrid',
-      version: 3,
+      version: 4,
       migrate: (persistedState: unknown, version: number) => {
         const persisted = (persistedState ?? {}) as Record<string, unknown>;
         if (version === 0) {
@@ -230,6 +286,12 @@ export const useLemonGridStore = create<LemonGridState>()(
             refreshTokenExpiresAt: null,
           };
         }
+        if (version === 3) {
+          return {
+            ...persisted,
+            customServerUrl: null,
+          };
+        }
         return persisted;
       },
       partialize: (state) => ({
@@ -242,6 +304,7 @@ export const useLemonGridStore = create<LemonGridState>()(
         userRole: state.userRole,
         encryptedPassword: state.encryptedPassword,
         rememberMe: state.rememberMe,
+        customServerUrl: state.customServerUrl,
         authProvider: state.authProvider,
       }),
     }

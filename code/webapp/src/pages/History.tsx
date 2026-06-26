@@ -21,7 +21,7 @@ interface DownloadSuccess {
 export const History = () => {
   const navigate = useNavigate();
   const { items, clusterItems, deleteItem, isLoading, error, setClient, fetchFromComfyUI, fetchFromCluster, loadLocalDownloads, addLocalDownload } = useHistoryStore();
-  const { comfyUI, connectionMode } = useSettingsStore();
+  const { comfyUI, connectionMode, psImportMode } = useSettingsStore();
   const { accessToken: lemonGridAccessToken, serverUrl: lemonGridServerUrl } = useLemonGridStore();
   const hasClusterAuth = !!(lemonGridAccessToken && lemonGridServerUrl);
   const { importBase64AsLayer } = usePSBridge();
@@ -111,7 +111,7 @@ export const History = () => {
     await importBase64AsLayer({
       base64Data,
       layerName: item.imageName || undefined,
-      mode: 'pixel',
+      mode: psImportMode,
       workflowName: item.imageName || undefined,
     });
   };
@@ -185,7 +185,43 @@ export const History = () => {
     await handleDownload(item);
   };
 
-  const handleRerun = (item: HistoryItem) => {
+  const handleRerun = async (item: HistoryItem) => {
+    if (item.source === 'cluster') {
+      if (!hasClusterAuth) {
+        throw new Error('LemonGrid 未连接，无法重新运行');
+      }
+
+      const client = new LemonGridClient({ serverUrl: lemonGridServerUrl });
+      const result = await client.submitTask(
+        item.workflow,
+        item.params,
+        item.templateVersion || 1,
+        item.templateType || 'COMFYUI'
+      );
+
+      useLemonGridStore.getState().updateTask(result.id, {
+        taskId: result.id,
+        templateId: item.workflow,
+        templateName: item.workflowName || item.imageName,
+        templateType: item.templateType || 'COMFYUI',
+        status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
+        progress: 0,
+        progressDetail: null,
+        queuePosition: null,
+        errorCode: null,
+        errorMessage: null,
+        outputAssetIds: [],
+        submittedAt: Date.now(),
+        completedAt: null,
+        durationSeconds: null,
+        params: item.params,
+        thumbnail: item.thumbnailUrl || null,
+      });
+
+      navigate('/draw', { state: { trackClusterTaskId: result.id } });
+      return;
+    }
+
     // Store the rerun item in sessionStorage temporarily
     sessionStorage.setItem('rerunItem', JSON.stringify(item));
     // Navigate to Draw page (would trigger generation with same params)

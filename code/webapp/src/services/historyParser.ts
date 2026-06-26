@@ -286,6 +286,8 @@ export const convertClusterTaskToItem = (
       imageUrl: client.getThumbnailUrlWithToken(fid),
     })),
     source: 'cluster' as const,
+    templateType: task.task_type || 'COMFYUI',
+    templateVersion: task.template_version || 1,
   };
 };
 

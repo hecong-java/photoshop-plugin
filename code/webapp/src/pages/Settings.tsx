@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useSettingsStore } from '../stores/settingsStore';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { ComfyUIClient, type ComfyUICapabilities } from '../services/comfyui';
 
 import { sendBridgeMessage } from '../services/upload';
 import { ensureValidToken } from '../services/lemongrid-auth';
-import { LoginModal } from '../components/LoginModal';
+import { ConfirmDialog } from '../components/preset/ConfirmDialog';
 import './Settings.css';
 
 export const Settings = () => {
+  const navigate = useNavigate();
   const comfyUI = useSettingsStore((state) => state.comfyUI);
   const setComfyUIBaseUrl = useSettingsStore((state) => state.setComfyUIBaseUrl);
   const setComfyUIConnected = useSettingsStore((state) => state.setComfyUIConnected);
@@ -18,20 +20,19 @@ export const Settings = () => {
   const setConnectionMode = useSettingsStore((state) => state.setConnectionMode);
 
   const lgIsConnected = useLemonGridStore((state) => state.isConnected);
-  const lgServerUrl = useLemonGridStore((state) => state.serverUrl);
   const lgUsername = useLemonGridStore((state) => state.username);
   const lgUserRole = useLemonGridStore((state) => state.userRole);
   const lgAuthProvider = useLemonGridStore((state) => state.authProvider);
-  const lgSetServerUrl = useLemonGridStore((state) => state.setServerUrl);
   const lgClearAuth = useLemonGridStore((state) => state.clearAuth);
   const lgSetConnected = useLemonGridStore((state) => state.setConnected);
-  const showLoginModal = useLemonGridStore((state) => state.showLoginModal);
-  const setShowLoginModal = useLemonGridStore((state) => state.setShowLoginModal);
   const lgTasks = useLemonGridStore((state) => state.tasks);
 
   const [isProbing, setIsProbing] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
   const [probeResult, setProbeResult] = useState<ComfyUICapabilities | null>(null);
+  // Confirm dialog for logout — replaces native window.confirm so the UX
+  // matches the rest of the app and won't be intercepted by PS webview.
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   // Connection status indicator
   const getConnectionStatus = () => {
@@ -127,24 +128,26 @@ export const Settings = () => {
     setConnectionMode(mode);
 
     if (mode === 'cluster') {
-      // D-75: Auto-open login modal if not authenticated
+      // D-75 / Global guard: AuthGuard observes isConnected and pops the login
+      // modal automatically when switching into cluster mode without an active
+      // session. We still kick a silent token validation here so a still-valid
+      // stored token gets synced to the Bridge without bothering the user.
       const lg = useLemonGridStore.getState();
-      if (!lg.isConnected || !lg.accessToken) {
-        setShowLoginModal(true);
-      } else {
-        // D-73: Try silent token validation
+      if (lg.isConnected && lg.accessToken) {
         try {
           await ensureValidToken();
         } catch {
-          setShowLoginModal(true);
+          // ensureValidToken already flips isConnected to false on hard failure,
+          // which the AuthGuard translates into the forced re-login modal.
         }
       }
     }
   };
 
-  // Logout handler per D-76, D-87
-  const handleLogout = async () => {
-    // D-87: Cancel all running cluster tasks first (warn user)
+  // Logout handler — shows a confirmation dialog, then clears auth and bounces
+  // the user back to /draw where the global AuthGuard will pop the login modal.
+  const requestLogout = () => {
+    // D-87: Warn about running tasks before opening the confirm dialog.
     const tasks = Object.values(lgTasks);
     const runningTasks = tasks.filter(t =>
       ['PENDING', 'QUEUED', 'SYNCING', 'RUNNING'].includes(t.status));
@@ -153,6 +156,11 @@ export const Settings = () => {
       const confirmed = window.confirm(`有 ${runningTasks.length} 个正在运行的集群任务，确定要登出吗？`);
       if (!confirmed) return;
     }
+    setShowLogoutConfirm(true);
+  };
+
+  const handleConfirmLogout = async () => {
+    setShowLogoutConfirm(false);
 
     // Clear auth but keep serverUrl and username per D-76
     lgClearAuth();
@@ -168,6 +176,11 @@ export const Settings = () => {
     }
 
     lgSetConnected(false);
+
+    // Per agreed design: after logout, force the user back to the default page
+    // (/draw). The global AuthGuard will pick up isConnected=false and open
+    // the forced login modal there.
+    navigate('/draw');
   };
 
   // LemonGrid connection status
@@ -278,25 +291,15 @@ export const Settings = () => {
             </div>
 
             <div className="connection-form">
-              <div className="form-group">
-                <label htmlFor="lg-url">服务器地址</label>
-                <input
-                  id="lg-url"
-                  type="text"
-                  value={lgServerUrl}
-                  onChange={(e) => lgSetServerUrl(e.target.value)}
-                  placeholder="https://lemongrid.example.com"
-                  className="text-input"
-                />
-              </div>
-
               {!lgIsConnected ? (
-                <button
-                  onClick={() => setShowLoginModal(true)}
-                  className="test-connection-btn"
-                >
-                  登录
-                </button>
+                // Per agreed design: login is now forced globally on app boot
+                // and after logout, so there's no manual "Login" button here.
+                // Just inform the user of the current state.
+                <div className="lg-disconnected-state">
+                  <p className="settings-hint">
+                    当前未登录 LemonGrid。插件启动时若检测到未登录会自动弹出登录窗口。
+                  </p>
+                </div>
               ) : (
                 <div className="lg-account-info">
                   <div className="lg-user-info">
@@ -309,7 +312,7 @@ export const Settings = () => {
                     )}
                   </div>
                   <button
-                    onClick={handleLogout}
+                    onClick={requestLogout}
                     className="lg-logout-btn"
                   >
                     登出
@@ -370,10 +373,23 @@ export const Settings = () => {
         )}
       </div>
 
-      <LoginModal
-        isOpen={showLoginModal}
-        onClose={() => setShowLoginModal(false)}
-        onLoginSuccess={() => setShowLoginModal(false)}
+      <ConfirmDialog
+        visible={showLogoutConfirm}
+        title="退出登录"
+        message="确定要退出 LemonGrid 登录吗？退出后将跳转回绘图页并需要重新登录。"
+        actions={[
+          {
+            label: '取消',
+            variant: 'secondary',
+            onClick: () => setShowLogoutConfirm(false),
+          },
+          {
+            label: '退出登录',
+            variant: 'destructive',
+            onClick: () => { void handleConfirmLogout(); },
+          },
+        ]}
+        onClose={() => setShowLogoutConfirm(false)}
       />
     </div>
   );

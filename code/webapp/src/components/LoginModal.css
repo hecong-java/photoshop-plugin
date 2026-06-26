@@ -9,7 +9,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1000;
+  z-index: 1500;
 }
 
 .login-modal-card {
@@ -21,6 +21,14 @@
   max-width: 360px;
 }
 
+/* Limit box-sizing reset to inside the modal so we don't affect sibling
+   components, while preventing input/button padding from blowing past
+   the card's right edge. */
+.login-modal-card,
+.login-modal-card * {
+  box-sizing: border-box;
+}
+
 .login-modal-title {
   margin: 0;
   padding: var(--sp-3);
@@ -28,28 +36,40 @@
   font-weight: 700;
   color: var(--fg);
   border-bottom: 1px solid var(--border);
+  text-align: center;
+  position: relative;
 }
 
+/* Form is a column flex container — center children horizontally and cap
+   their width so labels/inputs/buttons sit in a tidy centered column. */
 .login-modal-form {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3);
+  /* Bottom padding is 15px larger than the other sides so the last button
+     isn't hugging the card's bottom border. */
+  padding: var(--sp-3) var(--sp-3) calc(var(--sp-3) + 15px);
 }
 
 .login-modal-form .form-group {
   display: flex;
   flex-direction: column;
+  align-items: center;
   gap: var(--sp-1);
+  width: 100%;
+  max-width: 280px;
 }
 
 .login-modal-form .form-group label {
   font-size: 12px;
   font-weight: 500;
   color: var(--fg2);
+  align-self: flex-start;
 }
 
 .login-modal-form .text-input {
+  width: 100%;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid var(--border);
   border-radius: var(--r-2);
@@ -58,6 +78,7 @@
   font-size: 13px;
   outline: none;
   transition: border-color 0.15s;
+  text-align: left;
 }
 
 .login-modal-form .text-input:focus {
@@ -75,6 +96,7 @@
 .remember-me-group {
   flex-direction: row !important;
   align-items: center;
+  justify-content: flex-start;
 }
 
 .checkbox-label {
@@ -94,17 +116,22 @@
 }
 
 .login-modal-error {
+  width: 100%;
+  max-width: 280px;
   color: var(--danger);
   font-size: 12px;
   padding: var(--sp-1) var(--sp-2);
   background: var(--danger-bg);
   border: 1px solid #6e2222;
   border-radius: var(--r-1);
+  text-align: center;
 }
 
 .login-modal-actions {
   display: flex;
   gap: var(--sp-2);
+  width: 100%;
+  max-width: 280px;
 }
 
 .login-modal-btn {
@@ -145,6 +172,8 @@
   align-items: center;
   color: var(--fg3);
   font-size: 11px;
+  width: 100%;
+  max-width: 280px;
 }
 
 .dingtalk-divider::before,
@@ -161,6 +190,7 @@
 
 .dingtalk-btn {
   width: 100%;
+  max-width: 280px;
   padding: var(--sp-2) var(--sp-3);
   border: 1px solid #3a4a6e;
   border-radius: var(--r-2);
@@ -186,9 +216,79 @@
 .dingtalk-icon { flex-shrink: 0; }
 
 .dingtalk-qr-container {
-  background: #ffffff;
+  /* No background here — the container itself is transparent and inherits
+     the LoginModal's dark theme. The QRCodeSVG inside still has its own
+     white bgColor, which is required by the QR quiet-zone spec (ISO/IEC
+     18004) for reliable scanner recognition. That white is a small,
+     intentional card; the surrounding area stays dark. */
   padding: 16px;
   border-radius: 6px;
+}
+
+/* Error state for the QR view. Intentionally NOT white — that would feel
+   like a half-rendered QR card. Dark themed, vertically stacked, retry
+   button visually centered. */
+.dingtalk-qr-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 24px 16px;
+}
+
+.dingtalk-qr-error-message {
+  color: var(--danger);
+  font-size: 13px;
+  text-align: center;
+  word-break: break-word;
+}
+
+/* Modifier: collapse .dingtalk-btn (which defaults to 100% width / flex
+   row layout for icon+label rows) down to an auto-width inline button so
+   the parent container's align-items:center actually centers it. */
+.dingtalk-btn.dingtalk-btn-inline {
+  width: auto;
+  padding: 6px 24px;
+}
+
+/* Shared fixed-size container for both the loading spinner and the actual
+   QR code. Keeping the dimensions locked at 256×312 means swapping the
+   loading state for the QR (or vice-versa) does NOT resize the
+   LoginModal card, eliminating the visual "弹窗先小后大" jump. */
+.dingtalk-qr-placeholder {
+  width: 256px;
+  height: 312px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-3);
+  /* Transparent — inherits LoginModal's dark theme. The white you see is
+     the QRCodeSVG's own bgColor, which is required by the QR quiet-zone
+     spec for scanner reliability. */
+  background: transparent;
+}
+
+.dingtalk-qr-placeholder-text,
+.dingtalk-qr-hint {
+  color: var(--fg2);
+  font-size: 12px;
+  text-align: center;
+}
+
+.dingtalk-qr-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--border2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: dingtalk-qr-spin 0.8s linear infinite;
+}
+
+@keyframes dingtalk-qr-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .dingtalk-qrcode-view {
@@ -196,15 +296,64 @@
   flex-direction: column;
   align-items: center;
   gap: var(--sp-3);
-  padding: var(--sp-3);
+  /* Bottom padding is 15px larger than the other sides so the QR content
+     isn't hugging the card's bottom border. */
+  padding: var(--sp-3) var(--sp-3) calc(var(--sp-3) + 15px);
 }
 
-.dingtalk-back-link {
-  align-self: flex-start;
-  color: var(--accent);
-  font-size: 12px;
-  text-decoration: none;
+/* Close button anchored to the top-right of the title row.
+   Replaces the old "返回密码登录" link. */
+.login-modal-close-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--fg2);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
 }
-.dingtalk-back-link:hover {
-  text-decoration: underline;
+
+.login-modal-close-btn:hover {
+  background: var(--surface3);
+  color: var(--fg);
+}
+
+/* Settings button anchored to the top-right of the title row, in the
+   position previously held by the × close button. The login modal has no
+   × button, so this sits flush against the right edge. */
+.login-modal-settings-btn {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-1);
+  background: transparent;
+  color: var(--fg2);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.login-modal-settings-btn:hover {
+  background: var(--surface3);
+  color: var(--fg);
+  border-color: var(--border2);
 }

@@ -1,11 +1,16 @@
 import { Component, useEffect, type ReactNode } from 'react';
-import { BrowserRouter as Router, Routes, Route, NavLink } from 'react-router-dom';
+import { BrowserRouter as Router, NavLink, useLocation } from 'react-router-dom';
 import './App.css';
 import { Settings } from './pages/Settings';
 import { Draw } from './pages/Draw';
 import { History } from './pages/History';
 import { PromptReverseProvider } from './components/promptReverse/PromptReverseProvider';
+import { TopbarQueueBadge } from './components/TopbarQueueBadge';
+import { LoginModal } from './components/LoginModal';
 import { validateStoredAuth } from './services/lemongrid-auth';
+import { pickWorkingUrl, setUserProvidedUrl } from './services/lemongrid-url';
+import { useLemonGridStore } from './stores/lemongridStore';
+import { LEMONGRID_PRIMARY_URL } from './services/lemongrid-url';
 
 // SVG icons — 20×20, stroke-based
 const DrawIcon = () => (
@@ -63,33 +68,116 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
+/**
+ * Keep-alive page container.
+ * All three pages (Draw / History / Settings) stay mounted, only the active one is visible.
+ * This preserves Draw page state (uploaded images, prompts, generation progress) across
+ * tab switches — switching to History/Settings and back no longer remounts Draw.
+ */
+const KeepAlivePages = () => {
+  const location = useLocation();
+  const path = location.pathname === '/' ? '/draw' : location.pathname;
+
+  const pageStyle = (active: boolean): React.CSSProperties => ({
+    display: active ? 'block' : 'none',
+    height: '100%',
+    minHeight: 0,
+  });
+
+  return (
+    <>
+      <div style={pageStyle(path === '/draw')}><Draw /></div>
+      <div style={pageStyle(path === '/history')}><History /></div>
+      <div style={pageStyle(path === '/settings')}><Settings /></div>
+    </>
+  );
+};
+
+/**
+ * Global auth guard — component-level (per agreed design).
+ *
+ * - Mounts LoginModal at the top of the React tree so every page (Draw / History / Settings)
+ *   is covered uniformly. No need for per-page <LoginModal /> instances anymore.
+ * - When `isConnected` becomes false (initial state, logout, or token expiry caught by the
+ *   global 401 interceptor in lemongridFetch), the modal opens in `force` mode so the user
+ *   cannot dismiss it without logging in.
+ * - Login success closes the modal; navigation to /draw is handled by callers (e.g. Settings
+ *   logout button) — this component does not redirect.
+ */
+const AuthGuard = () => {
+  const isConnected = useLemonGridStore((s) => s.isConnected);
+  const showLoginModal = useLemonGridStore((s) => s.showLoginModal);
+  const setShowLoginModal = useLemonGridStore((s) => s.setShowLoginModal);
+
+  // Whenever we lose connection, force the login modal open. This covers:
+  //   1. App boot with no stored token → isConnected=false on first render.
+  //   2. Boot with expired token → validateStoredAuth() sets isConnected=false.
+  //   3. Logout from Settings → clearAuth() flips isConnected to false.
+  //   4. Token expiry caught by the 401 interceptor in lemongridFetch.
+  useEffect(() => {
+    if (!isConnected && !showLoginModal) {
+      setShowLoginModal(true);
+    }
+  }, [isConnected, showLoginModal, setShowLoginModal]);
+
+  // force=true whenever we are NOT connected, so the modal cannot be dismissed by the user.
+  return (
+    <LoginModal
+      isOpen={showLoginModal}
+      force={!isConnected}
+      onClose={() => {
+        // Only reachable when not forced (i.e. manually opened for some reason). When forced,
+        // LoginModal intercepts all close paths itself.
+        if (isConnected) {
+          setShowLoginModal(false);
+        }
+      }}
+      onLoginSuccess={() => {
+        setShowLoginModal(false);
+      }}
+    />
+  );
+};
+
 function App() {
   // Validate stored auth tokens on startup — refresh if needed
   useEffect(() => {
+    // Sync the user-provided server URL (if any) into the failover module
+    // BEFORE pickWorkingUrl runs, so the user URL is at the top of the
+    // candidate list when we start probing.
+    const customUrl = useLemonGridStore.getState().customServerUrl;
+    setUserProvidedUrl(customUrl);
+
+    // Probe candidates (user-provided → primary → fallback) and lock the
+    // first reachable one. Sets the store's serverUrl so UI immediately
+    // reflects the active server. Silent on success; non-fatal on failure.
+    (async () => {
+      const working = await pickWorkingUrl();
+      if (working) {
+        useLemonGridStore.getState().setServerUrl(working);
+      } else {
+        // None reachable — default to primary so login modal has a target.
+        useLemonGridStore.getState().setServerUrl(LEMONGRID_PRIMARY_URL);
+      }
+    })().catch(() => { /* probe failure is non-fatal */ });
+
     validateStoredAuth().catch(() => { /* validation failure is non-fatal */ });
   }, []);
 
   return (
     <Router>
       <div className="app">
-        {/* Minimal topbar — brand + connection status */}
+        {/* Minimal topbar — brand + always-on queue badge */}
         <div className="topbar">
           <div className="topbar-brand">Lemon<span>Grid</span></div>
-          <div className="topbar-mode">
-            <span className="topbar-dot" />
-          </div>
+          <TopbarQueueBadge />
         </div>
 
         {/* Main content area */}
         <main className="content">
           <ErrorBoundary>
             <PromptReverseProvider>
-              <Routes>
-                <Route path="/draw" element={<Draw />} />
-                <Route path="/history" element={<History />} />
-                <Route path="/settings" element={<Settings />} />
-                <Route path="/" element={<Draw />} />
-              </Routes>
+              <KeepAlivePages />
             </PromptReverseProvider>
           </ErrorBoundary>
         </main>
@@ -107,6 +195,10 @@ function App() {
             </NavLink>
           ))}
         </nav>
+
+        {/* Global auth guard — covers all pages uniformly. LoginModal uses fixed
+            positioning with z-index 1500, so DOM order doesn't matter for stacking. */}
+        <AuthGuard />
       </div>
     </Router>
   );

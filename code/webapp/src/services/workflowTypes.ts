@@ -15,6 +15,8 @@ export interface WorkflowInput {
   step?: number;
   required?: boolean;
   description?: string;
+  multiline?: boolean;
+  prompt?: boolean;
 }
 
 export interface WorkflowInputGroup {

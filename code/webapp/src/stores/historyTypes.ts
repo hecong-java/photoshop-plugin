@@ -22,6 +22,8 @@ export interface HistoryItem {
     imageUrl?: string;
   }>;
   source?: 'direct' | 'cluster'; // defaults to 'direct' for backward compat
+  templateType?: 'COMFYUI' | 'THIRD_PARTY_API';
+  templateVersion?: number;
 }
 
 export interface LocalDownload {
