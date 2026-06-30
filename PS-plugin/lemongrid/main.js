@@ -63,15 +63,99 @@ const arrayBufferToBase64 = async (buffer) => {
 
 const toBridgeError = (code, message) => ({ code, message });
 
+// Persistent settings storage — backed by the plugin's data folder so values
+// survive across Photoshop restarts. The 'lemongrid' key holds auth tokens
+// (access/refresh) plus the active server URL; persisting these lets users
+// stay logged-in across PS sessions without re-scanning the QR code.
+//
+// Memory layout:
+//   - `settingsStorageData`  : in-memory mirror of the on-disk file
+//   - `settingsStorageReady` : false until the initial load completes
+//   - `pendingSettingsWrites`: set() calls received before load finishes
+//
+// The pending queue is drained once load completes so any `settings.set`
+// arriving during startup (webapp may push early auth state) is preserved
+// instead of being overwritten by the stale on-disk copy.
+const SETTINGS_FILE_NAME = 'lemongrid-settings.json';
+let settingsStorageData = {};
+let settingsStorageReady = false;
+const pendingSettingsWrites = [];
+
+async function loadSettingsFromDisk() {
+  try {
+    const dataFolder = await localFileSystem.getDataFolder();
+    const entries = await dataFolder.getEntries();
+    const file = entries.find(
+      (entry) => entry.isFile && entry.name === SETTINGS_FILE_NAME
+    );
+    if (file) {
+      const content = await file.read();
+      const parsed = JSON.parse(content);
+      if (parsed && typeof parsed === 'object') {
+        settingsStorageData = parsed;
+      }
+    }
+  } catch (err) {
+    // Corrupt JSON, missing permission, first run — start fresh. Non-fatal:
+    // the user can still log in, and the next set() will create the file.
+    console.warn('[Bridge] Failed to load persisted settings, starting fresh:', getErrorMsg(err));
+  } finally {
+    // Drain queued writes that arrived during startup. Newest write wins
+    // (later entries overwrite earlier ones with the same key). Capture
+    // `hadPending` BEFORE clearing so we can decide whether to flush.
+    const hadPending = pendingSettingsWrites.length > 0;
+    for (const [key, value] of pendingSettingsWrites) {
+      settingsStorageData[key] = value;
+    }
+    pendingSettingsWrites.length = 0;
+    settingsStorageReady = true;
+    // Persist the merged result so the file on disk reflects what we now
+    // have in memory (otherwise queued early writes only exist in memory
+    // and would be lost on the next PS restart).
+    if (hadPending) {
+      void saveSettingsToDisk();
+    }
+  }
+}
+
+async function saveSettingsToDisk() {
+  try {
+    const dataFolder = await localFileSystem.getDataFolder();
+    const file = await dataFolder.createFile(SETTINGS_FILE_NAME, { overwrite: true });
+    await file.write(JSON.stringify(settingsStorageData, null, 2));
+  } catch (err) {
+    // Non-fatal: the user is still logged in for this session; only the
+    // next PS restart would require re-login if this keeps failing.
+    console.warn('[Bridge] Failed to persist settings to disk:', getErrorMsg(err));
+  }
+}
+
 const settingsStorage = {
-  data: {},
   get(key) {
-    return this.data[key];
+    return settingsStorageData[key];
   },
   set(key, value) {
-    this.data[key] = value;
+    if (!settingsStorageReady) {
+      // Startup race: queue until load completes so we don't lose this write
+      // behind stale data read from disk.
+      pendingSettingsWrites.push([key, value]);
+      return;
+    }
+    settingsStorageData[key] = value;
+    // Fire-and-forget. UI doesn't need to block on disk I/O; failures are
+    // logged inside saveSettingsToDisk and surface only across restarts.
+    void saveSettingsToDisk();
+  },
+  isReady() {
+    return settingsStorageReady;
   }
 };
+
+// Kick off the initial load before any handler runs. We intentionally don't
+// await — settings.get during the brief startup window is harmless (returns
+// `undefined` until ready), and bridge handlers are async so they await us
+// implicitly through `settingsStorageReady` checks inside syncAuthToBridge.
+void loadSettingsFromDisk();
 
 const trimTrailingSlashes = (s) => (typeof s === 'string' ? s.replace(/\/+$/, '') : s);
 
@@ -221,127 +305,244 @@ const importImageAsLayer = async ({ imagePath, layerName, mode = 'pixel', workfl
   }, { commandName: 'Import Image As Layer' });
 };
 
+/**
+ * 导出当前活动图层为 PNG（高性能版）
+ *
+ * 设计参考 PSAI 实现：使用 PS 原生 `_obj:'make' using:{_ref:'layer', _id}` 操作
+ * 基于单个图层新建临时文档。这避开了 `activeDoc.duplicate()` 复制整文档
+ * （含所有图层和图层数据）的开销，对多图层大文件导出提速明显。
+ *
+ * 外部接口契约（不能改）：
+ *   - 文件输出到 tempFolder 下的 exportFolder
+ *   - 返回 { _exportedFile, path, filename, sourceLayerName, sourceLayerId }
+ *   - 文件扩展名为 .png
+ *   - 由外部 exportActiveLayerPng 读取 _exportedFile 并 base64 编码返回
+ *
+ * 必须在 executeAsModal 内调用。
+ */
 const exportActiveLayerPngInternal = async (activeDoc, activeLayer) => {
   const tempFolder = await localFileSystem.getTemporaryFolder();
   const exportFolderName = `ps-export-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const exportFolder = await tempFolder.createFolder(exportFolderName);
   const exportedFile = await exportFolder.createFile(`selected-layer-${Date.now()}.png`, { overwrite: true });
 
-  const collectLayers = (layers, out = []) => {
-    for (const layer of layers || []) {
-      out.push(layer);
-      if (layer.layers && layer.layers.length) {
-        collectLayers(layer.layers, out);
-      }
-    }
-    return out;
-  };
+  const originalDocId = activeDoc.id;
+  const beforeDocIds = new Set((app.documents || []).map((d) => d.id));
 
-  const allLayers = collectLayers(activeDoc.layers, []);
-  const visibilityById = new Map();
-  for (const layer of allLayers) {
-    visibilityById.set(layer.id, layer.visible);
-  }
+  // 双阈值：参考 PSAI。4096 是单边像素上限；25M 是像素总数上限（避免瘦长图过界）
+  const EXPORT_MAX_EDGE = 4096;
+  const EXPORT_MAX_PIXELS = 25000000;
 
-  const keepVisibleLayerIds = new Set();
-  keepVisibleLayerIds.add(activeLayer.id);
-  let parent = activeLayer.parent;
-  while (parent && parent.id !== activeDoc.id) {
-    keepVisibleLayerIds.add(parent.id);
-    parent = parent.parent;
-  }
-
-  for (const layer of allLayers) {
-    const shouldBeVisible = keepVisibleLayerIds.has(layer.id);
-    if (layer.visible !== shouldBeVisible) {
-      layer.visible = shouldBeVisible;
-    }
-  }
+  let tempDoc = null;
+  let layerWasHidden = false;
 
   try {
-    // Duplicate document for safe cropping - avoids modifying original
-    const duplicatedDoc = await activeDoc.duplicate();
+    // Step 1: 选区定位到目标图层（make 操作基于当前活动图层建新文档）
+    await action.batchPlay([
+      {
+        _obj: 'select',
+        _target: [{ _ref: 'layer', _id: activeLayer.id }],
+        makeVisible: false
+      }
+    ], { synchronousExecution: true, modalBehavior: 'execute' });
 
+    // Step 2: 若目标图层处于隐藏态，临时显示（导出需要可见图层）；finally 中恢复
     try {
-      // Step 1: Get the actual layer bounds using batchPlay
-      const boundsResult = await action.batchPlay([
+      const visibleCheck = await action.batchPlay([
         {
           _obj: 'get',
-          _target: [{ _ref: 'layer', _id: activeLayer.id }],
-          _property: 'bounds'
+          _target: [
+            { _ref: 'property', _property: 'visible' },
+            { _ref: 'layer', _id: activeLayer.id }
+          ]
+        }
+      ], { synchronousExecution: true });
+      const isVisible = !!visibleCheck?.[0]?.visible;
+      if (!isVisible) {
+        layerWasHidden = true;
+        await action.batchPlay([
+          {
+            _obj: 'show',
+            _target: [{ _ref: 'layer', _id: activeLayer.id }]
+          }
+        ], { synchronousExecution: true, modalBehavior: 'execute' });
+      }
+    } catch (visibilityErr) {
+      console.warn('[Export] visibility check failed, continuing:', getErrorMsg(visibilityErr));
+    }
+
+    // Step 3: 基于目标图层新建临时文档（PS 原生 make 操作，仅复制单图层数据）
+    await action.batchPlay([
+      {
+        _obj: 'make',
+        _target: [{ _ref: 'document' }],
+        name: `ps_export_layer_${activeLayer.id}_temp`,
+        using: { _ref: 'layer', _id: activeLayer.id },
+        version: 5
+      }
+    ], { synchronousExecution: true, modalBehavior: 'execute' });
+
+    // make 完成后新文档应为当前活动；兜底：扫描 app.documents 找新增
+    tempDoc = app.activeDocument;
+    if (!tempDoc || tempDoc.id === originalDocId) {
+      for (let i = 0; i < 20; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        const found = (app.documents || []).find((d) => !beforeDocIds.has(d.id));
+        if (found) {
+          await action.batchPlay([
+            {
+              _obj: 'select',
+              _target: [{ _ref: 'document', _id: found.id }]
+            }
+          ], { synchronousExecution: true, modalBehavior: 'execute' });
+          tempDoc = app.activeDocument;
+          break;
+        }
+      }
+    }
+    if (!tempDoc || tempDoc.id === originalDocId) {
+      throw new Error('Failed to create temporary export document from layer');
+    }
+
+    // Step 4: 获取图层实际边界，按边界 crop 到图层内容（裁去透明边距）
+    try {
+      const res = await action.batchPlay([
+        {
+          _obj: 'get',
+          _target: [
+            { _ref: 'property', _property: 'boundsNoEffects' },
+            { _ref: 'layer', _enum: 'ordinal', _value: 'targetEnum' }
+          ]
         }
       ], { synchronousExecution: true });
 
-      // Extract bounds values
-      // batchPlay returns bounds as object with nested _value properties:
-      // { top: { _unit: "pixelsUnit", _value: 375 }, left: { ... }, ... }
-      const bounds = boundsResult[0]?.bounds;
-      if (!bounds) {
-        throw new Error('Could not get layer bounds');
-      }
+      const b = res?.[0]?.boundsNoEffects;
+      const toPx = (v) => {
+        if (v && typeof v === 'object') {
+          if (typeof v._value === 'number') return v._value;
+          if (typeof v.value === 'number') return v.value;
+        }
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+      const left = toPx(b?.left);
+      const top = toPx(b?.top);
+      const right = toPx(b?.right);
+      const bottom = toPx(b?.bottom);
+      const w = Math.max(1, Math.round(right - left));
+      const h = Math.max(1, Math.round(bottom - top));
 
-      // Extract values from nested objects
-      const left = bounds.left?._value;
-      const top = bounds.top?._value;
-      const right = bounds.right?._value;
-      const bottom = bounds.bottom?._value;
-
-      // Calculate width and height
-      const layerWidth = right - left;
-      const layerHeight = bottom - top;
-
-      // Step 2: Crop to the layer bounds using DOM API
-      // The DOM API crop() method takes a simple bounds array [left, top, right, bottom]
-      // Skip crop if layer bounds equal document dimensions - Photoshop throws error when crop area equals entire document
-      const docWidth = duplicatedDoc.width;
-      const docHeight = duplicatedDoc.height;
-      const needsCrop = !(left === 0 && top === 0 && right === docWidth && bottom === docHeight);
-
-      if (needsCrop) {
-        // DOM API crop expects an object with left, top, right, bottom properties
-        await duplicatedDoc.crop({ left, top, right, bottom });
-      }
-
-      // Step 3: Apply size limit if needed (max 2048 pixels on either side)
-      const MAX_SIZE = 2048;
-      let finalWidth = duplicatedDoc.width;
-      let finalHeight = duplicatedDoc.height;
-
-      if (finalWidth > MAX_SIZE || finalHeight > MAX_SIZE) {
-        // Calculate scale factor to fit within max size
-        const scaleFactor = Math.min(MAX_SIZE / finalWidth, MAX_SIZE / finalHeight);
-        finalWidth = Math.floor(finalWidth * scaleFactor);
-        finalHeight = Math.floor(finalHeight * scaleFactor);
-
-        // Resize the document
+      if (w > 1 && h > 1) {
         await action.batchPlay([
           {
-            _obj: 'imageSize',
-            _target: [{ _ref: 'document', _id: duplicatedDoc.id }],
-            width: { _unit: 'pixelsUnit', _value: finalWidth },
-            height: { _unit: 'pixelsUnit', _value: finalHeight },
-            constrainProportions: true,
-            interfaceIconFrameDimmed: false
+            _obj: 'crop',
+            to: {
+              _obj: 'rectangle',
+              top: { _unit: 'pixelsUnit', _value: top },
+              left: { _unit: 'pixelsUnit', _value: left },
+              bottom: { _unit: 'pixelsUnit', _value: bottom },
+              right: { _unit: 'pixelsUnit', _value: right }
+            },
+            angle: { _unit: 'angleUnit', _value: 0 },
+            delete: false
+          }
+        ], { synchronousExecution: true, modalBehavior: 'execute' });
+      } else {
+        // 边界退化时按透明度 trim（与 PSAI 一致）
+        await action.batchPlay([
+          {
+            _obj: 'trim',
+            basedOn: { _enum: 'trimBasedOn', _value: 'transparency' },
+            top: true,
+            bottom: true,
+            left: true,
+            right: true
           }
         ], { synchronousExecution: true, modalBehavior: 'execute' });
       }
 
-      // Export from the cropped (and possibly scaled) duplicate
-      await duplicatedDoc.saveAs.png(exportedFile, {}, true);
-    } finally {
-      // Close duplicate without saving
-      await duplicatedDoc.closeWithoutSaving();
+      // Step 5: 双阈值缩放，超过才执行 imageSize
+      const maxEdge = Math.max(tempDoc.width, tempDoc.height);
+      const pixels = tempDoc.width * tempDoc.height;
+      if (maxEdge > 0 && (maxEdge > EXPORT_MAX_EDGE || pixels > EXPORT_MAX_PIXELS)) {
+        const scale = Math.min(
+          EXPORT_MAX_EDGE / maxEdge,
+          Math.sqrt(EXPORT_MAX_PIXELS / pixels)
+        );
+        const newW = Math.max(1, Math.round(tempDoc.width * scale));
+        const newH = Math.max(1, Math.round(tempDoc.height * scale));
+        if (newW < tempDoc.width || newH < tempDoc.height) {
+          await action.batchPlay([
+            {
+              _obj: 'imageSize',
+              _target: [{ _ref: 'document', _id: tempDoc.id }],
+              width: { _unit: 'pixelsUnit', _value: newW },
+              height: { _unit: 'pixelsUnit', _value: newH },
+              constrainProportions: true,
+              scaleStyles: true,
+              resampleMethod: { _enum: 'resampleMethod', _value: 'bicubicSharper' }
+            }
+          ], { synchronousExecution: true, modalBehavior: 'execute' });
+        }
+      }
+    } catch (boundsErr) {
+      // 边界/缩放失败时直接保存当前尺寸（不阻断导出）
+      console.warn('[Export] bounds/resize step failed, exporting at current dimensions:', getErrorMsg(boundsErr));
     }
+
+    // Step 6: 用 batchPlay save 直接写 PNG（比 saveAs.png 更轻量；compression:6 默认 PNG 压缩级别）
+    const token = localFileSystem.createSessionToken(exportedFile);
+    await action.batchPlay([
+      {
+        _obj: 'save',
+        as: {
+          _obj: 'PNGFormat',
+          PNGInterlaceType: { _enum: 'PNGInterlaceType', _value: 'PNGInterlaceNone' },
+          PNGFilter: { _enum: 'PNGFilter', _value: 'PNGFilterAdaptive' },
+          compression: 6
+        },
+        in: { _path: token, _kind: 'local' },
+        documentID: 0,
+        copy: true,
+        lowerCase: true,
+        saveStage: { _enum: 'saveStageType', _value: 'saveStageSave' }
+      }
+    ], { synchronousExecution: true, modalBehavior: 'execute' });
+
   } finally {
-    for (const layer of allLayers) {
-      const originalVisible = visibilityById.get(layer.id);
-      if (typeof originalVisible === 'boolean' && layer.visible !== originalVisible) {
-        layer.visible = originalVisible;
+    // 关闭临时文档（不保存改动）
+    if (tempDoc) {
+      try { await tempDoc.closeWithoutSaving(); } catch (closeErr) {
+        console.warn('[Export] Failed to close temp document:', getErrorMsg(closeErr));
+      }
+    }
+    // 恢复原文档为活动（用户原本的 PS 工作区状态）
+    try {
+      await action.batchPlay([
+        {
+          _obj: 'select',
+          _target: [{ _ref: 'document', _id: originalDocId }]
+        }
+      ], { synchronousExecution: true, modalBehavior: 'execute' });
+    } catch (restoreErr) {
+      console.warn('[Export] Failed to restore original document:', getErrorMsg(restoreErr));
+    }
+    // 若临时显示过目标图层，恢复其隐藏态
+    if (layerWasHidden) {
+      try {
+        await action.batchPlay([
+          {
+            _obj: 'hide',
+            _target: [{ _ref: 'layer', _id: activeLayer.id }]
+          }
+        ], { synchronousExecution: true, modalBehavior: 'execute' });
+      } catch (hideErr) {
+        console.warn('[Export] Failed to restore layer hidden state:', getErrorMsg(hideErr));
       }
     }
   }
 
-  // Return the exported file reference -- caller reads and converts base64 OUTSIDE modal
+  // 外部读取此引用来转 base64 / 清理临时目录
   return {
     _exportedFile: exportedFile,
     path: `${exportFolder.nativePath}/${exportedFile.name}`,
