@@ -1,20 +1,15 @@
 // MiniTaskList: Cluster mode task list per D-55 through D-68
 // Shows all LemonGrid tasks below the Generate button with state badges,
 // expand/collapse, cancel/retry/dismiss actions.
+//
+// Per-task rows are split into a memoized MiniTaskItem subcomponent that
+// subscribes to its own task state, so an in-progress task's polling ticks
+// don't force already-finished rows to re-render.
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useLemonGridStore, type LemonGridTaskState } from '../stores/lemongridStore';
 import { LemonGridClient, LEMONGRID_ERROR_SUGGESTIONS } from '../services/lemongrid';
 import './MiniTaskList.css';
-
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
-
-export interface MiniTaskListProps {
-  onRetry: (taskId: string) => void;
-  onImportResult: (taskId: string, assetId: string) => void;
-}
 
 // ---------------------------------------------------------------------------
 // Badge helpers per D-57
@@ -68,33 +63,234 @@ function isActiveStatus(status: LemonGridTaskState['status']): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Component
+// Subcomponent: per-task row. Memoized so an unrelated active task's
+// progress tick doesn't cause this row to re-render.
 // ---------------------------------------------------------------------------
 
-export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportResult }) => {
-  const tasks = useLemonGridStore((s) => s.tasks);
+interface MiniTaskItemProps {
+  taskId: string;
+  isExpanded: boolean;
+  onToggle: (taskId: string) => void;
+  onRetry: (taskId: string) => void;
+  onImportResult: (taskId: string, assetId: string) => void;
+}
+
+const MiniTaskItem = React.memo(function MiniTaskItem({
+  taskId,
+  isExpanded,
+  onToggle,
+  onRetry,
+  onImportResult,
+}: MiniTaskItemProps) {
+  // Per-task subscription: this row re-renders only when its own task state
+  // changes. progress / progressDetail / etc. for OTHER tasks no longer
+  // bubble through here.
+  const task = useLemonGridStore((s) => s.tasks[taskId]);
   const removeTask = useLemonGridStore((s) => s.removeTask);
 
+  const handleCancel = useCallback(async () => {
+    try {
+      const serverUrl = useLemonGridStore.getState().serverUrl;
+      const client = new LemonGridClient({ serverUrl });
+      await client.cancelTask(taskId);
+      useLemonGridStore.getState().updateTask(taskId, { status: 'CANCELLED' });
+    } catch (e) {
+      console.error('[MiniTaskList] Cancel failed:', e);
+    }
+  }, [taskId]);
+
+  if (!task) return null;
+
+  const badge = badgeColor(task.status);
+
+  return (
+    <div
+      className={`mini-task-item ${isExpanded ? 'expanded' : 'collapsed'}`}
+      onClick={() => onToggle(taskId)}
+    >
+      {/* Header row (always visible) per D-58, D-65, D-66, D-68 */}
+      <div className="task-header-row">
+        <span className="task-template-name">{task.templateName}</span>
+
+        <div className="task-progress-mini">
+          {isActiveStatus(task.status) && (
+            <div className="progress-bar-mini">
+              <div
+                className="progress-fill-mini"
+                style={{ width: `${task.progress}%` }}
+              />
+            </div>
+          )}
+        </div>
+
+        <span className={`task-badge badge-${badge}`}>
+          {task.status === 'COMPLETED' ? '\u2713 ' : ''}
+          {badgeText(task.status)}
+        </span>
+
+        {task.status === 'QUEUED' && task.queuePosition && (
+          <span className="queue-position">#{task.queuePosition}</span>
+        )}
+
+        {task.status === 'QUEUED' && task.etaMinutes != null && task.etaMinutes > 0 && (
+          <span className="eta-text">~{task.etaMinutes}分钟</span>
+        )}
+
+        {isActiveStatus(task.status) && (
+          <button
+            className="task-cancel-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCancel();
+            }}
+            title="取消任务"
+          >
+            X
+          </button>
+        )}
+      </div>
+
+      {/* Expanded details per D-56, D-61, D-62, D-63, D-64, D-67 */}
+      {isExpanded && (
+        <div className="task-details" onClick={(e) => e.stopPropagation()}>
+          {task.status === 'QUEUED' && task.queuePosition && (
+            <div className="task-detail-row">排队位置: #{task.queuePosition}</div>
+          )}
+
+          {task.status === 'QUEUED' && task.etaMinutes != null && task.etaMinutes > 0 && (
+            <div className="task-detail-row eta-detail">预计等待: ~{task.etaMinutes}分钟</div>
+          )}
+
+          {task.status === 'RUNNING' && task.progressDetail && (
+            <div className="task-detail-row">{task.progressDetail}</div>
+          )}
+
+          {task.status === 'RUNNING' && (
+            <div className="task-detail-row">{task.progress}%</div>
+          )}
+
+          {task.status === 'COMPLETED' && task.durationSeconds != null && (
+            <div className="task-detail-row">用时: {formatDuration(task.durationSeconds)}</div>
+          )}
+
+          {task.status === 'COMPLETED' && task.outputAssetIds.length > 0 && (
+            <div className="task-results">
+              {task.outputAssetIds.map((assetId) => (
+                <button
+                  key={assetId}
+                  className="task-import-btn"
+                  onClick={() => onImportResult(taskId, assetId)}
+                >
+                  导入到 PS
+                </button>
+              ))}
+            </div>
+          )}
+
+          {task.status === 'FAILED' && (
+            <div className="task-error">
+              {task.errorCode && (
+                <div className="error-code">错误码: {task.errorCode}</div>
+              )}
+              {task.errorMessage && (
+                <div className="error-message">{task.errorMessage}</div>
+              )}
+              <div className="error-suggestion">
+                {LEMONGRID_ERROR_SUGGESTIONS[task.errorCode || ''] || '请重试'}
+              </div>
+              <div className="error-actions">
+                <button
+                  className="retry-btn"
+                  onClick={() => onRetry(taskId)}
+                >
+                  重试
+                </button>
+                <button
+                  className="dismiss-btn"
+                  onClick={() => removeTask(taskId)}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+          )}
+
+          {task.status === 'CANCELLED' && (
+            <div className="task-cancelled-details">
+              <button
+                className="dismiss-btn"
+                onClick={() => removeTask(taskId)}
+              >
+                关闭
+              </button>
+            </div>
+          )}
+
+          {task.thumbnail && (
+            <img
+              className="task-thumbnail"
+              src={task.thumbnail}
+              alt="preview"
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Parent: list shell, summary bar, and the polling loops.
+// ---------------------------------------------------------------------------
+
+export interface MiniTaskListProps {
+  onRetry: (taskId: string) => void;
+  onImportResult: (taskId: string, assetId: string) => void;
+}
+
+interface TaskMeta {
+  taskId: string;
+  submittedAt: number;
+  status: LemonGridTaskState['status'];
+}
+
+export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportResult }) => {
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
 
-  // Per D-59: Sort tasks by submittedAt descending (newest first)
-  const sortedTasks = useMemo(() => {
-    return Object.values(tasks).sort((a, b) => b.submittedAt - a.submittedAt);
-  }, [tasks]);
+  // Lightweight signature containing ONLY the fields the parent actually needs
+  // for sorting + summary. progress / progressDetail / queuePosition / etc. are
+  // intentionally excluded so that an in-progress task's polling ticks do NOT
+  // invalidate this signature, which would otherwise force the whole list
+  // (and every row) to re-render on every tick.
+  const taskMetaSignature = useLemonGridStore((s) => {
+    const arr = Object.values(s.tasks).map((t) => `${t.taskId}:${t.submittedAt}:${t.status}`);
+    arr.sort((a, b) => Number(b.split(':')[1]) - Number(a.split(':')[1]));
+    return arr.join('|');
+  });
+
+  const sortedTaskMetas = useMemo<TaskMeta[]>(() => {
+    if (!taskMetaSignature) return [];
+    return taskMetaSignature.split('|').map((entry) => {
+      const [taskId, submittedAt, status] = entry.split(':');
+      return {
+        taskId,
+        submittedAt: Number(submittedAt),
+        status: status as LemonGridTaskState['status'],
+      };
+    });
+  }, [taskMetaSignature]);
 
   const queuedTaskIdsSignature = useMemo(() => (
-    sortedTasks
-      .filter((task) => task.status === 'QUEUED')
-      .map((task) => task.taskId)
-      .join('|')
-  ), [sortedTasks]);
+    sortedTaskMetas.filter((m) => m.status === 'QUEUED').map((m) => m.taskId).join('|')
+  ), [sortedTaskMetas]);
 
   const activeTaskIdsSignature = useMemo(() => (
-    sortedTasks
-      .filter((task) => isActiveStatus(task.status))
-      .map((task) => task.taskId)
-      .join('|')
-  ), [sortedTasks]);
+    sortedTaskMetas.filter((m) => isActiveStatus(m.status)).map((m) => m.taskId).join('|')
+  ), [sortedTaskMetas]);
+
+  const handleToggle = useCallback((taskId: string) => {
+    setExpandedTaskId((prev) => (prev === taskId ? null : taskId));
+  }, []);
 
   // Per-task ETA polling: fetch ETA for QUEUED tasks every 30 seconds
   useEffect(() => {
@@ -136,7 +332,7 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
     const serverUrl = useLemonGridStore.getState().serverUrl;
     if (!serverUrl) return;
     const activeTasks = Object.values(useLemonGridStore.getState().tasks)
-      .filter(t => isActiveStatus(t.status));
+      .filter((t) => isActiveStatus(t.status));
     if (activeTasks.length === 0) return;
 
     const client = new LemonGridClient({ serverUrl });
@@ -178,26 +374,13 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
   // Per D-60: Summary bar with counts by status
   const summaryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const task of sortedTasks) {
-      const key = task.status;
-      counts[key] = (counts[key] || 0) + 1;
+    for (const meta of sortedTaskMetas) {
+      counts[meta.status] = (counts[meta.status] || 0) + 1;
     }
     return counts;
-  }, [sortedTasks]);
+  }, [sortedTaskMetas]);
 
-  // Per D-65: Cancel action from collapsed item
-  const handleCancel = async (taskId: string) => {
-    try {
-      const serverUrl = useLemonGridStore.getState().serverUrl;
-      const client = new LemonGridClient({ serverUrl });
-      await client.cancelTask(taskId);
-      useLemonGridStore.getState().updateTask(taskId, { status: 'CANCELLED' });
-    } catch (e) {
-      console.error('[MiniTaskList] Cancel failed:', e);
-    }
-  };
-
-  if (sortedTasks.length === 0) return null;
+  if (sortedTaskMetas.length === 0) return null;
 
   // Build summary text per D-60
   const summaryParts: string[] = [];
@@ -223,146 +406,16 @@ export const MiniTaskList: React.FC<MiniTaskListProps> = ({ onRetry, onImportRes
         </div>
       )}
 
-      {sortedTasks.map((task) => {
-        const isExpanded = expandedTaskId === task.taskId;
-        const badge = badgeColor(task.status);
-
-        return (
-          <div
-            key={task.taskId}
-            className={`mini-task-item ${isExpanded ? 'expanded' : 'collapsed'}`}
-            onClick={() => setExpandedTaskId(isExpanded ? null : task.taskId)}
-          >
-            {/* Header row (always visible) per D-58, D-65, D-66, D-68 */}
-            <div className="task-header-row">
-              <span className="task-template-name">{task.templateName}</span>
-
-              <div className="task-progress-mini">
-                {isActiveStatus(task.status) && (
-                  <div className="progress-bar-mini">
-                    <div
-                      className="progress-fill-mini"
-                      style={{ width: `${task.progress}%` }}
-                    />
-                  </div>
-                )}
-              </div>
-
-              <span className={`task-badge badge-${badge}`}>
-                {task.status === 'COMPLETED' ? '\u2713 ' : ''}
-                {badgeText(task.status)}
-              </span>
-
-              {task.status === 'QUEUED' && task.queuePosition && (
-                <span className="queue-position">#{task.queuePosition}</span>
-              )}
-
-              {task.status === 'QUEUED' && task.etaMinutes != null && task.etaMinutes > 0 && (
-                <span className="eta-text">~{task.etaMinutes}分钟</span>
-              )}
-
-              {isActiveStatus(task.status) && (
-                <button
-                  className="task-cancel-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleCancel(task.taskId);
-                  }}
-                  title="取消任务"
-                >
-                  X
-                </button>
-              )}
-            </div>
-
-            {/* Expanded details per D-56, D-61, D-62, D-63, D-64, D-67 */}
-            {isExpanded && (
-              <div className="task-details" onClick={(e) => e.stopPropagation()}>
-                {task.status === 'QUEUED' && task.queuePosition && (
-                  <div className="task-detail-row">排队位置: #{task.queuePosition}</div>
-                )}
-
-                {task.status === 'QUEUED' && task.etaMinutes != null && task.etaMinutes > 0 && (
-                  <div className="task-detail-row eta-detail">预计等待: ~{task.etaMinutes}分钟</div>
-                )}
-
-                {task.status === 'RUNNING' && task.progressDetail && (
-                  <div className="task-detail-row">{task.progressDetail}</div>
-                )}
-
-                {task.status === 'RUNNING' && (
-                  <div className="task-detail-row">{task.progress}%</div>
-                )}
-
-                {task.status === 'COMPLETED' && task.durationSeconds != null && (
-                  <div className="task-detail-row">用时: {formatDuration(task.durationSeconds)}</div>
-                )}
-
-                {task.status === 'COMPLETED' && task.outputAssetIds.length > 0 && (
-                  <div className="task-results">
-                    {task.outputAssetIds.map((assetId) => (
-                      <button
-                        key={assetId}
-                        className="task-import-btn"
-                        onClick={() => onImportResult(task.taskId, assetId)}
-                      >
-                        导入到 PS
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {task.status === 'FAILED' && (
-                  <div className="task-error">
-                    {task.errorCode && (
-                      <div className="error-code">错误码: {task.errorCode}</div>
-                    )}
-                    {task.errorMessage && (
-                      <div className="error-message">{task.errorMessage}</div>
-                    )}
-                    <div className="error-suggestion">
-                      {LEMONGRID_ERROR_SUGGESTIONS[task.errorCode || ''] || '请重试'}
-                    </div>
-                    <div className="error-actions">
-                      <button
-                        className="retry-btn"
-                        onClick={() => onRetry(task.taskId)}
-                      >
-                        重试
-                      </button>
-                      <button
-                        className="dismiss-btn"
-                        onClick={() => removeTask(task.taskId)}
-                      >
-                        关闭
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {task.status === 'CANCELLED' && (
-                  <div className="task-cancelled-details">
-                    <button
-                      className="dismiss-btn"
-                      onClick={() => removeTask(task.taskId)}
-                    >
-                      关闭
-                    </button>
-                  </div>
-                )}
-
-                {task.thumbnail && (
-                  <img
-                    className="task-thumbnail"
-                    src={task.thumbnail}
-                    alt="preview"
-                  />
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {sortedTaskMetas.map(({ taskId }) => (
+        <MiniTaskItem
+          key={taskId}
+          taskId={taskId}
+          isExpanded={expandedTaskId === taskId}
+          onToggle={handleToggle}
+          onRetry={onRetry}
+          onImportResult={onImportResult}
+        />
+      ))}
     </div>
   );
 };

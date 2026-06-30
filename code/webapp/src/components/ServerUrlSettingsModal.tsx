@@ -204,6 +204,14 @@ export const ServerUrlSettingsModal = ({ isOpen, onClose }: ServerUrlSettingsMod
     !formatError &&
     (!draft.trim() || isValidUrlFormat(draft));
 
+  // Show a one-liner about the active default candidates so the user
+  // understands what "默认地址" means in the failure message.
+  const candidateSummary = (() => {
+    const list = getEffectiveCandidates();
+    if (list.length === 0) return LEMONGRID_PRIMARY_URL;
+    return list.join(' → ');
+  })();
+
   return (
     <div
       className="server-url-settings-overlay"
@@ -248,7 +256,7 @@ export const ServerUrlSettingsModal = ({ isOpen, onClose }: ServerUrlSettingsMod
               autoComplete="off"
             />
             <div className="server-url-hint">
-              留空将恢复默认地址（{LEMONGRID_PRIMARY_URL}）
+              留空将恢复默认地址（{candidateSummary}）
             </div>
           </div>
 

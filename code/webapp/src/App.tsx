@@ -7,7 +7,7 @@ import { History } from './pages/History';
 import { PromptReverseProvider } from './components/promptReverse/PromptReverseProvider';
 import { TopbarQueueBadge } from './components/TopbarQueueBadge';
 import { LoginModal } from './components/LoginModal';
-import { validateStoredAuth } from './services/lemongrid-auth';
+import { validateStoredAuth, loadAuthFromBridge } from './services/lemongrid-auth';
 import { pickWorkingUrl, setUserProvidedUrl } from './services/lemongrid-url';
 import { useLemonGridStore } from './stores/lemongridStore';
 import { LEMONGRID_PRIMARY_URL } from './services/lemongrid-url';
@@ -108,23 +108,34 @@ const AuthGuard = () => {
   const isConnected = useLemonGridStore((s) => s.isConnected);
   const showLoginModal = useLemonGridStore((s) => s.showLoginModal);
   const setShowLoginModal = useLemonGridStore((s) => s.setShowLoginModal);
+  const isAuthReady = useLemonGridStore((s) => s.isAuthReady);
 
   // Whenever we lose connection, force the login modal open. This covers:
   //   1. App boot with no stored token → isConnected=false on first render.
   //   2. Boot with expired token → validateStoredAuth() sets isConnected=false.
   //   3. Logout from Settings → clearAuth() flips isConnected to false.
   //   4. Token expiry caught by the 401 interceptor in lemongridFetch.
+  //
+  // Gate on `isAuthReady` so the very first paint doesn't pop the modal
+  // before the async token restore (loadAuthFromBridge + validateStoredAuth)
+  // has had a chance to run. Without this, the modal would open in force
+  // mode and lock the user out even though their session was about to be
+  // restored silently.
   useEffect(() => {
+    if (!isAuthReady) return;
     if (!isConnected && !showLoginModal) {
       setShowLoginModal(true);
     }
-  }, [isConnected, showLoginModal, setShowLoginModal]);
+  }, [isAuthReady, isConnected, showLoginModal, setShowLoginModal]);
 
-  // force=true whenever we are NOT connected, so the modal cannot be dismissed by the user.
+  // force=true whenever we are NOT connected AND boot has finished. During
+  // the boot window (isAuthReady=false) we still want to render the modal
+  // if some other code path opens it, but in non-forced form so the user
+  // isn't locked out by a transient disconnect during token restore.
   return (
     <LoginModal
       isOpen={showLoginModal}
-      force={!isConnected}
+      force={isAuthReady && !isConnected}
       onClose={() => {
         // Only reachable when not forced (i.e. manually opened for some reason). When forced,
         // LoginModal intercepts all close paths itself.
@@ -161,7 +172,28 @@ function App() {
       }
     })().catch(() => { /* probe failure is non-fatal */ });
 
-    validateStoredAuth().catch(() => { /* validation failure is non-fatal */ });
+    // Restore auth tokens from the Bridge FIRST. The UXP main.js persists
+    // tokens to its data folder so they survive PS restarts; without this
+    // step, `validateStoredAuth` would see an empty store on every PS boot
+    // and bounce the user to the login modal.
+    //
+    // Chain loadAuthFromBridge → validateStoredAuth so the validation
+    // picks up the freshly-restored tokens and either marks the user
+    // connected (if still valid) or triggers a silent refresh.
+    //
+    // The `finally` block flips `isAuthReady` to true so AuthGuard only
+    // starts enforcing the "disconnected → show login modal" rule after
+    // restoration has had a chance to run. Without this gate, AuthGuard
+    // would see `isConnected=false` on first paint and pop the login modal
+    // before the async restore completes — and the modal can't be dismissed
+    // in `force` mode, so the user gets logged out even though their token
+    // was about to be restored.
+    loadAuthFromBridge()
+      .then(() => validateStoredAuth())
+      .catch(() => { /* any failure is non-fatal; AuthGuard handles it */ })
+      .finally(() => {
+        useLemonGridStore.getState().setAuthReady(true);
+      });
   }, []);
 
   return (

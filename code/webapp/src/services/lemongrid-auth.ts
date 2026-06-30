@@ -635,6 +635,72 @@ export async function syncAuthToBridge(): Promise<void> {
 }
 
 /**
+ * Restore auth tokens from the Bridge on app startup.
+ *
+ * The UXP plugin's main.js persists the 'lemongrid' settings blob (containing
+ * accessToken / refreshToken / serverUrl) to its data folder on disk, which
+ * survives across Photoshop restarts. The webview's own localStorage, in
+ * contrast, is unreliable across UXP webview lifecycles — so we treat the
+ * Bridge-backed store as the source of truth for token persistence.
+ *
+ * Only writes to the store if the store currently has NO accessToken, to
+ * avoid clobbering a fresher value that the Zustand persist middleware may
+ * have already restored (whichever path wins is fine — both should agree).
+ *
+ * Token expiry timestamps (tokenExpiresAt / refreshTokenExpiresAt) are not
+ * stored in the Bridge blob (it carries raw token strings only). After
+ * restoration, `validateStoredAuth()` is responsible for either:
+ *   - using the token directly if `expires_in` was re-derivable, or
+ *   - calling `/auth/refresh` against the server, which will succeed because
+ *     the refresh_token IS persisted and still valid (until it isn't).
+ */
+export async function loadAuthFromBridge(): Promise<void> {
+  if (!isUXPWebView() || !hasBridgeTransport()) {
+    // Browser mode: nothing to load — Zustand persist handles its own
+    // restoration from window.localStorage.
+    return;
+  }
+
+  try {
+    const stored = await sendBridgeMessage('settings.get', {
+      key: 'lemongrid',
+    }) as { accessToken?: string; refreshToken?: string; serverUrl?: string } | null | undefined;
+
+    if (!stored || typeof stored !== 'object') {
+      console.log('[Auth] loadAuthFromBridge: no persisted auth in bridge');
+      return;
+    }
+
+    const state = useLemonGridStore.getState();
+    const hasToken = !!state.accessToken && !!state.refreshToken;
+
+    if (hasToken) {
+      // Store already has tokens (e.g. from Zustand persist). Don't overwrite.
+      console.log('[Auth] loadAuthFromBridge: store already has tokens, skipping restore');
+      return;
+    }
+
+    if (!stored.accessToken || !stored.refreshToken) {
+      console.log('[Auth] loadAuthFromBridge: bridge blob incomplete, skipping restore');
+      return;
+    }
+
+    console.log('[Auth] loadAuthFromBridge: restoring tokens from bridge');
+    useLemonGridStore.setState({
+      accessToken: stored.accessToken,
+      refreshToken: stored.refreshToken,
+      serverUrl: stored.serverUrl || state.serverUrl,
+      // tokenExpiresAt / refreshTokenExpiresAt left null — validateStoredAuth
+      // will fall through to the "expired → try refresh" branch, which is
+      // fine because we just restored a fresh-ish refresh token.
+    });
+  } catch (err) {
+    // Non-fatal: bridge may be initializing, or webapp is in browser mode.
+    console.warn('[Auth] loadAuthFromBridge failed:', err);
+  }
+}
+
+/**
  * Validate stored auth on app startup.
  * If access token is still valid, just restore the refresh timer.
  * If expired but refresh token is valid, attempt refresh.

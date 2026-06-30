@@ -9,6 +9,7 @@ export interface LemonGridTaskState {
   templateName: string;
   templateType: TemplateType;
   status: 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  statusLocked: boolean;
   progress: number;
   progressDetail: string | null;
   queuePosition: number | null;
@@ -57,6 +58,13 @@ interface LemonGridState {
   // Global login modal trigger (transient - not persisted)
   showLoginModal: boolean;
 
+  // Boot-time auth restoration gate. Starts false; flipped to true by App.tsx
+  // after `loadAuthFromBridge` + `validateStoredAuth` resolve. While false,
+  // AuthGuard suppresses the login modal so a fast-restoring session isn't
+  // interrupted by a brief "looks disconnected" flash. Once true, normal
+  // guard logic applies. Transient - never persisted.
+  isAuthReady: boolean;
+
   // Queue summary state (transient - not persisted)
   queueSummary: TaskQueueSummary | null;
 
@@ -83,6 +91,7 @@ interface LemonGridState {
   addClusterOutputImage: (image: ClusterOutputImage) => void;
   clearClusterOutputImages: () => void;
   setShowLoginModal: (show: boolean) => void;
+  setAuthReady: (ready: boolean) => void;
   setQueueSummary: (summary: TaskQueueSummary | null) => void;
   setAuthProvider: (provider: 'password' | 'dingtalk' | null) => void;
 }
@@ -94,6 +103,7 @@ function createDefaultTaskState(taskId: string): LemonGridTaskState {
     templateName: '',
     templateType: 'COMFYUI',
     status: 'PENDING',
+    statusLocked: false,
     progress: 0,
     progressDetail: null,
     queuePosition: null,
@@ -142,8 +152,11 @@ export const useLemonGridStore = create<LemonGridState>()(
       tasks: {},
       clusterOutputImages: [],
 
-      // Global login modal
+      // Global login modal defaults
       showLoginModal: false,
+
+      // Auth restoration hasn't run yet on cold boot
+      isAuthReady: false,
 
       // Queue summary defaults
       queueSummary: null,
@@ -203,7 +216,24 @@ export const useLemonGridStore = create<LemonGridState>()(
         set((state) => {
           const currentTask = state.tasks[taskId];
           const baseTask = currentTask || createDefaultTaskState(taskId);
-          const hasChanges = !currentTask || Object.entries(update).some(([key, value]) => (
+          const normalizedUpdate: Partial<LemonGridTaskState> = { ...update };
+
+          if (
+            baseTask.statusLocked
+            && typeof normalizedUpdate.status === 'string'
+            && normalizedUpdate.status !== baseTask.status
+          ) {
+            delete normalizedUpdate.status;
+          }
+
+          if (
+            baseTask.statusLocked
+            && normalizedUpdate.statusLocked === false
+          ) {
+            delete normalizedUpdate.statusLocked;
+          }
+
+          const hasChanges = !currentTask || Object.entries(normalizedUpdate).some(([key, value]) => (
             !areTaskFieldValuesEqual(baseTask[key as keyof LemonGridTaskState], value)
           ));
 
@@ -216,7 +246,7 @@ export const useLemonGridStore = create<LemonGridState>()(
               ...state.tasks,
               [taskId]: {
                 ...baseTask,
-                ...update,
+                ...normalizedUpdate,
               },
             },
           };
@@ -250,6 +280,8 @@ export const useLemonGridStore = create<LemonGridState>()(
       clearClusterOutputImages: () => set({ clusterOutputImages: [] }),
 
       setShowLoginModal: (show) => set({ showLoginModal: show }),
+
+      setAuthReady: (ready) => set({ isAuthReady: ready }),
 
       setQueueSummary: (summary) => set({ queueSummary: summary }),
 

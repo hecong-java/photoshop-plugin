@@ -10,7 +10,7 @@ import { PsExportButton } from '../components/upload/PsExportButton';
 import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer, sendBridgeMessage } from '../services/upload';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
-import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, groupClusterTemplatesByVariants, resolveClusterTemplateVariant, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField, type GroupedClusterTemplateSummary } from '../services/lemongrid';
+import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, groupClusterTemplatesByVariants, resolveClusterTemplateVariant, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField, type GroupedClusterTemplateSummary, type LemonGridTaskStatus } from '../services/lemongrid';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { ensureValidToken } from '../services/lemongrid-auth';
 import { MiniTaskList } from '../components/MiniTaskList';
@@ -529,6 +529,12 @@ export const Draw = () => {
   // Per D-24: WebSocket connection refs for per-task connections
   const wsConnectionRefs = useRef<Record<string, string>>({});
   const latestInputValuesRef = useRef<Record<string, string | number | boolean>>({});
+  // 跨工作流切换时携带的提示词：缓存命中时仍优先使用缓存，未命中时用携带值覆盖默认
+  const carriedPositivePromptRef = useRef<string>('');
+  const carriedNegativePromptRef = useRef<string>('');
+  // 镜像 selectedTemplate state，便于在 handleWorkflowSelect 中访问 param_schema
+  // （云端模式 useEffect 切换时 setSelectedTemplate(null) 之后，state 已清空但 ref 仍保留旧 schema）
+  const selectedTemplateRef = useRef<LemonGridTemplateDetail | null>(null);
   // Refs for workflow cache - store blob and base64 data for image inputs
   const uploadedImageBlobsRef = useRef<Record<string, Blob>>({});
   const uploadedImageBase64Ref = useRef<Record<string, string>>({});
@@ -929,6 +935,7 @@ export const Draw = () => {
     if (connectionMode !== 'cluster') {
       setClusterTemplates([]);
       setSelectedTemplate(null);
+      selectedTemplateRef.current = null;
       setTemplateParams({});
       setTemplateImageInputs({});
       return;
@@ -970,38 +977,27 @@ export const Draw = () => {
       if (data.type === 'lemongrid.ws.message' && data.taskId && data.data) {
         const { taskId, data: wsData } = data as { taskId: string; data: { type: string; progress?: number; detail?: string; duration_seconds?: number; error_code?: string; error_message?: string } };
         const store = useLemonGridStore.getState();
+        const currentTask = store.tasks[taskId];
 
         switch (wsData.type) {
           case 'task_started':
-            store.updateTask(taskId, {
-              status: 'RUNNING',
-              progress: 0,
-              progressDetail: '任务开始执行...',
-            });
+            void syncClusterTaskStatusFromServer(taskId).catch(() => {});
             break;
           case 'task_progress':
-            store.updateTask(taskId, {
-              status: 'RUNNING',
-              progress: wsData.progress || 0,
-              progressDetail: wsData.detail || null,
-            });
+            if (currentTask?.status === 'RUNNING' && !currentTask.statusLocked) {
+              store.updateTask(taskId, {
+                progress: wsData.progress ?? currentTask.progress,
+                progressDetail: wsData.detail ?? currentTask.progressDetail,
+              });
+            } else {
+              void syncClusterTaskStatusFromServer(taskId).catch(() => {});
+            }
             break;
           case 'task_completed':
-            store.updateTask(taskId, {
-              status: 'COMPLETED',
-              progress: 100,
-              completedAt: Date.now(),
-              durationSeconds: wsData.duration_seconds || null,
-            });
-            // Per D-47: auto-download and import results
-            handleTaskCompletion(taskId);
+            void syncClusterTaskStatusFromServer(taskId, { confirmCompletion: true }).catch(() => {});
             break;
           case 'task_failed':
-            store.updateTask(taskId, {
-              status: 'FAILED',
-              errorCode: wsData.error_code || 'UNKNOWN',
-              errorMessage: wsData.error_message || '任务失败',
-            });
+            void syncClusterTaskStatusFromServer(taskId, { confirmCompletion: true }).catch(() => {});
             break;
         }
       }
@@ -1356,6 +1352,32 @@ export const Draw = () => {
     setSelectedWorkflow(workflow);
     selectedWorkflowRef.current = workflow;
     setWorkflowInputs([]);
+
+    // 跨工作流切换：先从当前 inputValues 中收集提示词字段值（按正/反向分组），稍后在新工作流中复用
+    // 注意：源码为空字符串时也要同步清空 ref，避免"用户清空"的动作不生效
+    const syncWorkflowPromptCarry = (scope: 'positive' | 'negative', value: unknown) => {
+      const text = typeof value === 'string' && value !== '' ? value : '';
+      if (scope === 'positive') {
+        carriedPositivePromptRef.current = text;
+      } else {
+        carriedNegativePromptRef.current = text;
+      }
+    };
+    workflowInputs.forEach((input) => {
+      if (input.type !== 'text' || !isPromptWorkflowField(input)) return;
+      syncWorkflowPromptCarry(getPromptLibraryScope(input), latestInputValuesRef.current[input.name]);
+    });
+
+    // 同时从云端模板的当前 state 中收集提示词：用于 cloud → comfyui 跨模式携带
+    const carriedCloudTemplate = selectedTemplateRef.current;
+    if (carriedCloudTemplate) {
+      const cloudParams = templateParamsRef.current;
+      carriedCloudTemplate.param_schema.forEach((field) => {
+        if (field.type !== 'text' || !isPromptTemplateField(field)) return;
+        syncWorkflowPromptCarry(getPromptLibraryScope(field), cloudParams[getTemplateFieldStateKey(field)]);
+      });
+    }
+
     setInputValues({});
     latestInputValuesRef.current = {};
 
@@ -1504,6 +1526,19 @@ export const Draw = () => {
           ...appliedCarriedImages.base64,
         };
       }
+
+      // 跨工作流携带的提示词：缓存命中时仍使用缓存，未命中时用携带值覆盖默认值
+      inputs.forEach((input) => {
+        if (input.type !== 'text' || !isPromptWorkflowField(input)) return;
+        if (cached?.inputValues[input.name] !== undefined) return; // 缓存优先
+        const scope = getPromptLibraryScope(input);
+        const carried = scope === 'positive'
+          ? carriedPositivePromptRef.current
+          : carriedNegativePromptRef.current;
+        if (carried) {
+          nextInputValues[input.name] = carried;
+        }
+      });
 
       setInputValues(nextInputValues);
       latestInputValuesRef.current = nextInputValues;
@@ -1981,6 +2016,31 @@ export const Draw = () => {
     detail: LemonGridTemplateDetail,
     templateGroupKey: string | null
   ) => {
+    // 跨工作流切换：先从当前云端模板 + comfyui 工作流中收集提示词（按正/反向分组），稍后在 param_schema 中复用
+    // 注意：源码为空字符串时也要同步清空 ref，避免"用户清空"的动作不生效
+    const syncTemplatePromptCarry = (scope: 'positive' | 'negative', value: unknown) => {
+      const text = typeof value === 'string' && value !== '' ? value : '';
+      if (scope === 'positive') {
+        carriedPositivePromptRef.current = text;
+      } else {
+        carriedNegativePromptRef.current = text;
+      }
+    };
+    if (selectedTemplate) {
+      const previousParams = templateParamsRef.current;
+      selectedTemplate.param_schema.forEach((field) => {
+        if (field.type !== 'text' || !isPromptTemplateField(field)) return;
+        syncTemplatePromptCarry(getPromptLibraryScope(field), previousParams[getTemplateFieldStateKey(field)]);
+      });
+    }
+    if (workflowInputs.length > 0) {
+      const previousInputs = latestInputValuesRef.current;
+      workflowInputs.forEach((input) => {
+        if (input.type !== 'text' || !isPromptWorkflowField(input)) return;
+        syncTemplatePromptCarry(getPromptLibraryScope(input), previousInputs[input.name]);
+      });
+    }
+
     const defaults: Record<string, unknown> = {};
     for (const field of detail.param_schema) {
       defaults[getTemplateFieldStateKey(field)] = renderParamDefault(field);
@@ -2030,6 +2090,21 @@ export const Draw = () => {
         });
     }
 
+    // 应用跨工作流携带的提示词：仅在当前值仍是默认值（未被 remap 覆盖）时填入，避免破坏 cloud→cloud 已有映射
+    detail.param_schema.forEach((field) => {
+      if (field.type !== 'text' || !isPromptTemplateField(field)) return;
+      const fieldKey = getTemplateFieldStateKey(field);
+      const defaultValue = renderParamDefault(field);
+      if (nextTemplateParams[fieldKey] !== defaultValue) return;
+      const scope = getPromptLibraryScope(field);
+      const carried = scope === 'positive'
+        ? carriedPositivePromptRef.current
+        : carriedNegativePromptRef.current;
+      if (carried) {
+        nextTemplateParams[fieldKey] = carried;
+      }
+    });
+
     setTemplateParams(nextTemplateParams);
     templateParamsRef.current = nextTemplateParams;
     setTemplateImageInputs(nextTemplateImageInputs);
@@ -2038,9 +2113,10 @@ export const Draw = () => {
     templateUploadedImagePreviewsRef.current = nextTemplatePreviews;
     setSelectedTemplateGroupKey(templateGroupKey);
     setSelectedTemplate(detail);
+    selectedTemplateRef.current = detail;
     setIsTemplatePickerOpen(false);
     setUploadedImagePreviews({});
-  }, [remapTemplateStateToDetail, selectedTemplate]);
+  }, [remapTemplateStateToDetail, selectedTemplate, workflowInputs]);
 
   // Cluster Mode: Handle template selection
   // Synchronous — same pattern as direct mode's handleWorkflowSelect.
@@ -2231,7 +2307,7 @@ export const Draw = () => {
             isUploading: templateUploadingFieldKeys.has(slot.slotKey),
           };
         })
-        .filter((item) => item.previewUrl || item.filename),
+        .filter((item) => item.previewUrl || item.filename || item.isUploading),
     [templateImageInputs, templateImageSlots, templateUploadedImagePreviews, templateUploadingFieldKeys]
   );
 
@@ -2342,15 +2418,9 @@ export const Draw = () => {
     const slot = templateImageSlotMap.get(slotKey);
     if (!slot) return;
 
-    const previewUrl = URL.createObjectURL(file);
     setTemplateUploadingFieldKeys((prev) => {
       const next = new Set(prev);
       next.add(slotKey);
-      return next;
-    });
-    setTemplateUploadedImagePreviews(prev => {
-      const next = updateTemplateStringSlotRecord(prev, slot.fieldKey, slot.slotIndex, previewUrl);
-      templateUploadedImagePreviewsRef.current = next;
       return next;
     });
 
@@ -2370,25 +2440,13 @@ export const Draw = () => {
           return next;
         });
         setTemplateUploadedImagePreviews(prev => {
-          const previousPreview = getTemplateSlotStringValue(prev[slot.fieldKey], slot.slotIndex);
-          if (previousPreview.startsWith('blob:') && previousPreview !== stablePreviewUrl) {
-            URL.revokeObjectURL(previousPreview);
-          }
           const next = updateTemplateStringSlotRecord(prev, slot.fieldKey, slot.slotIndex, stablePreviewUrl);
           templateUploadedImagePreviewsRef.current = next;
           return next;
         });
       } catch (error) {
+        // 上传失败：不写入任何预览/输入值，由 finally 清除 uploading 标记后该槽位自动不显示
         console.error('[Draw] Failed to upload image to LemonGrid:', error);
-        setTemplateUploadedImagePreviews(prev => {
-          const previousPreview = getTemplateSlotStringValue(prev[slot.fieldKey], slot.slotIndex);
-          if (previousPreview.startsWith('blob:')) {
-            URL.revokeObjectURL(previousPreview);
-          }
-          const next = updateTemplateStringSlotRecord(prev, slot.fieldKey, slot.slotIndex, '');
-          templateUploadedImagePreviewsRef.current = next;
-          return next;
-        });
       }
     })();
 
@@ -2396,17 +2454,18 @@ export const Draw = () => {
     try {
       await uploadTask;
     } finally {
+      // 同 slot 已被新的上传任务接管时，不要清掉 uploading 标记，避免 spinner 提前消失
       if (templateUploadTasksRef.current[slotKey] === uploadTask) {
         delete templateUploadTasksRef.current[slotKey];
+        setTemplateUploadingFieldKeys((prev) => {
+          if (!prev.has(slotKey)) {
+            return prev;
+          }
+          const next = new Set(prev);
+          next.delete(slotKey);
+          return next;
+        });
       }
-      setTemplateUploadingFieldKeys((prev) => {
-        if (!prev.has(slotKey)) {
-          return prev;
-        }
-        const next = new Set(prev);
-        next.delete(slotKey);
-        return next;
-      });
     }
   }, [lemonGridServerUrl, templateImageSlotMap]);
 
@@ -2577,6 +2636,7 @@ export const Draw = () => {
         templateName: selectedTemplateDisplayName || targetTemplateDetail.name,
         templateType: targetTemplateDetail.template_type || 'COMFYUI',
         status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
+        statusLocked: false,
         progress: 0,
         progressDetail: null,
         queuePosition: null,
@@ -2666,6 +2726,82 @@ export const Draw = () => {
     }
   };
 
+  const buildClusterTaskUpdateFromStatus = (
+    status: LemonGridTaskStatus,
+    options?: { lockStatus?: boolean }
+  ) => ({
+    status: status.status,
+    ...(options?.lockStatus ? { statusLocked: true } : {}),
+    progress: status.status === 'COMPLETED' ? 100 : status.progress,
+    progressDetail: status.progress_detail,
+    queuePosition: status.queue_position,
+    errorCode: status.error_code,
+    errorMessage: status.error_message,
+    outputAssetIds: status.output_file_ids || [],
+    completedAt: status.completed_at ? new Date(status.completed_at).getTime() : null,
+    durationSeconds: status.duration_seconds,
+  });
+
+  async function syncClusterTaskStatusFromServer(
+    taskId: string,
+    options?: { confirmCompletion?: boolean }
+  ): Promise<LemonGridTaskStatus | null> {
+    const confirmCompletion = options?.confirmCompletion === true;
+    const attempts = confirmCompletion ? 6 : 1;
+    const serverUrl = useLemonGridStore.getState().serverUrl;
+    if (!serverUrl) {
+      return null;
+    }
+
+    const client = new LemonGridClient({ serverUrl });
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      try {
+        await ensureValidToken();
+        const status = await client.getTaskStatus(taskId);
+
+        if (status.status === 'COMPLETED') {
+          useLemonGridStore.getState().updateTask(
+            taskId,
+            buildClusterTaskUpdateFromStatus(status, { lockStatus: true })
+          );
+          await handleTaskCompletion(taskId);
+          return status;
+        }
+
+        useLemonGridStore.getState().updateTask(
+          taskId,
+          buildClusterTaskUpdateFromStatus(status)
+        );
+
+        if (status.status === 'FAILED' || status.status === 'CANCELLED') {
+          await closeTaskWebSocket(taskId);
+          return status;
+        }
+
+        if (!confirmCompletion) {
+          return status;
+        }
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        if (errMsg === 'AUTH_EXPIRED' || errMsg === 'Not authenticated') {
+          return null;
+        }
+        if (!confirmCompletion) {
+          throw error;
+        }
+      }
+
+      if (attempt < attempts - 1) {
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 1200);
+        });
+      }
+    }
+
+    return null;
+  }
+
   // Per D-22, D-28, D-31, D-32, D-38: Polling fallback with adaptive intervals
   const startPollingForTask = (taskId: string) => {
     const poll = async () => {
@@ -2677,17 +2813,10 @@ export const Draw = () => {
         const status = await client.getTaskStatus(taskId);
         const store = useLemonGridStore.getState();
 
-        store.updateTask(taskId, {
-          status: status.status,
-          progress: status.progress,
-          progressDetail: status.progress_detail,
-          queuePosition: status.queue_position,
-          errorCode: status.error_code,
-          errorMessage: status.error_message,
-          outputAssetIds: status.output_file_ids || [],
-          completedAt: status.completed_at ? new Date(status.completed_at).getTime() : null,
-          durationSeconds: status.duration_seconds,
-        });
+        store.updateTask(
+          taskId,
+          buildClusterTaskUpdateFromStatus(status, { lockStatus: status.status === 'COMPLETED' })
+        );
 
         if (['PENDING', 'QUEUED', 'SYNCING', 'RUNNING'].includes(status.status)) {
           // Per D-28: Adaptive interval - 1s running, 2s queued/syncing
@@ -2697,6 +2826,8 @@ export const Draw = () => {
           // Task reached terminal state
           if (status.status === 'COMPLETED') {
             await handleTaskCompletion(taskId);
+          } else {
+            await closeTaskWebSocket(taskId);
           }
         }
       } catch (_error) {
@@ -2730,7 +2861,7 @@ export const Draw = () => {
   // Per D-34, D-35, D-44, D-47: Download all outputs and auto-import to PS
   const completingTaskIds = useRef<Set<string>>(new Set());
   const importedClusterAssetIdsRef = useRef<Record<string, Set<string>>>({});
-  const handleTaskCompletion = async (taskId: string) => {
+  async function handleTaskCompletion(taskId: string) {
     // Idempotency guard: prevent duplicate downloads from WS + polling races
     if (completingTaskIds.current.has(taskId)) return;
     completingTaskIds.current.add(taskId);
@@ -2755,6 +2886,7 @@ export const Draw = () => {
           resolvedOutputAssetIds = nextOutputAssetIds;
           useLemonGridStore.getState().updateTask(taskId, {
             status: status.status,
+            ...(status.status === 'COMPLETED' ? { statusLocked: true } : {}),
             outputAssetIds: nextOutputAssetIds,
             completedAt: status.completed_at ? new Date(status.completed_at).getTime() : null,
             durationSeconds: status.duration_seconds,
@@ -2809,7 +2941,7 @@ export const Draw = () => {
     } finally {
       completingTaskIds.current.delete(taskId);
     }
-  };
+  }
 
   // Per D-43: Retry failed task with same params
   const handleRetryTask = async (taskId: string) => {
@@ -2832,6 +2964,7 @@ export const Draw = () => {
         templateName: task.templateName,
         templateType: task.templateType || 'COMFYUI',
         status: result.status as 'PENDING' | 'QUEUED' | 'SYNCING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED',
+        statusLocked: false,
         progress: 0,
         progressDetail: null,
         queuePosition: null,
@@ -4302,19 +4435,27 @@ export const Draw = () => {
                                 }}
                                 title={item.isUploading ? '上传中，暂不可拖动' : '拖动可调换映射位置'}
                               >
-                                <img src={item.previewUrl} alt={`图片 ${item.index + 1}`} className="multi-image-preview" />
-                                <button
-                                  type="button"
-                                  className="multi-image-remove"
-                                  onClick={() => handleTemplateImageRemove(item.slotKey)}
-                                  title="移除"
-                                >
-                                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                                    <line x1="18" y1="6" x2="6" y2="18" />
-                                    <line x1="6" y1="6" x2="18" y2="18" />
-                                  </svg>
-                                </button>
-                                <span className="multi-image-name">{item.filename || `图片 ${item.index + 1}`}</span>
+                                {item.isUploading && !item.previewUrl ? (
+                                  <div className="multi-image-uploading" aria-label="上传中">
+                                    <div className="spinner" />
+                                  </div>
+                                ) : (
+                                  <img src={item.previewUrl} alt={`图片 ${item.index + 1}`} className="multi-image-preview" />
+                                )}
+                                {!item.isUploading && (
+                                  <button
+                                    type="button"
+                                    className="multi-image-remove"
+                                    onClick={() => handleTemplateImageRemove(item.slotKey)}
+                                    title="移除"
+                                  >
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                      <line x1="18" y1="6" x2="6" y2="18" />
+                                      <line x1="6" y1="6" x2="18" y2="18" />
+                                    </svg>
+                                  </button>
+                                )}
+                                <span className="multi-image-name">{item.isUploading ? '上传中…' : (item.filename || `图片 ${item.index + 1}`)}</span>
                               </div>
                             ))}
                           </div>
