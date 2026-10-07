@@ -1,7 +1,17 @@
+// Bridge 来源白名单：webview src 的 origin（跟随 index.html，用 switch-url.bat 切换 dev/prod 后自动生效）
+// + 线上域名。勿再手写具体 dev IP/端口 —— 本地调试地址由 switch-url.bat 写入 index.html 即可。
+const webviewOrigin = (() => {
+  try {
+    const src = document.getElementById('lemongrid-ps-plugin')?.getAttribute('src') || '';
+    return src ? new URL(src).origin : '';
+  } catch {
+    return '';
+  }
+})();
 const ALLOWED_ORIGINS = [
-  'http://192.168.0.21:5173',
+  webviewOrigin,
   'https://lemongrid.cn',
-];
+].filter(Boolean);
 
 const normalizeOrigin = (origin) => {
   if (!origin) return '';
