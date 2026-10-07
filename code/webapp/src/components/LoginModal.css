@@ -252,12 +252,14 @@
 }
 
 /* Shared fixed-size container for both the loading spinner and the actual
-   QR code. Keeping the dimensions locked at 256×312 means swapping the
-   loading state for the QR (or vice-versa) does NOT resize the
-   LoginModal card, eliminating the visual "弹窗先小后大" jump. */
+   QR code. Keeping the dimensions locked means swapping the loading state
+   for the QR (or vice-versa) does NOT resize the LoginModal card,
+   eliminating the visual "弹窗先小后大" jump.
+   286 = 16(白边) + 224(码) + 12(gap) + 18(hint 行高) + 16(白边)，
+   与左右各 16px 白边对称。 */
 .dingtalk-qr-placeholder {
   width: 256px;
-  height: 312px;
+  height: 286px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -272,7 +274,7 @@
 /* [2026-10-07] 方案A：qrcode 态二维码+提示包进整张白卡。
    只叠在 qrcode 分支的 div 上（TSX 里加 dingtalk-qr-card）；
    loading 转圈占位共用 .dingtalk-qr-placeholder，必须保持暗色，
-   故白底走新类不改旧类。尺寸不变（256×312），弹窗不跳高。 */
+   故白底走新类不改旧类。尺寸不变（256×286），弹窗不跳高。 */
 .dingtalk-qr-card {
   background: #ffffff;
   border-radius: 6px;
@@ -282,6 +284,8 @@
 .dingtalk-qr-hint {
   color: var(--fg2);
   font-size: 12px;
+  /* 行高锁 18px——白卡四周留白按它算，不定死会被默认行高影响对称性 */
+  line-height: 18px;
   text-align: center;
 }
 

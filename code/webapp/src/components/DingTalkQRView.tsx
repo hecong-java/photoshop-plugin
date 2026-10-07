@@ -188,7 +188,7 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
   if (phase === 'loading') {
     // Same outer dimensions as the QR phase below so the LoginModal card
     // doesn't jump height when the QR arrives. Just renders a spinner
-    // inside the same 256x312 box.
+    // inside the same 256x286 box.
     return (
       <div className="dingtalk-qr-placeholder" aria-busy="true" aria-live="polite">
         <div className="dingtalk-qr-spinner" />
@@ -254,7 +254,8 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
     // loading 占位不加此类、保持暗色。
     return (
       <div className="dingtalk-qr-placeholder dingtalk-qr-card">
-        <QRCodeSVG value={authUrl} size={256} level="H" bgColor="#ffffff" fgColor="#1a1a22" />
+        {/* 224 而非 256：卡片宽 256，码撑满会左右贴边没有 quiet zone；224 → 左右各留 16px 白边 */}
+        <QRCodeSVG value={authUrl} size={224} level="H" bgColor="#ffffff" fgColor="#1a1a22" />
         <div className="dingtalk-qr-hint">
           请使用钉钉扫描二维码登录
         </div>
