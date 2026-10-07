@@ -197,7 +197,7 @@ function App() {
   }, []);
 
   return (
-    <Router>
+    <Router basename={import.meta.env.BASE_URL}>
       <div className="app">
         {/* Minimal topbar — brand + always-on queue badge */}
         <div className="topbar">

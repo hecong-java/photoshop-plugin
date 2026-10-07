@@ -1,6 +1,6 @@
 const ALLOWED_ORIGINS = [
   'http://192.168.0.21:5173',
-  'http://123.207.74.28:8081',
+  'https://lemongrid.cn',
 ];
 
 const normalizeOrigin = (origin) => {

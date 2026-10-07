@@ -99,8 +99,10 @@ TargetName=$IExpressExePath
 FriendlyName=LemonGrid Installer
 AppLaunched=$SetupName
 PostInstallCmd=<None>
-AdminQuietInstCmd="$InstallName" "powershell -NoProfile -ExecutionPolicy Bypass -File \""%~dp0$InstallName\"""
-UserQuietInstCmd="$InstallName" "powershell -NoProfile -ExecutionPolicy Bypass -File \""%~dp0$InstallName\"""
+# quiet 模式直接走 setup.cmd（内部已处理提权与 install.ps1 的引号转义）
+# 勿在此写嵌套引号的 powershell 命令——IExpress SED 解析不了会弹交互向导（2026-10-07 修）
+AdminQuietInstCmd=$SetupName
+UserQuietInstCmd=$SetupName
 SourceFiles=SourceFiles
 [SourceFiles]
 SourceFiles0=$IExpressSourceDir
