@@ -250,8 +250,10 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
   if (authUrl) {
     // Identical outer dimensions to the loading placeholder so swapping
     // in the QR doesn't resize the LoginModal.
+    // dingtalk-qr-card：二维码+提示整卡白底（方案A 2026-10-07），
+    // loading 占位不加此类、保持暗色。
     return (
-      <div className="dingtalk-qr-placeholder">
+      <div className="dingtalk-qr-placeholder dingtalk-qr-card">
         <QRCodeSVG value={authUrl} size={256} level="H" bgColor="#ffffff" fgColor="#1a1a22" />
         <div className="dingtalk-qr-hint">
           请使用钉钉扫描二维码登录

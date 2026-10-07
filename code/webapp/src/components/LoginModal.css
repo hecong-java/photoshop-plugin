@@ -269,11 +269,26 @@
   background: transparent;
 }
 
+/* [2026-10-07] 方案A：qrcode 态二维码+提示包进整张白卡。
+   只叠在 qrcode 分支的 div 上（TSX 里加 dingtalk-qr-card）；
+   loading 转圈占位共用 .dingtalk-qr-placeholder，必须保持暗色，
+   故白底走新类不改旧类。尺寸不变（256×312），弹窗不跳高。 */
+.dingtalk-qr-card {
+  background: #ffffff;
+  border-radius: 6px;
+}
+
 .dingtalk-qr-placeholder-text,
 .dingtalk-qr-hint {
   color: var(--fg2);
   font-size: 12px;
   text-align: center;
+}
+
+/* 白卡上的提示文字换深色——只覆盖卡片内的 hint，
+   不动上面与 loading 共用的 .dingtalk-qr-hint 规则。 */
+.dingtalk-qr-card .dingtalk-qr-hint {
+  color: #333333;
 }
 
 .dingtalk-qr-spinner {

@@ -2,8 +2,8 @@
 //
 // Candidate URLs are evaluated in priority order:
 //   1. User-provided URL (if any) — set via the login modal's settings dialog.
-//   2. PRIMARY (IP).
-//   3. FALLBACK (domain).
+//   2. PRIMARY (domain)。
+//   3. FALLBACK — 暂无（2026-10-07 移除 IP 兜底 8.163.4.73，后续有新兜底再加回）。
 //
 // On startup, `pickWorkingUrl` probes each candidate in order and locks the
 // first reachable one. If a request to the locked URL fails (network error /
@@ -15,9 +15,11 @@
 
 import { isUXPWebView, hasBridgeTransport, sendBridgeMessage } from './upload';
 
-/** Primary (IP) and fallback (domain) LemonGrid server URLs. */
-export const LEMONGRID_PRIMARY_URL = 'http://8.163.4.73';
-export const LEMONGRID_FALLBACK_URL = 'http://www.lemongrid.cn';
+/** Primary LemonGrid server URL. */
+export const LEMONGRID_PRIMARY_URL = 'http://www.lemongrid.cn';
+// FALLBACK 暂缺：IP 兜底 8.163.4.73 已于 2026-10-07 移除；
+// 拿到新兜底地址后在此恢复 export const LEMONGRID_FALLBACK_URL = '...'，
+// 并在 getEffectiveCandidates 里补回对应的 push。
 
 /** 500ms timeout for any reachability probe. */
 export const LEMONGRID_PROBE_TIMEOUT_MS = 500;
@@ -71,13 +73,13 @@ export function clearLockedUrl(): void {
 
 /**
  * Return all candidate URLs in priority order:
- *   [user-provided?, primary, fallback].
+ *   [user-provided?, primary]（fallback 暂缺，恢复时在下方补 push）。
  */
 export function getEffectiveCandidates(): string[] {
   const candidates: string[] = [];
   if (userProvidedUrl) candidates.push(userProvidedUrl);
   candidates.push(LEMONGRID_PRIMARY_URL);
-  candidates.push(LEMONGRID_FALLBACK_URL);
+  // candidates.push(LEMONGRID_FALLBACK_URL); // 2026-10-07 移除 IP 兜底，恢复时取消注释
   return candidates;
 }
 
