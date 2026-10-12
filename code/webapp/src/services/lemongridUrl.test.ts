@@ -11,7 +11,7 @@
  * 2. setUserProvidedUrl 必须清 lockedUrl —— 否则用户改了服务器地址后当前会话
  *    仍路由到启动时锁定的旧地址（用户实测：改完配置不重启不生效）。
  */
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
   LEMONGRID_PRIMARY_URL,
   setUserProvidedUrl,
