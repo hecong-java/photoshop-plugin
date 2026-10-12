@@ -15,8 +15,12 @@
 
 import { isUXPWebView, hasBridgeTransport, sendBridgeMessage } from './upload';
 
-/** Primary LemonGrid server URL. */
-export const LEMONGRID_PRIMARY_URL = 'http://www.lemongrid.cn';
+/** Primary LemonGrid server URL.
+ * 2026-10-12：'http://www.lemongrid.cn' → 'https://lemongrid.cn'。http 明文在
+ * https 页面（lemongrid.cn/ps/）内触发混合内容拦截，UXP WebView 对 <img> 直接
+ * 不发请求 —— 上传参考图后预览永远裂图（上传走宿主 bridge 不受限，故"上传成功
+ * 但预览裂"）。https 裸域与页面同源，彻底解除。 */
+export const LEMONGRID_PRIMARY_URL = 'https://lemongrid.cn';
 // FALLBACK 暂缺：IP 兜底 8.163.4.73 已于 2026-10-07 移除；
 // 拿到新兜底地址后在此恢复 export const LEMONGRID_FALLBACK_URL = '...'，
 // 并在 getEffectiveCandidates 里补回对应的 push。
@@ -34,14 +38,18 @@ export const LEMONGRID_PROBE_TIMEOUT_MS = 500;
 
 let userProvidedUrl: string | null = null;
 
-/** Set the user-provided URL (highest priority). Pass null to clear it. */
+/** Set the user-provided URL (highest priority). Pass null to clear it.
+ * 2026-10-12：同时清 lockedUrl —— 原实现只改候选列表，启动时锁定的旧地址
+ * 会一直用到下次网络失败，用户改配置必须重启面板才生效（261012 实测坑）。 */
 export function setUserProvidedUrl(url: string | null): void {
   if (!url) {
     userProvidedUrl = null;
+    lockedUrl = null;
     return;
   }
   const trimmed = url.trim().replace(/\/+$/, '');
   userProvidedUrl = trimmed || null;
+  lockedUrl = null;
 }
 
 /** Return the user-provided URL (or null if none). */
