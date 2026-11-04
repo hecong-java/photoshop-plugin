@@ -45,14 +45,21 @@ if ([string]::IsNullOrWhiteSpace($VersionString)) {
     throw "manifest.json is missing version"
 }
 
-$VersionDir = Join-Path $BuildRoot $VersionString
+# 发布标签带日期（2026-11-04 规则）：dist/<版本.日期>/LemonGrid_Setup_<版本.日期>.exe
+# manifest 的 version 保持 3 段 semver 不动——UXP manifest v5 只认标准 semver，
+# 4 段/日期后缀写进 manifest 会导致校验告警甚至插件装不上。
+$BuildDate = Get-Date -Format "yyyyMMdd"
+$ReleaseVersion = "$VersionString.$BuildDate"
+
+$VersionDir = Join-Path $BuildRoot $ReleaseVersion
 $StageDir = Join-Path $TempRoot $PluginId
 $PayloadPath = Join-Path $VersionDir $PayloadName
 $SetupOutputPath = Join-Path $VersionDir $SetupName
 $InstallOutputPath = Join-Path $VersionDir $InstallName
 $SedPath = Join-Path $VersionDir 'iexpress.sed'
+$ExeName = "LemonGrid_Setup_$ReleaseVersion.exe"
 $ExePath = Join-Path $VersionDir $ExeName
-$IExpressRoot = Join-Path $env:TEMP ("lemongrid_iexpress_" + ($VersionString -replace '[^0-9A-Za-z._-]', '_'))
+$IExpressRoot = Join-Path $env:TEMP ("lemongrid_iexpress_" + ($ReleaseVersion -replace '[^0-9A-Za-z._-]', '_'))
 $IExpressSourceDir = Join-Path $IExpressRoot "source"
 $IExpressSedPath = Join-Path $IExpressRoot "iexpress.sed"
 $IExpressExePath = Join-Path $IExpressRoot $ExeName
@@ -142,6 +149,7 @@ Remove-Item -LiteralPath $IExpressRoot -Recurse -Force -ErrorAction SilentlyCont
 
 Write-Step "Build complete"
 Write-Host "Plugin ID: $PluginId"
-Write-Host "Version: $VersionString"
+Write-Host "Manifest version: $VersionString"
+Write-Host "Release tag: $ReleaseVersion"
 Write-Host "Output folder: $VersionDir"
 Write-Host "Installer: $FinalExePath"
