@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useLemonGridStore } from '../stores/lemongridStore';
-import { loginToLemonGrid, getUserProfile, syncAuthToBridge, encryptPassword, decryptPassword, getDingTalkLoginUrl } from '../services/lemongrid-auth';
+import { loginToLemonGrid, getUserProfile, syncAuthToBridge, encryptPassword, decryptPassword, getDingTalkLoginUrl, getDingTalkOrgs } from '../services/lemongrid-auth';
 import { DingTalkQRView } from './DingTalkQRView';
 import { ServerUrlSettingsModal } from './ServerUrlSettingsModal';
 import { isUXPWebView } from '../services/upload';
@@ -118,7 +118,16 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess, force = false }: L
     if (!isUXPWebView()) {
       // Per D-20, D-21: Browser mode uses standard redirect OAuth
       try {
-        const { auth_url } = await getDingTalkLoginUrl(url, 'redirect');
+        // 多组织后端要求 login-url 必带 org_code。多个活跃组织时浏览器
+        // 跳转无法选择 → 退回扫码视图（DingTalkQRView 内有组织选择页）。
+        const orgs = await getDingTalkOrgs(url);
+        if (orgs.length > 1) {
+          setLoginView('dingtalk');
+          setError(null);
+          return;
+        }
+        const orgCode = orgs.length === 1 ? orgs[0].org_code : undefined;
+        const { auth_url } = await getDingTalkLoginUrl(url, 'redirect', orgCode);
         window.location.href = auth_url;
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';

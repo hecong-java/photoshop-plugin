@@ -251,6 +251,29 @@
   padding: 6px 24px;
 }
 
+/* 多组织选择页（261022 后端多组织改造）：与二维码占位同尺寸（256×286），
+   弹窗不跳高。标题 + 纵向组织按钮列表，按钮复用 .dingtalk-btn 暗色样式。 */
+.dingtalk-org-select {
+  justify-content: center;
+}
+
+.dingtalk-org-select-title {
+  color: var(--fg2);
+  font-size: 13px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.dingtalk-org-btn {
+  /* 组织名可能较长（如"湖南柠乐品牌管理有限公司"），压缩内距换一行放下 */
+  padding: var(--sp-2) var(--sp-2);
+  font-size: 12px;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Shared fixed-size container for both the loading spinner and the actual
    QR code. Keeping the dimensions locked means swapping the loading state
    for the QR (or vice-versa) does NOT resize the LoginModal card,

@@ -513,15 +513,42 @@ export async function getUserProfile(
 }
 
 /**
+ * DingTalk 接入组织（后端 dingtalk_orgs 表，公开接口只回 org_code+name）。
+ * 后端多组织改造（261022）：多个活跃组织时 login-url 必须带 org_code，
+ * 否则 400 {"detail":"存在多个接入组织，请选择组织后登录"}。
+ */
+export interface DingTalkOrg {
+  org_code: string;
+  name: string;
+}
+
+/**
+ * 拉取活跃钉钉接入组织列表（公开接口，无需登录）。
+ * 老后端没有该接口时返回 404 —— 视为"无组织概念"，返回空数组，
+ * 调用方按不带 org_code 处理（兼容缺省：后端对唯一活跃组织会自动放行）。
+ */
+export async function getDingTalkOrgs(serverUrl: string): Promise<DingTalkOrg[]> {
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/orgs`;
+  const response = await lemongridFetch(url);
+  if (!response.ok) {
+    return [];
+  }
+  return (await response.json()) as DingTalkOrg[];
+}
+
+/**
  * Get DingTalk OAuth login URL from backend.
  * Per D-19: redirect_mode tells backend whether to use Web redirect or plugin poll mode.
  * Per D-20/D-21: Browser mode uses 'redirect', UXP mode uses 'poll'.
+ * orgCode: 接入组织路由键；多活跃组织时必传（缺省由后端按唯一活跃组织兜底）。
  */
 export async function getDingTalkLoginUrl(
   serverUrl: string,
-  redirectMode: 'redirect' | 'poll' = 'poll'
+  redirectMode: 'redirect' | 'poll' = 'poll',
+  orgCode?: string
 ): Promise<{ auth_url: string; state: string }> {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/login-url?redirect_mode=${redirectMode}`;
+  const orgParam = orgCode ? `&org_code=${encodeURIComponent(orgCode)}` : '';
+  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/login-url?redirect_mode=${redirectMode}${orgParam}`;
   const response = await lemongridFetch(url);
   if (!response.ok) {
     throw new Error(`Failed to get DingTalk login URL: ${response.status}`);

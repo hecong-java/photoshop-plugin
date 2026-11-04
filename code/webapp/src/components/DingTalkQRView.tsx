@@ -2,11 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   getDingTalkLoginUrl,
+  getDingTalkOrgs,
   pollDingTalkAuth,
   loginWithDingTalk,
+  type DingTalkOrg,
 } from '../services/lemongrid-auth';
 
-type QRPhase = 'loading' | 'iframe' | 'qrcode' | 'error' | 'success';
+type QRPhase = 'loading' | 'org-select' | 'iframe' | 'qrcode' | 'error' | 'success';
 
 interface DingTalkQRViewProps {
   serverUrl: string;
@@ -45,10 +47,15 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
   const [, setAuthState] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  // 多活跃组织（后端 261022 多组织改造）时先让用户选组织再拿 login-url。
+  // 单组织/老后端（接口 404 → 空数组）不出现选择页，保持原扫码体验。
+  const [pendingOrgs, setPendingOrgs] = useState<DingTalkOrg[] | null>(null);
 
   const abortControllerRef = useRef<AbortController | null>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const iframeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 组织选择页的点击处理由 effect 内部注入（那里才有 cancelled/signal 作用域）
+  const orgPickRef = useRef<(orgCode: string) => void>(() => {});
 
   const handleRetry = useCallback(() => {
     setErrorMessage(null);
@@ -62,78 +69,108 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
     // Create fresh AbortController for this cycle
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
+    const signal = abortController.signal;
 
     let cancelled = false;
+
+    const reportError = (err: unknown) => {
+      if (cancelled || signal.aborted) return;
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const friendly = classifyError(msg);
+      setErrorMessage(friendly);
+      setPhase('error');
+      onError(friendly);
+    };
+
+    // Fetch login-url with the given org, render QR, and start background
+    // polling. Rejects only on the login-url fetch itself (poll/timer handle
+    // their own errors below).
+    const runQr = async (orgCode?: string) => {
+      // Per D-20: UXP mode uses poll; orgCode disambiguates multi-org backends
+      const result = await getDingTalkLoginUrl(serverUrl, 'poll', orgCode);
+
+      if (cancelled || signal.aborted) return;
+
+      setAuthUrl(result.auth_url);
+      setAuthState(result.state);
+
+      // Skip iframe — DingTalk blocks iframe embedding (X-Frame-Options).
+      // Go straight to QR code rendering via qrcode.react.
+      setPhase('qrcode');
+
+      // Start polling in background regardless of iframe vs QR display
+      pollDingTalkAuth(serverUrl, result.state, { signal })
+        .then(async (pollResult) => {
+          if (cancelled || signal.aborted) return;
+          setPhase('success');
+          try {
+            await loginWithDingTalk(serverUrl, pollResult.data);
+            onSuccess();
+          } catch (loginErr) {
+            const msg = loginErr instanceof Error ? loginErr.message : 'Login failed';
+            setErrorMessage(msg);
+            setPhase('error');
+            onError(msg);
+          }
+        })
+        .catch((pollErr) => {
+          if (cancelled || signal.aborted) return;
+
+          const msg = pollErr instanceof Error ? pollErr.message : 'Unknown error';
+
+          // Per D-28: Poll timeout keeps its dedicated copy.
+          if (msg === 'POLL_TIMEOUT') {
+            setErrorMessage('登录超时，请重试');
+            setPhase('error');
+            onError('登录超时，请重试');
+          } else {
+            // Everything else (network failures, JSON-shaped bridge errors,
+            // service errors) collapses to a user-friendly line via
+            // classifyError. Avoids surfacing `{"code":"FETCH_ERROR",...}`
+            // verbatim to the user.
+            const friendly = classifyError(msg);
+            setErrorMessage(friendly);
+            setPhase('error');
+            onError(friendly);
+          }
+        });
+
+      // Per D-10: Auto-refresh after 3 minutes (180000ms)
+      refreshTimerRef.current = setTimeout(() => {
+        if (!cancelled) {
+          abortController.abort();
+          setRefreshKey((k) => k + 1);
+        }
+      }, 180000);
+    };
 
     const startAuth = async () => {
       try {
         setPhase('loading');
         setErrorMessage(null);
 
-        // Per D-20: UXP mode uses poll
-        const result = await getDingTalkLoginUrl(serverUrl, 'poll');
+        // 多组织后端要求 login-url 必带 org_code（否则 400"存在多个接入组织"）。
+        // /orgs 拉取失败或返回空（老后端）→ 不带 org_code 直取，后端按唯一
+        // 活跃组织兜底；多个活跃组织 → 出组织选择页。
+        const orgs = await getDingTalkOrgs(serverUrl);
+        if (cancelled || signal.aborted) return;
 
-        if (cancelled) return;
+        if (orgs.length > 1) {
+          setPendingOrgs(orgs);
+          setPhase('org-select');
+          return;
+        }
 
-        setAuthUrl(result.auth_url);
-        setAuthState(result.state);
-
-        // Skip iframe — DingTalk blocks iframe embedding (X-Frame-Options).
-        // Go straight to QR code rendering via qrcode.react.
-        setPhase('qrcode');
-
-        // Start polling in background regardless of iframe vs QR display
-        pollDingTalkAuth(serverUrl, result.state, {
-          signal: abortController.signal,
-        })
-          .then(async (pollResult) => {
-            if (cancelled) return;
-            setPhase('success');
-            try {
-              await loginWithDingTalk(serverUrl, pollResult.data);
-              onSuccess();
-            } catch (loginErr) {
-              const msg = loginErr instanceof Error ? loginErr.message : 'Login failed';
-              setErrorMessage(msg);
-              setPhase('error');
-              onError(msg);
-            }
-          })
-          .catch((pollErr) => {
-            if (cancelled) return;
-            if (abortController.signal.aborted) return;
-
-            const msg = pollErr instanceof Error ? pollErr.message : 'Unknown error';
-
-            // Per D-28: Poll timeout keeps its dedicated copy.
-            if (msg === 'POLL_TIMEOUT') {
-              setErrorMessage('登录超时，请重试');
-            } else {
-              // Everything else (network failures, JSON-shaped bridge errors,
-              // service errors) collapses to a user-friendly line via
-              // classifyError. Avoids surfacing `{"code":"FETCH_ERROR",...}`
-              // verbatim to the user.
-              setErrorMessage(classifyError(msg));
-            }
-            setPhase('error');
-            onError(classifyError(msg));
-          });
-
-        // Per D-10: Auto-refresh after 3 minutes (180000ms)
-        refreshTimerRef.current = setTimeout(() => {
-          if (!cancelled) {
-            abortController.abort();
-            setRefreshKey((k) => k + 1);
-          }
-        }, 180000);
+        await runQr(orgs.length === 1 ? orgs[0].org_code : undefined);
       } catch (err) {
-        if (cancelled) return;
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        const friendly = classifyError(msg);
-        setErrorMessage(friendly);
-        setPhase('error');
-        onError(friendly);
+        reportError(err);
       }
+    };
+
+    orgPickRef.current = (orgCode: string) => {
+      setPendingOrgs(null);
+      setPhase('loading');
+      runQr(orgCode).catch(reportError);
     };
 
     startAuth();
@@ -193,6 +230,24 @@ export const DingTalkQRView = ({ serverUrl, onSuccess, onError }: DingTalkQRView
       <div className="dingtalk-qr-placeholder" aria-busy="true" aria-live="polite">
         <div className="dingtalk-qr-spinner" />
         <div className="dingtalk-qr-placeholder-text">正在获取登录二维码...</div>
+      </div>
+    );
+  }
+
+  if (phase === 'org-select' && pendingOrgs) {
+    return (
+      <div className="dingtalk-qr-placeholder dingtalk-org-select" aria-live="polite">
+        <div className="dingtalk-org-select-title">请选择要登录的组织</div>
+        {pendingOrgs.map((org) => (
+          <button
+            key={org.org_code}
+            type="button"
+            className="dingtalk-btn dingtalk-org-btn"
+            onClick={() => orgPickRef.current(org.org_code)}
+          >
+            {org.name}
+          </button>
+        ))}
       </div>
     );
   }
