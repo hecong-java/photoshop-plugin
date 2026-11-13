@@ -2141,13 +2141,14 @@ export const Draw = () => {
     setSelectedTemplateGroupKey(templateGroupKey);
     setSelectedTemplate(detail);
     selectedTemplateRef.current = detail;
-    // 云端模型：同步扁平条目高亮。仅当 schema 里还带 model 字段（未走扁平条目
-    // schemaOverride 路径）时才从 default 推导；扁平条目路径 schema 已剔除 model
-    // 项，版本值由 handleFlatCloudTemplateSelect 预先设置——这里若再推导会把
-    // 刚设的版本值抹成 undefined，触发器显示名退回系列名（261113 实测坑）。
+    // 云端模型：同步扁平条目高亮。仅当 schema 仍带 model 字段（非扁平条目路径，
+    // 如历史回填走的全量 schema）时才从 default 推导；扁平条目路径 schema 已
+    // 剔除 model 项，版本值由 handleFlatCloudTemplateSelect 预先设置——通用
+    // 推导在这里执行会把刚设的版本值抹成 undefined，触发器显示名退回系列名
+    //（261113 实测坑；首版条件把否定写反，恒抹，二次修正）。
     if (
       detail.template_type !== 'THIRD_PARTY_API'
-      || !detail.param_schema.some((f) => f.name === 'model')
+      || detail.param_schema.some((f) => f.name === 'model')
     ) {
       setSelectedCloudModelValue(undefined);
     }
