@@ -691,7 +691,26 @@ export const Draw = () => {
     [groupedClusterWorkflowTemplates, selectedTemplateGroupKey]
   );
 
-  const selectedTemplateDisplayName = selectedTemplateGroup?.name ?? selectedTemplate?.name ?? null;
+  // 触发器显示名（261113）：云端模型带版本后缀（"GPT系列 2.6 官方版本-快速"），
+  // 干活久了不忘用的哪个版本。COMFYUI 工作流仍显示分组名，行为不变。
+  const selectedTemplateDisplayName = useMemo(() => {
+    if (selectedTemplateGroup) {
+      return selectedTemplateGroup.name;
+    }
+    if (!selectedTemplate) {
+      return null;
+    }
+    if (selectedTemplate.template_type === 'THIRD_PARTY_API' && selectedCloudModelValue !== undefined) {
+      const sourceTemplate = clusterTemplates.find((t) => t.id === selectedTemplate.id);
+      const versionLabel = sourceTemplate
+        ? flattenCloudTemplate(sourceTemplate).find((flat) => flat.modelValue === selectedCloudModelValue)?.displayName
+        : null;
+      if (versionLabel) {
+        return versionLabel;
+      }
+    }
+    return selectedTemplate.name;
+  }, [selectedTemplate, selectedTemplateGroup, selectedCloudModelValue, clusterTemplates]);
 
   const promptLibraryEntries = useMemo<PromptLibraryEntry[]>(
     () => (
