@@ -22,6 +22,8 @@ vi.mock('../lemongrid-url', () => {
       doFetch(base),
     withUrlFailover: (doFetch: (url: string) => Promise<unknown>) =>
       doFetch(base),
+    // dev 代理地址重写：非 lemongrid.cn 域名原样返回（测试里都是 test.local）
+    resolveRequestBase: (url: string) => url,
   };
 });
 

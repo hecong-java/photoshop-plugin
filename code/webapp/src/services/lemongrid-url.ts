@@ -15,6 +15,28 @@
 
 import { isUXPWebView, hasBridgeTransport, sendBridgeMessage } from './upload';
 
+/**
+ * 本地 dev 直连生产（261113）：vite.config.ts 把 /api、/auth 代理到
+ * https://lemongrid.cn，浏览器模式（非 UXP）在 dev 下把请求地址换成相对路径
+ * （同源）→ 绕开 CORS（后端白名单只有 lemongrid.cn 与 localhost:3001，插件
+ * 5173 不在名单）。store.serverUrl 仍存真实域名（登录弹窗校验/显示用），
+ * 只在请求出口处重写。UXP 模式不受影响（bridge 无 CORS）；构建产物 DEV 恒为
+ * false，线上行为与改造前完全一致。
+ */
+const DEV_RELATIVE_MODE =
+  Boolean(import.meta.env.DEV) && !isUXPWebView();
+
+/**
+ * 把请求基址重写为 dev 代理相对路径。
+ * 非 dev 浏览器环境原样返回；store.serverUrl 展示值不受影响。
+ */
+export function resolveRequestBase(url: string): string {
+  if (DEV_RELATIVE_MODE && /^https?:\/\/(www\.)?lemongrid\.cn/i.test(url)) {
+    return '';
+  }
+  return url;
+}
+
 /** Primary LemonGrid server URL.
  * 2026-10-12：'http://www.lemongrid.cn' → 'https://lemongrid.cn'。http 明文在
  * https 页面（lemongrid.cn/ps/）内触发混合内容拦截，UXP WebView 对 <img> 直接
@@ -233,7 +255,7 @@ export async function withUrlFailover<T>(doFetch: (url: string) => Promise<T>): 
     await pickWorkingUrl();
   }
 
-  const firstAttemptUrl = lockedUrl ?? LEMONGRID_PRIMARY_URL;
+  const firstAttemptUrl = resolveRequestBase(lockedUrl ?? LEMONGRID_PRIMARY_URL);
   try {
     return await doFetch(firstAttemptUrl);
   } catch (err) {
@@ -241,7 +263,7 @@ export async function withUrlFailover<T>(doFetch: (url: string) => Promise<T>): 
     // infra error → try the next candidate
     const newUrl = await failover();
     if (!newUrl) throw err;
-    return await doFetch(newUrl);
+    return await doFetch(resolveRequestBase(newUrl));
   }
 }
 
@@ -258,12 +280,12 @@ export async function withUrlFailoverResponse<R extends { ok: boolean; status: n
   if (!lockedUrl) {
     await pickWorkingUrl();
   }
-  const firstAttemptUrl = lockedUrl ?? LEMONGRID_PRIMARY_URL;
+  const firstAttemptUrl = resolveRequestBase(lockedUrl ?? LEMONGRID_PRIMARY_URL);
   const first = await doFetch(firstAttemptUrl);
   if (first.ok || !isInfraStatus(first.status)) {
     return first;
   }
   const newUrl = await failover();
   if (!newUrl) return first;
-  return await doFetch(newUrl);
+  return await doFetch(resolveRequestBase(newUrl));
 }

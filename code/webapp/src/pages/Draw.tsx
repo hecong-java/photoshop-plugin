@@ -10,7 +10,7 @@ import { PsExportButton } from '../components/upload/PsExportButton';
 import { uploadToComfyUI, isUXPWebView, bridgeFetch, fileToBase64, importBase64ToPsLayer, sendBridgeMessage } from '../services/upload';
 import { PromptReverseFlow } from '../components/promptReverse/PromptReverseFlow';
 import { useKeyboardPassthrough } from '../hooks/useKeyboardPassthrough';
-import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, groupClusterTemplatesByVariants, resolveClusterTemplateVariant, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField, type GroupedClusterTemplateSummary, type LemonGridTaskStatus } from '../services/lemongrid';
+import { LemonGridClient, isImageParam, renderParamDefault, normalizeTemplateDetail, LEMONGRID_ERROR_SUGGESTIONS, groupClusterTemplatesByVariants, resolveClusterTemplateVariant, flattenCloudTemplate, isImageCloudTemplate, type LemonGridTemplateSummary, type LemonGridTemplateDetail, type ParamSchemaField, type GroupedClusterTemplateSummary, type LemonGridTaskStatus, type FlatCloudTemplate } from '../services/lemongrid';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { ensureValidToken } from '../services/lemongrid-auth';
 import { MiniTaskList } from '../components/MiniTaskList';
@@ -524,6 +524,8 @@ export const Draw = () => {
   const [selectedTemplateGroupKey, setSelectedTemplateGroupKey] = useState<string | null>(null);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(false);
   const [isTemplatePickerOpen, setIsTemplatePickerOpen] = useState(false);
+  // 云端模型扁平条目当前选中的版本值（用于列表高亮；undefined = 无版本概念的单条模板）
+  const [selectedCloudModelValue, setSelectedCloudModelValue] = useState<string | undefined>(undefined);
   const [templateParams, setTemplateParams] = useState<Record<string, unknown>>({});
   const [templateImageInputs, setTemplateImageInputs] = useState<Record<string, string | string[]>>({});
   // Per D-24: WebSocket connection refs for per-task connections
@@ -657,18 +659,24 @@ export const Draw = () => {
     [clusterTemplates]
   );
 
+  // 云端模型：261113 按版本逐一平铺（"系列名 版本label"独立条目），不再按系列聚合 +
+  // 模型下拉。每个条目的 param_schema 已按版本预过滤（见 flattenCloudTemplate），
+  // 参数面板因此只显示当前版本自己的参数。COMFYUI 工作流列表不受影响。
+  // PS 是图片制作场景：只接入图片生成模型（sp_api 分类全为视频模型，排除）。
   const clusterCloudTemplateGroups = useMemo(() => {
-    const categories = new Map<string, LemonGridTemplateSummary[]>();
+    const categories = new Map<string, FlatCloudTemplate[]>();
 
     clusterTemplates
       .filter((template) => (template.template_type || 'COMFYUI') === 'THIRD_PARTY_API')
+      .filter(isImageCloudTemplate)
       .forEach((template) => {
         const category = template.category?.trim() || '未分类';
         const group = categories.get(category);
+        const flatEntries = flattenCloudTemplate(template);
         if (group) {
-          group.push(template);
+          group.push(...flatEntries);
         } else {
-          categories.set(category, [template]);
+          categories.set(category, flatEntries);
         }
       });
 
@@ -2114,6 +2122,15 @@ export const Draw = () => {
     setSelectedTemplateGroupKey(templateGroupKey);
     setSelectedTemplate(detail);
     selectedTemplateRef.current = detail;
+    // 云端模型：同步扁平条目高亮——从模板自带的 model 默认值推导（选中条目本身
+    // 的版本值由 handleFlatCloudTemplateSelect 在其后写入 params 时覆盖）。
+    setSelectedCloudModelValue(
+      detail.template_type === 'THIRD_PARTY_API'
+        ? (typeof (detail.param_schema.find((f) => f.name === 'model')?.default) === 'string'
+          ? detail.param_schema.find((f) => f.name === 'model')?.default as string
+          : undefined)
+        : undefined
+    );
     setIsTemplatePickerOpen(false);
     setUploadedImagePreviews({});
   }, [remapTemplateStateToDetail, selectedTemplate, workflowInputs]);
@@ -2123,11 +2140,32 @@ export const Draw = () => {
   // Deep clone param_schema to prevent shared reference issues across templates.
   const handleTemplateSelect = useCallback((
     template: LemonGridTemplateSummary,
-    templateGroupKey: string | null = null
+    templateGroupKey: string | null = null,
+    schemaOverride?: ParamSchemaField[]
   ) => {
     const detail = buildTemplateDetail(template);
+    if (schemaOverride) {
+      // 云端模型扁平条目：用条目自带的版本过滤 schema 替换源模板全量 schema，
+      // 参数面板只渲染当前版本的参数（消灭跨版本重复参数）。
+      detail.param_schema = JSON.parse(JSON.stringify(schemaOverride));
+    }
     applySelectedTemplateDetail(detail, templateGroupKey);
   }, [applySelectedTemplateDetail, buildTemplateDetail]);
+
+  // 云端模型扁平条目选中（261113）：条目 = 系列模板 × 版本。
+  // 条目的 param_schema 已预过滤（无 model 项、无跨版本参数），这里在选中后把
+  // 版本值写入 params.model —— 提交时 clusterTaskManager 按扁平键 model 组包。
+  const handleFlatCloudTemplateSelect = useCallback((flat: FlatCloudTemplate) => {
+    setSelectedCloudModelValue(flat.modelValue);
+    handleTemplateSelect(flat.template, null, flat.param_schema);
+    if (flat.modelValue !== undefined) {
+      // applySelectedTemplateDetail 是同步 setState 流程；在其之后追加 model 默认值。
+      // 用 ref 保证读到的是模板切换后的最新 params。
+      const fieldKey = 'api.model';
+      setTemplateParams((prev) => ({ ...prev, [fieldKey]: flat.modelValue }));
+      templateParamsRef.current = { ...templateParamsRef.current, [fieldKey]: flat.modelValue };
+    }
+  }, [handleTemplateSelect]);
 
   const handleGroupedTemplateSelect = useCallback((group: GroupedClusterTemplateSummary) => {
     handleTemplateSelect(group.representative, group.key);
@@ -2236,6 +2274,12 @@ export const Draw = () => {
     templateUploadedImagePreviewsRef.current = nextTemplatePreviews;
     setSelectedTemplateGroupKey(templateGroupKey);
     setSelectedTemplate(detail);
+    // 云端模板历史回填：按历史参数里的 model 值恢复扁平条目高亮
+    setSelectedCloudModelValue(
+      (detail.template_type === 'THIRD_PARTY_API'
+        ? (typeof templateParamsRef.current['api.model'] === 'string' ? templateParamsRef.current['api.model'] as string : undefined)
+        : undefined)
+    );
     setIsTemplatePickerOpen(false);
     setUploadedImagePreviews({});
   }, [lemonGridServerUrl]);
@@ -2617,6 +2661,11 @@ export const Draw = () => {
         }
 
         snapshotParams[`${field.node_id}.${field.name}`] = value;
+      }
+      // 云端模型扁平条目（261113）：模板参数面已剔除 model 项，版本值由选中条目
+      // 携带——这里补写进快照，后端 orchestrator 靠它做版本路由与 applicable 过滤。
+      if ((targetTemplateDetail.template_type || 'COMFYUI') === 'THIRD_PARTY_API' && selectedCloudModelValue !== undefined) {
+        snapshotParams['api.model'] = selectedCloudModelValue;
       }
       // #region debug-point E:cluster-submit-snapshot
       void fetch('http://127.0.0.1:7777/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sessionId: 'cluster-reedit-image', runId: 'pre-fix', hypothesisId: 'E', location: 'Draw.tsx:2520', msg: '[DEBUG] cluster submit snapshot params ready', data: { targetTemplateId: targetTemplateDetail.id, snapshotParamKeys: Object.keys(snapshotParams), imageLikeEntries: Object.entries(snapshotParams).filter(([key]) => /(?:^|\.)(?:image|upload)$/i.test(key)).map(([key, value]) => ({ key, valueType: Array.isArray(value) ? 'array' : typeof value, value })) }, ts: Date.now() }) }).catch(() => {});
@@ -4257,14 +4306,14 @@ export const Draw = () => {
                                 clusterCloudTemplateGroups.map((group) => (
                                   <div key={`cloud-${group.category}`} className="template-picker-group">
                                     <div className="template-picker-list">
-                                      {group.templates.map((template) => (
+                                      {group.templates.map((flat) => (
                                         <button
-                                          key={template.id}
+                                          key={`${flat.template.id}::${flat.modelValue ?? 'base'}`}
                                           type="button"
-                                          className={`template-picker-item ${selectedTemplate?.id === template.id ? 'active' : ''}`}
-                                          onClick={() => handleTemplateSelect(template, null)}
+                                          className={`template-picker-item ${selectedTemplate?.id === flat.template.id && selectedCloudModelValue === flat.modelValue ? 'active' : ''}`}
+                                          onClick={() => handleFlatCloudTemplateSelect(flat)}
                                         >
-                                          {template.name}
+                                          {flat.displayName}
                                         </button>
                                       ))}
                                     </div>

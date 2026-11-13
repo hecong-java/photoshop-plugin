@@ -3,7 +3,7 @@
 import { sendBridgeMessage, isUXPWebView, hasBridgeTransport } from './upload';
 import { shapeBridgeResponse } from './bridgeTransport';
 import { useLemonGridStore } from '../stores/lemongridStore';
-import { withUrlFailoverResponse } from './lemongrid-url';
+import { withUrlFailoverResponse, resolveRequestBase } from './lemongrid-url';
 
 /**
  * Flag set while the user is actively submitting credentials through LoginModal.
@@ -286,14 +286,18 @@ export async function lemongridFetch(
 /**
  * Extract the scheme + host (and optional port) from a full URL.
  * E.g. "http://8.163.4.73:8080/api/v1/x" → "http://8.163.4.73:8080".
- * Returns the original string if it can't be parsed (defensive).
+ * 相对路径（dev 代理模式，resolveRequestBase 已剥掉域名）返回空串——
+ * base='' 时 pathAndQuery 保持完整路径，failover 重建后仍是同源相对请求。
+ * 修复前相对路径会被整条当成 base、pathAndQuery 变空串，failover 拼上
+ * 域名后请求打到线上根路径，返回 HTML 首页导致 "Unexpected token '<'"。
  */
 function extractBase(url: string): string {
   try {
     const u = new URL(url);
     return `${u.protocol}//${u.host}`;
   } catch {
-    return url;
+    // Relative URL (dev proxy mode) — empty base, full path stays in pathAndQuery
+    return url.startsWith('/') ? '' : url;
   }
 }
 
@@ -372,7 +376,7 @@ export async function loginToLemonGrid(
   username: string,
   password: string
 ): Promise<LemonGridLoginResponse> {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/login`;
+  const url = `${resolveRequestBase(serverUrl.replace(/\/+$/, ''))}/api/v1/auth/login`;
 
   isExplicitLoginInFlight = true;
   try {
@@ -411,7 +415,7 @@ export async function refreshAccessToken(
   serverUrl: string,
   refreshToken: string
 ): Promise<LemonGridRefreshResponse> {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/refresh`;
+  const url = `${resolveRequestBase(serverUrl.replace(/\/+$/, ''))}/api/v1/auth/refresh`;
 
   let response: Response;
   isRefreshInFlight = true;
@@ -499,7 +503,7 @@ export async function getUserProfile(
   serverUrl: string,
   token: string
 ): Promise<LemonGridProfile> {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/me`;
+  const url = `${resolveRequestBase(serverUrl.replace(/\/+$/, ''))}/api/v1/auth/me`;
 
   const response = await lemongridFetch(url, {
     headers: { Authorization: `Bearer ${token}` },
@@ -528,7 +532,7 @@ export interface DingTalkOrg {
  * 调用方按不带 org_code 处理（兼容缺省：后端对唯一活跃组织会自动放行）。
  */
 export async function getDingTalkOrgs(serverUrl: string): Promise<DingTalkOrg[]> {
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/orgs`;
+  const url = `${resolveRequestBase(serverUrl.replace(/\/+$/, ''))}/api/v1/auth/dingtalk/orgs`;
   const response = await lemongridFetch(url);
   if (!response.ok) {
     return [];
@@ -548,7 +552,7 @@ export async function getDingTalkLoginUrl(
   orgCode?: string
 ): Promise<{ auth_url: string; state: string }> {
   const orgParam = orgCode ? `&org_code=${encodeURIComponent(orgCode)}` : '';
-  const url = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/login-url?redirect_mode=${redirectMode}${orgParam}`;
+  const url = `${resolveRequestBase(serverUrl.replace(/\/+$/, ''))}/api/v1/auth/dingtalk/login-url?redirect_mode=${redirectMode}${orgParam}`;
   const response = await lemongridFetch(url);
   if (!response.ok) {
     throw new Error(`Failed to get DingTalk login URL: ${response.status}`);
@@ -570,7 +574,7 @@ export async function pollDingTalkAuth(
   const interval = options.intervalMs ?? 2000;
   const timeout = options.timeoutMs ?? 300000; // 5 min per D-11
   const startTime = Date.now();
-  const pollUrl = `${serverUrl.replace(/\/+$/, '')}/api/v1/auth/dingtalk/poll?state=${encodeURIComponent(state)}`;
+  const pollUrl = `${resolveRequestBase(serverUrl.replace(/\/+$/, ''))}/api/v1/auth/dingtalk/poll?state=${encodeURIComponent(state)}`;
 
   while (Date.now() - startTime < timeout) {
     if (options.signal?.aborted) {
@@ -634,8 +638,14 @@ export async function loginWithDingTalk(
   store.setEncryptedPassword(null);
   store.setRememberMe(false);
 
-  // Sync auth to Bridge (same pattern as password login)
-  await syncAuthToBridge();
+  // Sync auth to Bridge (same pattern as password login).
+  // 261113: 非 UXP 浏览器环境（本地 dev 扫码）bridge 不存在，同步必然失败——
+  // 它只是 UXP 宿主的持久化旁路，不该让已完成的登录变成 error。非致命化。
+  try {
+    await syncAuthToBridge();
+  } catch {
+    // Bridge unavailable (browser mode) — token stays in zustand/localStorage
+  }
 
   // Fetch full user profile (same pattern as password login)
   try {

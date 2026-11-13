@@ -116,7 +116,18 @@ export const LoginModal = ({ isOpen, onClose, onLoginSuccess, force = false }: L
     }
 
     if (!isUXPWebView()) {
-      // Per D-20, D-21: Browser mode uses standard redirect OAuth
+      // 261113：浏览器 dev（vite 代理）改走本地二维码 + 轮询（poll 模式）。
+      // 原浏览器 redirect 整页跳转的登录结果落在 lemongrid.cn 线上页面，
+      // localhost 永远收不到 token——本地测试等于没法登录。
+      // poll 模式：DingTalkQRView 本地渲染二维码，扫完由后端回调兑换 token，
+      // 本地页面轮询 /auth/dingtalk/poll 拿结果（该接口走 vite 代理，同源无 CORS）。
+      // 生产构建保持 redirect 跳转（DEV=false），行为与改造前一致。
+      if (import.meta.env.DEV) {
+        setLoginView('dingtalk');
+        setError(null);
+        return;
+      }
+      // Per D-20, D-21: Browser (production) uses standard redirect OAuth
       try {
         // 多组织后端要求 login-url 必带 org_code。多个活跃组织时浏览器
         // 跳转无法选择 → 退回扫码视图（DingTalkQRView 内有组织选择页）。

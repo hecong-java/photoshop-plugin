@@ -4,6 +4,7 @@
 import { lemongridFetch, ensureValidToken } from './lemongrid-auth';
 import { useLemonGridStore } from '../stores/lemongridStore';
 import { sendBridgeMessage, isUXPWebView, fileToBase64 } from './upload';
+import { resolveRequestBase } from './lemongrid-url';
 
 // ---------------------------------------------------------------------------
 // Type definitions
@@ -171,6 +172,128 @@ export interface ParamSchemaField {
   step?: number;
   description?: string;
   source_class_type?: string | null;
+  /** 版本门控：该参数只对这些 model 值适用（缺省/空 = 全版本适用）。 */
+  applicable_models?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// 云端模型（THIRD_PARTY_API）扁平化
+// 261113 规则：插件不按"系列+模型下拉"聚合，逐一平铺为"系列名-版本名"独立条目；
+// 每个条目的 param_schema 预先按该版本过滤（剔除 model 项与 applicable_models
+// 不匹配的参数），参数面板因此只显示当前版本自己的参数——消灭重复参数。
+// ---------------------------------------------------------------------------
+
+/** Raw schema fields may carry applicable_models before normalization. */
+interface RawSchemaWithApplicability {
+  input_name?: string;
+  applicable_models?: string[] | null;
+  type?: string;
+  label?: string;
+  default?: unknown;
+  options?: unknown;
+  [key: string]: unknown;
+}
+
+/**
+ * 按 model 版本过滤 param_schema：
+ * - 恒剔除 input_name === 'model' 的项（扁平化后版本由条目本身表达，不再需要下拉）
+ * - applicable_models 缺省/空数组 = 全版本适用（与画布端 paramApplicability 语义一致）
+ * - selectedModel 缺省时不过滤门控参数（保守显示，向后兼容）
+ */
+export function filterParamsForModel(
+  schema: readonly ParamSchemaField[] | readonly RawSchemaWithApplicability[] | undefined | null,
+  selectedModel: string | undefined
+): ParamSchemaField[] {
+  if (!schema || !Array.isArray(schema) || schema.length === 0) return [];
+
+  // 输入可能是 normalize 前的 raw 字段（含 applicable_models）或 normalize 后的字段。
+  // 两种形态都兼容：raw 先走 normalizeParamField。
+  const normalized = schema.map((field) => {
+    const raw = field as RawSchemaWithApplicability;
+    const candidate = field as Partial<ParamSchemaField>;
+    if (raw.input_name !== undefined && candidate.name === undefined) {
+      return normalizeParamField(raw as unknown as RawParamSchemaField);
+    }
+    return candidate as ParamSchemaField;
+  });
+
+  return normalized.filter((field) => {
+    if (field.name === 'model') return false;
+    const apm = field.applicable_models;
+    if (!apm || apm.length === 0) return true;
+    if (!selectedModel) return true;
+    return apm.includes(selectedModel);
+  });
+}
+
+/** 扁平化后的云端模型条目：系列模板 × 单个模型版本。 */
+export interface FlatCloudTemplate {
+  /** 列表显示名：有版本时 = "系列名 版本label"，否则模板原名。 */
+  displayName: string;
+  /** 该条目对应的 model 值（提交时写入 params.model；无 model 字段的模板为 undefined）。 */
+  modelValue: string | undefined;
+  /** 源模板。 */
+  template: LemonGridTemplateSummary;
+  /** 已按版本过滤的参数面（无 model 项）。 */
+  param_schema: ParamSchemaField[];
+}
+
+/**
+ * PS 场景（图片制作）只接入图片生成类云端模型：
+ * - category === 'sp_api' 全部是视频模型（Seedance/Sora/Kling/Wan2.7/MiniMax H3 等，
+ *   261113 生产库核验：sp_api 11 条 ACTIVE 全为视频类，参数 node_id 全是 "video"）
+ * - category === 'api_mart' 全部是图片模型（GPT系列/香蕉系列/Flux系列/MAI系列/即梦系列）
+ * - 分类为空或缺省的模板保守保留（防新增分类漏接）
+ */
+export function isImageCloudTemplate(
+  template: Pick<LemonGridTemplateSummary, 'category'>
+): boolean {
+  return (template.category || '').trim() !== 'sp_api';
+}
+
+/**
+ * 把一个 THIRD_PARTY_API 模板按其"模型"下拉的 options 展开成独立条目。
+ * - 无 model 字段 / options 不足 1 项 → 原样返回单条（displayName = 模板名）
+ * - options 与 param_schema 均未变异（纯派生，不写回源对象）
+ */
+export function flattenCloudTemplate(
+  template: LemonGridTemplateSummary
+): FlatCloudTemplate[] {
+  const rawSchema = (template.param_schema ?? []) as RawSchemaWithApplicability[];
+  const modelField = rawSchema.find(
+    (f) => f.input_name === 'model' || (f as unknown as ParamSchemaField).name === 'model'
+  );
+
+  const rawOptions = modelField?.options;
+  const options: Array<{ label: string; value: string }> = Array.isArray(rawOptions)
+    ? rawOptions
+        .map((opt) => {
+          if (typeof opt === 'string') return { label: opt, value: opt };
+          const o = opt as { label?: unknown; value?: unknown };
+          return {
+            label: typeof o.label === 'string' ? o.label : String(o.value ?? ''),
+            value: typeof o.value === 'string' || typeof o.value === 'number' ? String(o.value) : '',
+          };
+        })
+        .filter((opt) => opt.value !== '')
+    : [];
+
+  if (!modelField || options.length === 0) {
+    // 无版本概念：单条返回，参数面仅剔除 model 项（有则剔除）
+    return [{
+      displayName: template.name,
+      modelValue: undefined,
+      template,
+      param_schema: filterParamsForModel(rawSchema, undefined),
+    }];
+  }
+
+  return options.map((opt) => ({
+    displayName: `${template.name} ${opt.label}`,
+    modelValue: opt.value,
+    template,
+    param_schema: filterParamsForModel(rawSchema, opt.value),
+  }));
 }
 
 export interface LemonGridTemplateDetail {
@@ -286,6 +409,8 @@ interface RawParamSchemaField {
   step?: number | null;
   description?: string | null;
   source_class_type?: string | null;
+  /** 版本门控：仅这些 model 值适用（缺省/空 = 全版本适用） */
+  applicable_models?: string[] | null;
 }
 
 /** Map API type strings to ParamSchemaField type literals */
@@ -347,6 +472,9 @@ function normalizeParamField(raw: RawParamSchemaField): ParamSchemaField {
     description: raw.description ?? undefined,
     source_class_type: raw.source_class_type ?? undefined,
     group: raw.group || undefined,
+    applicable_models: (Array.isArray(raw.applicable_models) && raw.applicable_models.length > 0)
+      ? raw.applicable_models.map(String)
+      : undefined,
   };
 }
 
@@ -437,9 +565,12 @@ export function renderParamDefault(field: ParamSchemaField): unknown {
 
 export class LemonGridClient {
   private serverUrl: string;
+  /** 请求基址：dev 浏览器模式下为空串（走 vite 同源代理），其余 = serverUrl。 */
+  private requestBase: string;
 
   constructor(options: { serverUrl: string }) {
     this.serverUrl = options.serverUrl.replace(/\/+$/, '');
+    this.requestBase = resolveRequestBase(this.serverUrl);
   }
 
   /**
@@ -448,7 +579,7 @@ export class LemonGridClient {
   private async fetchWithAuth(path: string, options?: RequestInit, timeout?: number): Promise<Response> {
     await ensureValidToken();
     const token = useLemonGridStore.getState().accessToken;
-    const url = `${this.serverUrl}${path}`;
+    const url = `${this.requestBase}${path}`;
     const headers: Record<string, string> = {
       ...(options?.headers as Record<string, string> || {}),
     };
@@ -606,7 +737,7 @@ export class LemonGridClient {
    * use getThumbnailUrlWithToken() instead, or download the thumbnail blob manually.
    */
   getThumbnailUrl(assetId: string): string {
-    return `${this.serverUrl}/api/v1/assets/library/${assetId}/thumbnail`;
+    return `${this.requestBase}/api/v1/assets/library/${assetId}/thumbnail`;
   }
 
   /**
@@ -616,7 +747,7 @@ export class LemonGridClient {
    */
   getThumbnailUrlWithToken(assetId: string): string {
     const token = useLemonGridStore.getState().accessToken;
-    const base = `${this.serverUrl}/api/v1/assets/library/${assetId}/thumbnail`;
+    const base = `${this.requestBase}/api/v1/assets/library/${assetId}/thumbnail`;
     return token ? `${base}?token=${encodeURIComponent(token)}` : base;
   }
 
@@ -624,7 +755,7 @@ export class LemonGridClient {
    * Get the full-resolution download URL for an asset (requires Bearer auth).
    */
   getDownloadUrl(assetId: string): string {
-    return `${this.serverUrl}/api/v1/assets/library/${assetId}/download`;
+    return `${this.requestBase}/api/v1/assets/library/${assetId}/download`;
   }
 
   /**
@@ -643,7 +774,7 @@ export class LemonGridClient {
 
     if (isUXPWebView()) {
       const base64Data = await fileToBase64(file);
-      const uploadUrl = `${this.serverUrl}/api/v1/assets/library/upload`;
+      const uploadUrl = `${this.requestBase}/api/v1/assets/library/upload`;
       const result = await sendBridgeMessage('lemongrid.uploadAsset', {
         url: uploadUrl,
         filename: file.name,
@@ -661,7 +792,7 @@ export class LemonGridClient {
       formData.append('file', file);
       formData.append('library_type', libraryType);
 
-      const url = `${this.serverUrl}/api/v1/assets/library/upload`;
+      const url = `${this.requestBase}/api/v1/assets/library/upload`;
       const headers: Record<string, string> = {};
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
