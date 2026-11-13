@@ -2141,15 +2141,16 @@ export const Draw = () => {
     setSelectedTemplateGroupKey(templateGroupKey);
     setSelectedTemplate(detail);
     selectedTemplateRef.current = detail;
-    // 云端模型：同步扁平条目高亮——从模板自带的 model 默认值推导（选中条目本身
-    // 的版本值由 handleFlatCloudTemplateSelect 在其后写入 params 时覆盖）。
-    setSelectedCloudModelValue(
-      detail.template_type === 'THIRD_PARTY_API'
-        ? (typeof (detail.param_schema.find((f) => f.name === 'model')?.default) === 'string'
-          ? detail.param_schema.find((f) => f.name === 'model')?.default as string
-          : undefined)
-        : undefined
-    );
+    // 云端模型：同步扁平条目高亮。仅当 schema 里还带 model 字段（未走扁平条目
+    // schemaOverride 路径）时才从 default 推导；扁平条目路径 schema 已剔除 model
+    // 项，版本值由 handleFlatCloudTemplateSelect 预先设置——这里若再推导会把
+    // 刚设的版本值抹成 undefined，触发器显示名退回系列名（261113 实测坑）。
+    if (
+      detail.template_type !== 'THIRD_PARTY_API'
+      || !detail.param_schema.some((f) => f.name === 'model')
+    ) {
+      setSelectedCloudModelValue(undefined);
+    }
     setIsTemplatePickerOpen(false);
     setUploadedImagePreviews({});
   }, [remapTemplateStateToDetail, selectedTemplate, workflowInputs]);
